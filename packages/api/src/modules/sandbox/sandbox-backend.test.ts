@@ -9,6 +9,7 @@ import {
   verifyPidIdentity,
   SandboxBackendError,
   type SandboxSpec,
+  type SandboxHostSpec,
 } from "./sandbox-backend.js"
 import type { HostProvider, RunHandle } from "./host-provider.js"
 import type { mintLocalSandboxRuntime } from "../devices/service.js"
@@ -28,7 +29,10 @@ test.after(() => {
   for (const r of roots) rmSync(r, { recursive: true, force: true })
 })
 
-function makeSpec(over: Partial<SandboxSpec> = {}): SandboxSpec {
+// R4 §1.10: SandboxSpec is now a discriminated union (host vs off-box). The
+// fixture builds the HOST variant, so its override bag is typed to the host spec
+// (a Partial<union> would collapse to the shared base keys and drop host fields).
+function makeSpec(over: Partial<SandboxHostSpec> = {}): SandboxSpec {
   return {
     sessionId: "sess-123",
     workspaceId: "ws-1",

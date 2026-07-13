@@ -18,6 +18,7 @@ import { createLogger } from "../../infrastructure/logger/index.js"
 import { deleteRuntime, mintBareSandboxRuntime } from "../devices/service.js"
 import {
   SandboxBackendError,
+  type SandboxDataPlaneCredentials,
   type SandboxHandle,
   type SandboxInfo,
   type SandboxLiveness,
@@ -34,6 +35,8 @@ import {
   type SandboxCapabilityDescriptor,
 } from "./model.js"
 import type { BareDataPlaneRebuildRow, SandboxDataPlane } from "./data-plane.js"
+import { createProductWorkingSetBridge } from "./working-set-bridge.js"
+import { sandboxAdapterMetadata } from "./adapter-metadata.js"
 import type { SandboxAdapter } from "./adapter-registry.js"
 import {
   CubeControlClient,
@@ -124,14 +127,21 @@ export function makeCubesandboxBareAdapter(
   const descriptor = deps.descriptorOverride ?? buildCubesandboxBareDescriptor()
   const controlFactory = deps.controlClientFactory ?? makeControlClient
   const envdFactory = deps.envdFactory ?? makeEnvdClient
+  const metaEntry = sandboxAdapterMetadata("cubesandbox", "bare")
+  if (!metaEntry) {
+    throw new SandboxBackendError(
+      "no adapter-metadata leaf for 'cubesandbox:bare' (registry/metadata drift)"
+    )
+  }
 
   return {
     key: "cubesandbox:bare",
     provider: "cubesandbox",
     mode: "bare",
-    kind: "cubesandbox",
     catalogSource: "api_authored",
     capabilities: descriptor,
+    meta: metaEntry.meta,
+    endpoint: metaEntry.endpoint,
     async create(spec: SandboxSpec): Promise<SandboxHandle> {
       // NO host-mount-dir check (off-box has no host volume — the working set is
       // pushed later by the spine). ① stand up the VM via the control plane.
@@ -191,6 +201,13 @@ export function makeCubesandboxBareAdapter(
           serviceId,
           sandboxID,
           control,
+          // R4 Phase 1b: CAPTURE the off-box data-plane tokens on the handle. NOT
+          // persisted yet — the encrypted-column write + re-inject-at-rebuild land
+          // in a later sub-phase; today the plane above already holds live tokens.
+          credentials: {
+            envdAccessToken: created.envdAccessToken,
+            trafficAccessToken: created.trafficAccessToken,
+          },
         })
       } catch (err) {
         // Self-clean on ANY failure: drop the plane, soft-delete the runtime, and
@@ -214,11 +231,23 @@ export function makeCubesandboxBareAdapter(
       // the next dispatch (bare-dispatch registry miss → rebuildDataPlane).
       return makeCubesandboxBareRefHandle(ref, controlFactory(runOpts))
     },
-    // NEW seam (P4b): reconstruct the REMOTE plane from the PERSISTED row only —
+    // OFF-BOX readiness (§1.5). R4 Phase 1a: return ok immediately to PRESERVE
+    // today's api-authored behavior (the catalogSource fork skipped the wait). The
+    // control.health() + envd version gate + domain-suffix (SSRF-inversion) check
+    // land in a later sub-phase.
+    ready: async () => ({ ok: true }),
+    // R4 Phase 1c: ALL adapters return the pass-through product bridge for now;
+    // the off-box envd DETACHED bridge (delete-aware mirror over the plane's
+    // RemoteEnvdTransport) replaces this in a later sub-phase.
+    workingSet: () => createProductWorkingSetBridge(),
+    // §1.8 seam: reconstruct the REMOTE plane from the PERSISTED row only —
     // resource_id (== sandbox id) + the row's descriptor; deployment-wide
     // connection facts (domain/proxy/vmRoot/port) come from config, never live
-    // config for the adapter kind. This is what satisfies the P1.2 off-box guard.
-    rebuildDataPlane(row: BareDataPlaneRebuildRow): SandboxDataPlane {
+    // config for the adapter kind. ASYNC now (§1.2). R4 Phase 1b: still token-less
+    // (connect + re-mint envd/traffic tokens land in a later sub-phase).
+    async rebuildDataPlane(
+      row: BareDataPlaneRebuildRow
+    ): Promise<SandboxDataPlane> {
       const sandboxID = row.resourceId ?? ""
       const envd = envdFactory(runOpts, sandboxID)
       return createRemoteBareDataPlane({
@@ -228,6 +257,28 @@ export function makeCubesandboxBareAdapter(
         envd,
       })
     },
+    // R4 Phase 1b: token-bearing off-box reconnect (§6.2). Still token-less — the
+    // control.connect + re-mint + re-persist land in a later sub-phase. Uncalled
+    // in Phase 1a.
+    async reconnectDataPlane(ref: SandboxRef): Promise<{
+      plane: SandboxDataPlane
+      credentials: SandboxDataPlaneCredentials | null
+    }> {
+      const sandboxID = ref.resourceId
+      const envd = envdFactory(runOpts, sandboxID)
+      return {
+        plane: createRemoteBareDataPlane({
+          sandboxID,
+          descriptor,
+          vmRoot: runOpts.vmRoot,
+          envd,
+        }),
+        credentials: null,
+      }
+    },
+    // R4 Phase 1d: the control-plane list-by-metadata sweep lands in a later
+    // sub-phase; inert for now (the create() TTL is the paid-resource safety net).
+    listOrphans: async () => [],
   }
 }
 
@@ -237,6 +288,7 @@ function makeCubesandboxBareHandle(args: {
   serviceId: string
   sandboxID: string
   control: CubeControlClient
+  credentials?: SandboxDataPlaneCredentials | null
 }): SandboxHandle {
   const startedAt = new Date()
   return {
@@ -244,6 +296,8 @@ function makeCubesandboxBareHandle(args: {
     mode: "bare",
     sandboxId: args.sessionId,
     resourceId: args.sandboxID,
+    // R4 Phase 1b: captured at create, not yet persisted.
+    credentials: args.credentials ?? null,
     runtimeLink: {
       mode: "bare",
       runtimeId: args.runtimeId,

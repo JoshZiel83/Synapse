@@ -16,6 +16,7 @@ import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
 import { config } from "../../config/index.js"
 import { adapterForRow } from "./adapter-registry.js"
 import { SandboxBackendError } from "./sandbox-backend.js"
+import { sandboxAdapterMetadata } from "./adapter-metadata.js"
 import type { McpDispatchResult } from "../devices/dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
 import {
@@ -25,8 +26,6 @@ import {
 } from "./repo.js"
 import {
   coreInvokeBarePlane,
-  createLocalBareDataPlane,
-  createDockerBareDataPlane,
   deriveConfinementScope,
   deriveConfinementAccess,
   EmptyScopeDeniedError,
@@ -71,36 +70,28 @@ const closingBarePlanes = new Set<string>()
 
 // R3.2 (target-confusion, SECURITY). A bare data-plane endpoint is only a SCHEME
 // discriminant — local:bare ⇒ `inprocess:<runtimeId>`, docker:bare ⇒
-// `docker-exec:<containerId>`. The docker container id is bound to the
-// AUTHORITATIVE `sandboxes.resource_id`, never sliced out of the free-string
-// endpoint, so a hand-edited endpoint can't redirect the docker-exec plane at an
-// arbitrary container. An unknown adapter, a scheme/adapter mismatch, an
-// endpoint that doesn't bind its resource id, or a null endpoint is row
-// CORRUPTION — fail closed, never fall through to the in-process local plane.
+// `docker-exec:<containerId>`, cubesandbox:bare ⇒ `envd:<sandboxId>`. The
+// container/sandbox id is bound to the AUTHORITATIVE `sandboxes.resource_id`,
+// never sliced out of the free-string endpoint, so a hand-edited endpoint can't
+// redirect a plane at an arbitrary target. §6.1: the identity predicate is
+// resolved FROM THE CONFIG-FREE METADATA LEAF by the row's adapter tag — NOT via
+// adapterForRow (which THROWS on an unknown/legacy tag). An unknown adapter, a
+// scheme/adapter mismatch, an endpoint that doesn't bind its resource id, or a
+// null endpoint is row CORRUPTION → the leaf lookup returns undefined → clean
+// `false` deny, never a fall-through to the in-process local plane.
 function bareTargetIdentityOk(row: {
   adapter: string
   runtimeId: string
   resourceId: string | null
   dataPlaneEndpoint: string | null
 }): boolean {
-  if (row.adapter === "docker") {
-    return (
-      !!row.resourceId &&
-      row.dataPlaneEndpoint === `docker-exec:${row.resourceId}`
-    )
-  }
-  if (row.adapter === "local") {
-    return row.dataPlaneEndpoint === `inprocess:${row.runtimeId}`
-  }
-  if (row.adapter === "cubesandbox") {
-    // R3.2: the off-box sandbox id is the AUTHORITATIVE `sandboxes.resource_id`,
-    // bound into the endpoint as `envd:${resource_id}` — NEVER endpoint.slice, so
-    // a hand-edited endpoint can't redirect the remote plane at another sandbox.
-    return (
-      !!row.resourceId && row.dataPlaneEndpoint === `envd:${row.resourceId}`
-    )
-  }
-  return false
+  return (
+    sandboxAdapterMetadata(row.adapter, "bare")?.endpoint?.identityOk({
+      runtimeId: row.runtimeId,
+      resourceId: row.resourceId,
+      dataPlaneEndpoint: row.dataPlaneEndpoint,
+    }) ?? false
+  )
 }
 
 export function registerBareDataPlane(
@@ -149,7 +140,9 @@ export function __clearBareDataPlanes(): void {
   closingBarePlanes.clear()
 }
 
-function sandboxRootForSession(sessionId: string): string {
+/** The per-session sandbox FS root (host-side, under STORAGE_DIR). Exported so a
+ *  bare adapter's rebuild/reconnect seam can recompute it from a ref/row. */
+export function sandboxRootForSession(sessionId: string): string {
   return join(STORAGE_DIR, "sandboxes", sessionId)
 }
 
@@ -173,9 +166,10 @@ export interface DispatchBareRuntimeToolInput {
   /** Test seams. */
   now?: () => number
   run?: Executor
-  /** Rebuild factory (default: scheme-forked local:bare / docker:bare plane). */
+  /** Rebuild factory (default: {@link rebuildBarePlane}, which delegates to the
+   *  persisted adapter's async rebuildDataPlane). May be sync or async. */
   planeFactory?: (opts: {
-    /** The persisted adapter tag (row-authoritative) — forks the rebuild kind. */
+    /** The persisted adapter tag (row-authoritative) — selects the adapter. */
     adapter: string
     sandboxRoot: string
     descriptor: SandboxCapabilityDescriptor
@@ -183,56 +177,40 @@ export interface DispatchBareRuntimeToolInput {
     dataPlaneEndpoint: string | null
     /** R3.2: the AUTHORITATIVE provider resource id (docker container id / sandbox id / ""). */
     resourceId: string | null
-  }) => SandboxDataPlane
+  }) => SandboxDataPlane | Promise<SandboxDataPlane>
 }
 
 /**
- * Rebuild the correct plane kind from the persisted, scheme-tagged endpoint
- * (never live config — mode-flip safety). `docker-exec:` → a docker:bare plane
- * bound to the AUTHORITATIVE `sandboxes.resource_id` container id (R3.2 — NOT
- * endpoint.slice, so the free-string endpoint cannot select the target);
- * anything else (`inprocess:<id>`) → the in-process local:bare plane. The plane's
- * fs is host-side either way (same vfs kernel).
+ * Rebuild the correct plane from the PERSISTED row (never live config — mode-flip
+ * safety). §1.8/§6.1: the hardcoded scheme fork (docker-exec:/envd:/else) is GONE
+ * — the row's `adapter` selects the adapter and the adapter OWNS its rebuild
+ * (local:bare/docker:bare wrap createLocalBareDataPlane/createDockerBareDataPlane;
+ * cubesandbox:bare builds the remote plane). The identity (resource_id) +
+ * descriptor come from the row; deployment connection facts come from config.
+ * ASYNC (§1.2 — an off-box rebuild may connect + re-mint tokens). adapterForRow
+ * THROWS on an unknown/legacy tag, so the CALLER wraps this in try/catch to keep
+ * dispatch a TOTAL function (identity is already validated pre-factory, so a throw
+ * here is a genuine build failure, not a corrupt tag).
  */
-function rebuildBarePlane(opts: {
+async function rebuildBarePlane(opts: {
   adapter: string
   sandboxRoot: string
   descriptor: SandboxCapabilityDescriptor
   dataPlaneEndpoint: string | null
   resourceId: string | null
-}): SandboxDataPlane {
-  const endpoint = opts.dataPlaneEndpoint ?? ""
-  if (endpoint.startsWith("docker-exec:")) {
-    return createDockerBareDataPlane({
-      sandboxRoot: opts.sandboxRoot,
-      descriptor: opts.descriptor,
-      // R3.2: container id from resource_id, never the endpoint string.
-      containerId: opts.resourceId ?? "",
-    })
+}): Promise<SandboxDataPlane> {
+  const adapter = adapterForRow(opts.adapter, "bare")
+  if (!adapter.rebuildDataPlane) {
+    throw new SandboxBackendError(
+      `bare adapter '${opts.adapter}' has no rebuildDataPlane seam`
+    )
   }
-  if (endpoint.startsWith("envd:")) {
-    // OFF-BOX (P4b): delegate the remote-plane build to the persisted adapter's
-    // rebuildDataPlane (never a hardcoded fork here) — resolved row-driven via
-    // adapterForRow, so the connection facts come from config but the identity
-    // (resource_id) + descriptor come from the row. adapterForRow already
-    // fail-closes on an unknown adapter key.
-    const adapter = adapterForRow(opts.adapter, "bare")
-    if (!adapter.rebuildDataPlane) {
-      throw new SandboxBackendError(
-        `bare adapter '${opts.adapter}' has an envd: endpoint but no rebuildDataPlane seam`
-      )
-    }
-    return adapter.rebuildDataPlane({
-      adapter: opts.adapter,
-      resourceId: opts.resourceId,
-      dataPlaneEndpoint: opts.dataPlaneEndpoint,
-      descriptor: opts.descriptor,
-      sandboxRoot: opts.sandboxRoot,
-    })
-  }
-  return createLocalBareDataPlane({
-    sandboxRoot: opts.sandboxRoot,
+  return adapter.rebuildDataPlane({
+    adapter: opts.adapter,
+    resourceId: opts.resourceId,
+    dataPlaneEndpoint: opts.dataPlaneEndpoint,
     descriptor: opts.descriptor,
+    sandboxRoot: opts.sandboxRoot,
   })
 }
 
@@ -340,17 +318,36 @@ export async function dispatchBareRuntimeTool(
           }
         }
         const factory = input.planeFactory ?? rebuildBarePlane
-        const built = factory({
-          adapter: row.adapter,
-          sandboxRoot: sandboxRootForSession(row.sessionId),
-          descriptor: row.capabilityDescriptor,
-          dataPlaneEndpoint: row.dataPlaneEndpoint,
-          resourceId: row.resourceId,
-        })
+        // §6.1: the factory is now ASYNC (an off-box rebuild may connect + re-mint
+        // tokens). WRAP it so a throw NEVER escapes — the dispatch callers
+        // (auto-retry.ts / capability-projection) have no try/catch, so an
+        // uncaught throw would regress a clean runtime_constraint deny into a
+        // skipped completeRuntimeOperation. Identity was already validated above,
+        // so a throw here is a genuine build failure; a thrown factory returns no
+        // plane, so there is nothing partial to dispose.
+        let built: SandboxDataPlane
+        try {
+          built = await factory({
+            adapter: row.adapter,
+            sandboxRoot: sandboxRootForSession(row.sessionId),
+            descriptor: row.capabilityDescriptor,
+            dataPlaneEndpoint: row.dataPlaneEndpoint,
+            resourceId: row.resourceId,
+          })
+        } catch {
+          return {
+            deny: errResult(
+              "runtime_constraint",
+              `bare sandbox ${input.runtimeId} data-plane rebuild failed (dispatch refused)`
+            ),
+          }
+        }
         // ONE synchronous span: [existing-check → fence/tombstone re-check →
         // compare-and-set]. No await between the reads and liveBarePlanes.set so a
         // teardown can only land BEFORE (caught by the re-checks) or AFTER (the
         // plane is registered and the next unregister disposes it) — never inside.
+        // (The re-checks already ran after an await — the DB read + factory await
+        // — so extending the factory to async keeps the fence intact, R3.3/R3.7.)
         const existing = liveBarePlanes.get(input.runtimeId)
         if (existing) {
           // P1.3(b): a concurrent miss already registered — keep that, dispose ours.

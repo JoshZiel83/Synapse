@@ -24,8 +24,10 @@ import {
 } from "./repo.js"
 import {
   SandboxBackendError,
+  requireHostSpec,
   type SandboxBackend,
   type SandboxHandle,
+  type SandboxHostSpec,
   type SandboxInfo,
   type SandboxLiveness,
   type SandboxRef,
@@ -117,7 +119,6 @@ export function createDockerSandboxBackend(
     opts.failCleanup ?? ((args) => defaultDockerFailCleanup(docker, args))
 
   return {
-    kind: "docker",
     async create(spec: SandboxSpec): Promise<SandboxHandle> {
       // Track every fact we create so a failure at ANY point (incl. a staged
       // callback throwing) cleans up ALL of them — honoring the SandboxSpec
@@ -263,7 +264,6 @@ export function createDockerReconnectBackend(
   const spawnImpl = opts.spawnImpl ?? nodeSpawn
   const docker = (args: string[]) => runDocker(spawnImpl, args)
   return {
-    kind: "docker",
     async create(): Promise<SandboxHandle> {
       throw new SandboxBackendError(
         "createDockerReconnectBackend.create() is unsupported — it is connect-only"
@@ -299,7 +299,10 @@ function buildDockerRunArgs(params: {
   containerName: string
   bootstrapToken: string
 }): string[] {
-  const { opts, spec, containerName, bootstrapToken } = params
+  const { opts, containerName, bootstrapToken } = params
+  // A docker resident sandbox is host-backed (volume-subpath mounts). Narrow to
+  // the host spec; an off-box spec reaching here is a wiring bug (fail-closed).
+  const spec = requireHostSpec(params.spec)
   const env: Record<string, string> = {
     SYNAPSE_SERVER_ORIGIN: opts.serverOrigin,
     SYNAPSE_BOOTSTRAP_TOKEN: bootstrapToken,
@@ -633,7 +636,10 @@ export interface BuildBareDockerRunArgsInput {
 export function buildBareDockerRunArgs(
   input: BuildBareDockerRunArgsInput
 ): string[] {
-  const { opts, spec, containerName, mountPoints } = input
+  const { opts, containerName, mountPoints } = input
+  // docker:bare is host-backed (volume-subpath mounts of the session root's mount
+  // points). Narrow to the host spec (fail-closed on an off-box spec).
+  const spec = requireHostSpec(input.spec)
   const subpathRoot = volumeSubpathFor(spec)
   const network = opts.pureNetwork?.trim() || "none"
   const args = [
@@ -866,7 +872,7 @@ function runDocker(
  *  mount point); we require it rather than re-derive the layout here, and fail
  *  loud if it's missing — mounting the wrong path would silently hide the
  *  materialized files (and could fail `docker run` outright). */
-function volumeSubpathFor(spec: SandboxSpec): string {
+function volumeSubpathFor(spec: SandboxHostSpec): string {
   const subpath = spec.storageVolumeSubpath?.trim()
   if (!subpath) {
     throw new SandboxBackendError(

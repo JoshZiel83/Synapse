@@ -16,7 +16,7 @@ import {
   SandboxResourceGoneError,
   buildBareDockerRunArgs,
 } from "./docker-sandbox-backend.js"
-import type { SandboxSpec } from "./sandbox-backend.js"
+import type { SandboxSpec, SandboxHostSpec } from "./sandbox-backend.js"
 import { WHOLE_SCOPE } from "@synapse/device-runtime"
 import {
   makeDockerBareAdapter,
@@ -94,7 +94,12 @@ function bareRunOpts(
   }
 }
 
-function baseSpec(root: string, over: Partial<SandboxSpec> = {}): SandboxSpec {
+// R4 §1.10: SandboxSpec is a discriminated union; the fixture builds the HOST
+// variant so its override bag is typed to the host spec.
+function baseSpec(
+  root: string,
+  over: Partial<SandboxHostSpec> = {}
+): SandboxSpec {
   return {
     sessionId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     workspaceId: "ws-1",

@@ -7,7 +7,8 @@ import { createLogger } from "../infrastructure/logger/index.js"
 import {
   SANDBOX_ADAPTER_KEYS,
   isRegisteredSandboxAdapterKey,
-} from "../modules/sandbox/adapter-keys.js"
+  sandboxAdapterMetadata,
+} from "../modules/sandbox/adapter-metadata.js"
 
 const log = createLogger("config")
 
@@ -51,667 +52,539 @@ function optionalPositiveInt() {
   )
 }
 
-export const envSchema = z
-  .object({
-    PORT: withDefault(port, "3001"),
-    HOST: withDefault(z.string().min(1), "0.0.0.0"),
-    // Not an enum: deployments use values beyond development/production/test
-    // (e.g. "staging"), and rejecting those would block startup. Consumers that
-    // care about a specific mode compare the string themselves.
-    NODE_ENV: withDefault(z.string().min(1), "development"),
+const envObjectSchema = z.object({
+  PORT: withDefault(port, "3001"),
+  HOST: withDefault(z.string().min(1), "0.0.0.0"),
+  // Not an enum: deployments use values beyond development/production/test
+  // (e.g. "staging"), and rejecting those would block startup. Consumers that
+  // care about a specific mode compare the string themselves.
+  NODE_ENV: withDefault(z.string().min(1), "development"),
 
-    APP_BASE_URL: z.string().optional(),
-    NEXT_PUBLIC_APP_URL: z.string().optional(),
-    NEXT_PUBLIC_SITE_URL: z.string().optional(),
+  APP_BASE_URL: z.string().optional(),
+  NEXT_PUBLIC_APP_URL: z.string().optional(),
+  NEXT_PUBLIC_SITE_URL: z.string().optional(),
 
-    PUBLIC_NPM_REGISTRY_URL: withDefault(z.string(), ""),
+  PUBLIC_NPM_REGISTRY_URL: withDefault(z.string(), ""),
 
-    DATABASE_URL: withDefault(
-      z.string().min(1),
-      "postgresql://synapse:password@localhost:5432/synapse"
-    ),
-    REDIS_URL: withDefault(z.string().min(1), "redis://localhost:6379"),
+  DATABASE_URL: withDefault(
+    z.string().min(1),
+    "postgresql://synapse:password@localhost:5432/synapse"
+  ),
+  REDIS_URL: withDefault(z.string().min(1), "redis://localhost:6379"),
 
-    REALTIME_OUTBOX_BATCH_SIZE: withDefault(positiveInt, "100"),
-    REALTIME_OUTBOX_POLL_MS: withDefault(positiveInt, "500"),
-    REALTIME_OUTBOX_RETENTION_HOURS: withDefault(nonNegativeInt, "24"),
-    REALTIME_OUTBOX_GC_INTERVAL_MS: withDefault(positiveInt, "60000"),
-    REALTIME_OUTBOX_PROCESSING_TIMEOUT_MS: withDefault(positiveInt, "30000"),
+  REALTIME_OUTBOX_BATCH_SIZE: withDefault(positiveInt, "100"),
+  REALTIME_OUTBOX_POLL_MS: withDefault(positiveInt, "500"),
+  REALTIME_OUTBOX_RETENTION_HOURS: withDefault(nonNegativeInt, "24"),
+  REALTIME_OUTBOX_GC_INTERVAL_MS: withDefault(positiveInt, "60000"),
+  REALTIME_OUTBOX_PROCESSING_TIMEOUT_MS: withDefault(positiveInt, "30000"),
 
-    // Realtime streaming ASR (语音识别): the /ws/asr WebSocket dictation gateway.
-    // ASR_PROVIDER selects the provider via modules/asr/registry.ts. Default
-    // resolves to "none" => realtime dictation is disabled (the null provider
-    // emits a clean asr.error), matching the OCR_PROVIDER / TRANSCRIPTION_PROVIDER
-    // opt-in convention. DISTINCT from TRANSCRIPTION_PROVIDER above (batch/file).
-    // NOTE: existing deploys that set VOLCENGINE_ASR_* must now ALSO set
-    // ASR_PROVIDER=volcengine — the pre-abstraction default was "volcengine". An
-    // explicit-but-uncredentialed volcengine still soft-fails per session (no boot
-    // gate), so this only changes the default, never crashes boot.
-    ASR_PROVIDER: z.string().optional(),
-    VOLCENGINE_ASR_APP_ID: withDefault(z.string(), ""),
-    VOLCENGINE_ASR_ACCESS_TOKEN: withDefault(z.string(), ""),
-    VOLCENGINE_ASR_SECRET_KEY: withDefault(z.string(), ""),
-    VOLCENGINE_ASR_RESOURCE_ID: withDefault(
-      z.string().min(1),
-      "volc.seedasr.sauc.duration"
-    ),
-    VOLCENGINE_ASR_WS_URL: withDefault(
-      z.string().min(1),
-      "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
-    ),
-    VOLCENGINE_ASR_MAX_CONCURRENCY: withDefault(positiveInt, "3"),
-    VOLCENGINE_ASR_CONNECT_TIMEOUT_MS: withDefault(positiveInt, "10000"),
-    VOLCENGINE_ASR_IDLE_TIMEOUT_MS: withDefault(positiveInt, "15000"),
+  // Realtime streaming ASR (语音识别): the /ws/asr WebSocket dictation gateway.
+  // ASR_PROVIDER selects the provider via modules/asr/registry.ts. Default
+  // resolves to "none" => realtime dictation is disabled (the null provider
+  // emits a clean asr.error), matching the OCR_PROVIDER / TRANSCRIPTION_PROVIDER
+  // opt-in convention. DISTINCT from TRANSCRIPTION_PROVIDER above (batch/file).
+  // NOTE: existing deploys that set VOLCENGINE_ASR_* must now ALSO set
+  // ASR_PROVIDER=volcengine — the pre-abstraction default was "volcengine". An
+  // explicit-but-uncredentialed volcengine still soft-fails per session (no boot
+  // gate), so this only changes the default, never crashes boot.
+  ASR_PROVIDER: z.string().optional(),
+  VOLCENGINE_ASR_APP_ID: withDefault(z.string(), ""),
+  VOLCENGINE_ASR_ACCESS_TOKEN: withDefault(z.string(), ""),
+  VOLCENGINE_ASR_SECRET_KEY: withDefault(z.string(), ""),
+  VOLCENGINE_ASR_RESOURCE_ID: withDefault(
+    z.string().min(1),
+    "volc.seedasr.sauc.duration"
+  ),
+  VOLCENGINE_ASR_WS_URL: withDefault(
+    z.string().min(1),
+    "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
+  ),
+  VOLCENGINE_ASR_MAX_CONCURRENCY: withDefault(positiveInt, "3"),
+  VOLCENGINE_ASR_CONNECT_TIMEOUT_MS: withDefault(positiveInt, "10000"),
+  VOLCENGINE_ASR_IDLE_TIMEOUT_MS: withDefault(positiveInt, "15000"),
 
-    // sherpa-stream provider → the self-hosted streaming sherpa-onnx sidecar
-    // (sidecars/sherpa-asr-streaming). WebSocket URL, NO auth (localhost /
-    // compose-network). Selected via ASR_PROVIDER=sherpa-stream; the superRefine
-    // gate below requires the URL for an explicit selection.
-    REALTIME_ASR_SHERPA_URL: withDefault(z.string(), ""),
-    REALTIME_ASR_SHERPA_CONNECT_TIMEOUT_MS: withDefault(positiveInt, "10000"),
-    REALTIME_ASR_SHERPA_IDLE_TIMEOUT_MS: withDefault(positiveInt, "15000"),
-    REALTIME_ASR_SHERPA_MAX_CONCURRENCY: withDefault(positiveInt, "4"),
+  // sherpa-stream provider → the self-hosted streaming sherpa-onnx sidecar
+  // (sidecars/sherpa-asr-streaming). WebSocket URL, NO auth (localhost /
+  // compose-network). Selected via ASR_PROVIDER=sherpa-stream; the superRefine
+  // gate below requires the URL for an explicit selection.
+  REALTIME_ASR_SHERPA_URL: withDefault(z.string(), ""),
+  REALTIME_ASR_SHERPA_CONNECT_TIMEOUT_MS: withDefault(positiveInt, "10000"),
+  REALTIME_ASR_SHERPA_IDLE_TIMEOUT_MS: withDefault(positiveInt, "15000"),
+  REALTIME_ASR_SHERPA_MAX_CONCURRENCY: withDefault(positiveInt, "4"),
 
-    IM_RUNTIME_MANAGER_ENABLED: z.string().optional(),
+  IM_RUNTIME_MANAGER_ENABLED: z.string().optional(),
 
-    SKILL_GITHUB_RAW_PROXY_PREFIXES: z.string().optional(),
-    SKILL_CLAWHUB_DOWNLOAD_PROXY_ORIGINS: z.string().optional(),
+  SKILL_GITHUB_RAW_PROXY_PREFIXES: z.string().optional(),
+  SKILL_CLAWHUB_DOWNLOAD_PROXY_ORIGINS: z.string().optional(),
 
-    // Optional override for the declarative model-groups config file location.
-    // Absolute paths are used as-is; relative paths resolve against the repo
-    // root (NOT process.cwd()). Unset => the importer falls back to the repo's
-    // packages/api/config/model-groups.yaml. The default is computed in the
-    // importer (which can reach repo-paths), not here.
-    MODEL_GROUPS_CONFIG_PATH: z.string().optional(),
+  // Optional override for the declarative model-groups config file location.
+  // Absolute paths are used as-is; relative paths resolve against the repo
+  // root (NOT process.cwd()). Unset => the importer falls back to the repo's
+  // packages/api/config/model-groups.yaml. The default is computed in the
+  // importer (which can reach repo-paths), not here.
+  MODEL_GROUPS_CONFIG_PATH: z.string().optional(),
 
-    // Batch/file speech-to-text: the api bundles NO ASR engine. TRANSCRIPTION_PROVIDER
-    // selects an out-of-process provider (the sherpa-asr sidecar or, later, a
-    // cloud vendor). Default resolves to "none" => audio transcription is skipped
-    // (the AI audio-fallback degrades to "reference transcript unavailable", it
-    // does not fail). AUDIO_FALLBACK_PROVIDER is honoured as a DEPRECATED alias
-    // (TRANSCRIPTION_PROVIDER wins); its old default value "sherpa-onnx" maps to
-    // "sherpa". This is DISTINCT from ASR_PROVIDER above (realtime WS dictation).
-    TRANSCRIPTION_PROVIDER: z.string().optional(),
-    AUDIO_FALLBACK_PROVIDER: z.string().optional(),
-    // Short best-effort budget for the transcription call on the outbound-LLM
-    // path (audio fallback). Larger than OCR's 4000: speech recognition is slower.
-    TRANSCRIPTION_INLINE_DEADLINE_MS: withDefault(positiveInt, "8000"),
-    // sherpa provider → sherpa-asr sidecar (sherpa-onnx offline recognizer).
-    TRANSCRIPTION_SHERPA_URL: withDefault(z.string(), ""),
-    TRANSCRIPTION_SHERPA_TIMEOUT_MS: withDefault(positiveInt, "30000"),
-    // whisper provider → whisper sidecar (faster-whisper / CTranslate2). Whisper
-    // on CPU is slower than SenseVoice, so a larger default request timeout. The
-    // model SIZE is baked into the sidecar image; TRANSCRIPTION_WHISPER_MODEL is a
-    // provenance/cache-key LABEL that must match the baked size (like PPOCR_TIER).
-    TRANSCRIPTION_WHISPER_URL: withDefault(z.string(), ""),
-    TRANSCRIPTION_WHISPER_TIMEOUT_MS: withDefault(positiveInt, "60000"),
-    TRANSCRIPTION_WHISPER_MODEL: withDefault(z.string().min(1), "small"),
+  // Batch/file speech-to-text: the api bundles NO ASR engine. TRANSCRIPTION_PROVIDER
+  // selects an out-of-process provider (the sherpa-asr sidecar or, later, a
+  // cloud vendor). Default resolves to "none" => audio transcription is skipped
+  // (the AI audio-fallback degrades to "reference transcript unavailable", it
+  // does not fail). AUDIO_FALLBACK_PROVIDER is honoured as a DEPRECATED alias
+  // (TRANSCRIPTION_PROVIDER wins); its old default value "sherpa-onnx" maps to
+  // "sherpa". This is DISTINCT from ASR_PROVIDER above (realtime WS dictation).
+  TRANSCRIPTION_PROVIDER: z.string().optional(),
+  AUDIO_FALLBACK_PROVIDER: z.string().optional(),
+  // Short best-effort budget for the transcription call on the outbound-LLM
+  // path (audio fallback). Larger than OCR's 4000: speech recognition is slower.
+  TRANSCRIPTION_INLINE_DEADLINE_MS: withDefault(positiveInt, "8000"),
+  // sherpa provider → sherpa-asr sidecar (sherpa-onnx offline recognizer).
+  TRANSCRIPTION_SHERPA_URL: withDefault(z.string(), ""),
+  TRANSCRIPTION_SHERPA_TIMEOUT_MS: withDefault(positiveInt, "30000"),
+  // whisper provider → whisper sidecar (faster-whisper / CTranslate2). Whisper
+  // on CPU is slower than SenseVoice, so a larger default request timeout. The
+  // model SIZE is baked into the sidecar image; TRANSCRIPTION_WHISPER_MODEL is a
+  // provenance/cache-key LABEL that must match the baked size (like PPOCR_TIER).
+  TRANSCRIPTION_WHISPER_URL: withDefault(z.string(), ""),
+  TRANSCRIPTION_WHISPER_TIMEOUT_MS: withDefault(positiveInt, "60000"),
+  TRANSCRIPTION_WHISPER_MODEL: withDefault(z.string().min(1), "small"),
 
-    // OCR: the api bundles NO OCR engine. OCR_PROVIDER selects an
-    // out-of-process provider (a sidecar or, later, a cloud vendor). Default
-    // resolves to "none" => image OCR is skipped (not failed). The deprecated
-    // IMAGE_FALLBACK_PROVIDER is honoured as an alias (OCR_PROVIDER wins).
-    OCR_PROVIDER: z.string().optional(),
-    IMAGE_FALLBACK_PROVIDER: z.string().optional(),
-    // Short best-effort budget for the OCR call on the outbound-LLM path
-    // (image fallback), independent of the parse-pipeline timeout below.
-    OCR_INLINE_DEADLINE_MS: withDefault(positiveInt, "4000"),
-    // tesseract provider → tesseract sidecar (native tesseract-ocr).
-    TESSERACT_URL: withDefault(z.string(), ""),
-    TESSERACT_LANGS: withDefault(z.string().min(1), "eng"),
-    TESSERACT_TIMEOUT_MS: withDefault(positiveInt, "20000"),
-    // ppocr provider → PP-OCRv6 sidecar (wired in Phase 2).
-    PPOCR_URL: withDefault(z.string(), ""),
-    PPOCR_TIER: withDefault(z.enum(["tiny", "small"]), "small"),
-    PPOCR_TIMEOUT_MS: withDefault(positiveInt, "20000"),
+  // OCR: the api bundles NO OCR engine. OCR_PROVIDER selects an
+  // out-of-process provider (a sidecar or, later, a cloud vendor). Default
+  // resolves to "none" => image OCR is skipped (not failed). The deprecated
+  // IMAGE_FALLBACK_PROVIDER is honoured as an alias (OCR_PROVIDER wins).
+  OCR_PROVIDER: z.string().optional(),
+  IMAGE_FALLBACK_PROVIDER: z.string().optional(),
+  // Short best-effort budget for the OCR call on the outbound-LLM path
+  // (image fallback), independent of the parse-pipeline timeout below.
+  OCR_INLINE_DEADLINE_MS: withDefault(positiveInt, "4000"),
+  // tesseract provider → tesseract sidecar (native tesseract-ocr).
+  TESSERACT_URL: withDefault(z.string(), ""),
+  TESSERACT_LANGS: withDefault(z.string().min(1), "eng"),
+  TESSERACT_TIMEOUT_MS: withDefault(positiveInt, "20000"),
+  // ppocr provider → PP-OCRv6 sidecar (wired in Phase 2).
+  PPOCR_URL: withDefault(z.string(), ""),
+  PPOCR_TIER: withDefault(z.enum(["tiny", "small"]), "small"),
+  PPOCR_TIMEOUT_MS: withDefault(positiveInt, "20000"),
 
-    MEMORY_RECALL_LIMIT: withDefault(positiveInt, "6"),
-    MEMORY_SEARCH_CANDIDATE_LIMIT: withDefault(positiveInt, "40"),
-    MEMORY_RECALL_TOP_K: optionalPositiveInt(),
-    MEMORY_INDEX_QUEUE_CONCURRENCY: withDefault(positiveInt, "2"),
-    MEMORY_MMR_LAMBDA: withDefault(unitFloat, "0.8"),
-    MEMORY_MMR_CANDIDATE_MULTIPLIER: withDefault(positiveInt, "4"),
-    MEMORY_SUMMARY_DECAY_HALF_LIFE_DAYS: withDefault(positiveFloat, "30"),
-    MEMORY_SUMMARY_DECAY_FLOOR: withDefault(unitFloat, "0.35"),
+  MEMORY_RECALL_LIMIT: withDefault(positiveInt, "6"),
+  MEMORY_SEARCH_CANDIDATE_LIMIT: withDefault(positiveInt, "40"),
+  MEMORY_RECALL_TOP_K: optionalPositiveInt(),
+  MEMORY_INDEX_QUEUE_CONCURRENCY: withDefault(positiveInt, "2"),
+  MEMORY_MMR_LAMBDA: withDefault(unitFloat, "0.8"),
+  MEMORY_MMR_CANDIDATE_MULTIPLIER: withDefault(positiveInt, "4"),
+  MEMORY_SUMMARY_DECAY_HALF_LIFE_DAYS: withDefault(positiveFloat, "30"),
+  MEMORY_SUMMARY_DECAY_FLOOR: withDefault(unitFloat, "0.35"),
 
-    // ===== Embedding (text → dense vector) =====
-    // The api bundles NO embedding engine. EMBEDDING_PROVIDER selects an
-    // out-of-process provider: the local bge-m3 sidecar, or a cloud/self-host
-    // vendor via the generic openai-compatible adapter (OpenAI / DashScope-compat /
-    // Zhipu / SiliconFlow / TEI / Ollama / vLLM). Default resolves to "none" =>
-    // semantic memory indexing is disabled and recall degrades to lexical-only (NOT
-    // an error). Serves memory today + intelligent-retrieval later. The compose
-    // production profile sets this to "local" + starts the embed sidecar.
-    EMBEDDING_PROVIDER: z.string().optional(),
-    // Deployment-wide vector width. MUST equal the pgvector column typmod (the boot
-    // guard asserts it) AND a width the active provider can emit. Default 1024 =
-    // bge-m3 native + DashScope-v3 / Cohere-v3 / Jina-v3 / SiliconFlow-bge-m3.
-    EMBEDDING_DIMENSION: withDefault(positiveInt, "1024"),
-    EMBEDDING_BATCH_SIZE: withDefault(positiveInt, "12"),
-    EMBEDDING_QUERY_CACHE_TTL_SEC: withDefault(nonNegativeInt, "86400"),
-    // local sidecar (bge-m3). URL required when EMBEDDING_PROVIDER=local. The model
-    // LABEL must match the baked sidecar model (provenance + cache key + the "one
-    // embedding space" identity, so a cloud serving the same model+dim is compatible).
-    EMBEDDING_LOCAL_URL: withDefault(z.string(), ""),
-    EMBEDDING_LOCAL_MODEL: withDefault(z.string().min(1), "bge-m3"),
-    EMBEDDING_LOCAL_TIMEOUT_MS: withDefault(positiveInt, "30000"),
-    // openai-compatible cloud/self-host. Selecting it sends memory text (query +
-    // every indexed passage) to EMBEDDING_OPENAI_BASE_URL — a PII-egress event, so
-    // the boot gate requires https:// and warns which host receives the data.
-    EMBEDDING_OPENAI_BASE_URL: withDefault(z.string(), ""),
-    EMBEDDING_OPENAI_API_KEY: withDefault(z.string(), ""),
-    EMBEDDING_OPENAI_MODEL: withDefault(z.string(), ""),
-    // input_type → per-vendor request field. "none" (symmetric — bge-m3, and the
-    // OpenAI-compat endpoints of DashScope/Zhipu/SiliconFlow, which ignore an
-    // asymmetric role field) or "jina-task" (Jina honors a top-level `task`).
-    EMBEDDING_OPENAI_INPUT_ROLE_MODE: withDefault(
-      z.enum(["none", "jina-task"]),
-      "none"
-    ),
-    // "true" => send `dimensions` (only for MRL models: DashScope v3/v4, Jina v3,
-    // Zhipu embedding-3, OpenAI v3). Sending it to a non-MRL model 400s/ignores it.
-    EMBEDDING_OPENAI_SUPPORTS_DIMENSIONS: z.string().optional(),
-    // Per-request cap the facade splits larger batches to (DashScope compat ≈ 10,
-    // Gemini-compat = 1). 0 => no cap.
-    EMBEDDING_OPENAI_MAX_BATCH: withDefault(nonNegativeInt, "0"),
-    EMBEDDING_OPENAI_TIMEOUT_MS: withDefault(positiveInt, "30000"),
+  // ===== Embedding (text → dense vector) =====
+  // The api bundles NO embedding engine. EMBEDDING_PROVIDER selects an
+  // out-of-process provider: the local bge-m3 sidecar, or a cloud/self-host
+  // vendor via the generic openai-compatible adapter (OpenAI / DashScope-compat /
+  // Zhipu / SiliconFlow / TEI / Ollama / vLLM). Default resolves to "none" =>
+  // semantic memory indexing is disabled and recall degrades to lexical-only (NOT
+  // an error). Serves memory today + intelligent-retrieval later. The compose
+  // production profile sets this to "local" + starts the embed sidecar.
+  EMBEDDING_PROVIDER: z.string().optional(),
+  // Deployment-wide vector width. MUST equal the pgvector column typmod (the boot
+  // guard asserts it) AND a width the active provider can emit. Default 1024 =
+  // bge-m3 native + DashScope-v3 / Cohere-v3 / Jina-v3 / SiliconFlow-bge-m3.
+  EMBEDDING_DIMENSION: withDefault(positiveInt, "1024"),
+  EMBEDDING_BATCH_SIZE: withDefault(positiveInt, "12"),
+  EMBEDDING_QUERY_CACHE_TTL_SEC: withDefault(nonNegativeInt, "86400"),
+  // local sidecar (bge-m3). URL required when EMBEDDING_PROVIDER=local. The model
+  // LABEL must match the baked sidecar model (provenance + cache key + the "one
+  // embedding space" identity, so a cloud serving the same model+dim is compatible).
+  EMBEDDING_LOCAL_URL: withDefault(z.string(), ""),
+  EMBEDDING_LOCAL_MODEL: withDefault(z.string().min(1), "bge-m3"),
+  EMBEDDING_LOCAL_TIMEOUT_MS: withDefault(positiveInt, "30000"),
+  // openai-compatible cloud/self-host. Selecting it sends memory text (query +
+  // every indexed passage) to EMBEDDING_OPENAI_BASE_URL — a PII-egress event, so
+  // the boot gate requires https:// and warns which host receives the data.
+  EMBEDDING_OPENAI_BASE_URL: withDefault(z.string(), ""),
+  EMBEDDING_OPENAI_API_KEY: withDefault(z.string(), ""),
+  EMBEDDING_OPENAI_MODEL: withDefault(z.string(), ""),
+  // input_type → per-vendor request field. "none" (symmetric — bge-m3, and the
+  // OpenAI-compat endpoints of DashScope/Zhipu/SiliconFlow, which ignore an
+  // asymmetric role field) or "jina-task" (Jina honors a top-level `task`).
+  EMBEDDING_OPENAI_INPUT_ROLE_MODE: withDefault(
+    z.enum(["none", "jina-task"]),
+    "none"
+  ),
+  // "true" => send `dimensions` (only for MRL models: DashScope v3/v4, Jina v3,
+  // Zhipu embedding-3, OpenAI v3). Sending it to a non-MRL model 400s/ignores it.
+  EMBEDDING_OPENAI_SUPPORTS_DIMENSIONS: z.string().optional(),
+  // Per-request cap the facade splits larger batches to (DashScope compat ≈ 10,
+  // Gemini-compat = 1). 0 => no cap.
+  EMBEDDING_OPENAI_MAX_BATCH: withDefault(nonNegativeInt, "0"),
+  EMBEDDING_OPENAI_TIMEOUT_MS: withDefault(positiveInt, "30000"),
 
-    // ===== Document extraction (files → text) =====
-    // The api bundles NO document-parsing engine (the 5th sibling of the OCR /
-    // embedding / transcription / realtime-ASR provider abstractions).
-    // DOCUMENT_EXTRACTION_PROVIDER selects an out-of-process provider: the local
-    // Apache Tika sidecar, or a cloud/API vendor (TextIn xParse). Default resolves
-    // to "none" => PDF + office parsing is SKIPPED (a LOUD boot warning fires, and
-    // each affected upload records a skip — never a crash). The compose production
-    // profile sets this to "local" + starts the docextract sidecar. NOTE: this is
-    // a clean-break replacement of the old in-process `pdf-parse` — a bare deploy
-    // that upgrades the image WITHOUT setting this + a sidecar loses PDF parsing.
-    DOCUMENT_EXTRACTION_PROVIDER: z.string().optional(),
-    // local Apache Tika sidecar. URL required when provider=local (superRefine).
-    DOCEXTRACT_URL: withDefault(z.string(), ""),
-    DOCEXTRACT_TIMEOUT_MS: withDefault(positiveInt, "60000"),
-    // Provenance/cache-key LABEL; MUST match the TIKA_VERSION baked into the
-    // sidecar image (single-knob lockstep, like WHISPER_MODEL / PPOCR_TIER — the
-    // compose file drives both from one value). Bumping the baked engine without
-    // this label would poison the facade cache + mislabel file_parse_runs.
-    DOCEXTRACT_ENGINE_VERSION: withDefault(z.string().min(1), "tika-3.0.0"),
-    // Output flavor for the local Tika provider: "text" (plaintext) or "markdown"
-    // (the Phase-2 rich tier — Tika XHTML → markdown, headings/lists/tables kept).
-    // Folded into the provenance label so switching it invalidates the parse cache.
-    DOCEXTRACT_OUTPUT_FORMAT: withDefault(z.enum(["text", "markdown"]), "text"),
-    // TextIn / 合合 xParse cloud provider (dual static-header auth). Selecting it
-    // sends document bytes off-box (egress) — the boot gate requires BOTH secrets.
-    DOCEXTRACT_TEXTIN_APP_ID: withDefault(z.string(), ""),
-    DOCEXTRACT_TEXTIN_SECRET_CODE: withDefault(z.string(), ""),
-    DOCEXTRACT_TEXTIN_BASE_URL: withDefault(
-      z.string(),
-      "https://api.textin.com"
-    ),
-    DOCEXTRACT_TEXTIN_TIMEOUT_MS: withDefault(positiveInt, "60000"),
-    // LlamaParse (LlamaCloud) — the ASYNC reference cloud vendor (Bearer auth,
-    // submit→poll). Selecting it sends document bytes off-box; the gate requires
-    // the API key. The poll cadence + deadline bound the submit-and-release loop.
-    DOCEXTRACT_LLAMAPARSE_API_KEY: withDefault(z.string(), ""),
-    DOCEXTRACT_LLAMAPARSE_BASE_URL: withDefault(
-      z.string(),
-      "https://api.cloud.llamaindex.ai"
-    ),
-    DOCEXTRACT_LLAMAPARSE_TIMEOUT_MS: withDefault(positiveInt, "30000"),
-    // How often to re-poll a submitted async job, and the wall-clock deadline after
-    // which a still-pending job is failed (submit-and-release, not in-handler poll).
-    DOCEXTRACT_ASYNC_POLL_INTERVAL_MS: withDefault(positiveInt, "5000"),
-    DOCEXTRACT_ASYNC_DEADLINE_MS: withDefault(positiveInt, "600000"),
+  // ===== Document extraction (files → text) =====
+  // The api bundles NO document-parsing engine (the 5th sibling of the OCR /
+  // embedding / transcription / realtime-ASR provider abstractions).
+  // DOCUMENT_EXTRACTION_PROVIDER selects an out-of-process provider: the local
+  // Apache Tika sidecar, or a cloud/API vendor (TextIn xParse). Default resolves
+  // to "none" => PDF + office parsing is SKIPPED (a LOUD boot warning fires, and
+  // each affected upload records a skip — never a crash). The compose production
+  // profile sets this to "local" + starts the docextract sidecar. NOTE: this is
+  // a clean-break replacement of the old in-process `pdf-parse` — a bare deploy
+  // that upgrades the image WITHOUT setting this + a sidecar loses PDF parsing.
+  DOCUMENT_EXTRACTION_PROVIDER: z.string().optional(),
+  // local Apache Tika sidecar. URL required when provider=local (superRefine).
+  DOCEXTRACT_URL: withDefault(z.string(), ""),
+  DOCEXTRACT_TIMEOUT_MS: withDefault(positiveInt, "60000"),
+  // Provenance/cache-key LABEL; MUST match the TIKA_VERSION baked into the
+  // sidecar image (single-knob lockstep, like WHISPER_MODEL / PPOCR_TIER — the
+  // compose file drives both from one value). Bumping the baked engine without
+  // this label would poison the facade cache + mislabel file_parse_runs.
+  DOCEXTRACT_ENGINE_VERSION: withDefault(z.string().min(1), "tika-3.0.0"),
+  // Output flavor for the local Tika provider: "text" (plaintext) or "markdown"
+  // (the Phase-2 rich tier — Tika XHTML → markdown, headings/lists/tables kept).
+  // Folded into the provenance label so switching it invalidates the parse cache.
+  DOCEXTRACT_OUTPUT_FORMAT: withDefault(z.enum(["text", "markdown"]), "text"),
+  // TextIn / 合合 xParse cloud provider (dual static-header auth). Selecting it
+  // sends document bytes off-box (egress) — the boot gate requires BOTH secrets.
+  DOCEXTRACT_TEXTIN_APP_ID: withDefault(z.string(), ""),
+  DOCEXTRACT_TEXTIN_SECRET_CODE: withDefault(z.string(), ""),
+  DOCEXTRACT_TEXTIN_BASE_URL: withDefault(z.string(), "https://api.textin.com"),
+  DOCEXTRACT_TEXTIN_TIMEOUT_MS: withDefault(positiveInt, "60000"),
+  // LlamaParse (LlamaCloud) — the ASYNC reference cloud vendor (Bearer auth,
+  // submit→poll). Selecting it sends document bytes off-box; the gate requires
+  // the API key. The poll cadence + deadline bound the submit-and-release loop.
+  DOCEXTRACT_LLAMAPARSE_API_KEY: withDefault(z.string(), ""),
+  DOCEXTRACT_LLAMAPARSE_BASE_URL: withDefault(
+    z.string(),
+    "https://api.cloud.llamaindex.ai"
+  ),
+  DOCEXTRACT_LLAMAPARSE_TIMEOUT_MS: withDefault(positiveInt, "30000"),
+  // How often to re-poll a submitted async job, and the wall-clock deadline after
+  // which a still-pending job is failed (submit-and-release, not in-handler poll).
+  DOCEXTRACT_ASYNC_POLL_INTERVAL_MS: withDefault(positiveInt, "5000"),
+  DOCEXTRACT_ASYNC_DEADLINE_MS: withDefault(positiveInt, "600000"),
 
-    PLATFORM_ADMIN_EMAILS: withDefault(z.string(), ""),
+  PLATFORM_ADMIN_EMAILS: withDefault(z.string(), ""),
 
-    // ===== Better Auth =====
-    // Session signing secret. Falls back through AUTH_SECRET / APP_SECRET so a
-    // single deployment secret can cover both BA and the legacy crypto layer.
-    // All three are optional here (empty allowed) and resolved to the first
-    // non-empty value below; production missing-secret is enforced in
-    // superRefine (NOT via `??`, which would accept an empty string).
-    BETTER_AUTH_SECRET: z.string().optional(),
-    AUTH_SECRET: z.string().optional(),
-    // Browser-facing public origin BA mounts under (redirect_uri + state/session
-    // cookies bind to this). MUST be the origin users actually hit (proxies
-    // /api/v1 -> API), not the internal API origin. Falls back to app.baseUrl.
-    AUTH_TRUSTED_ORIGINS: withDefault(z.string(), ""),
+  // ===== Better Auth =====
+  // Session signing secret. Falls back through AUTH_SECRET / APP_SECRET so a
+  // single deployment secret can cover both BA and the legacy crypto layer.
+  // All three are optional here (empty allowed) and resolved to the first
+  // non-empty value below; production missing-secret is enforced in
+  // superRefine (NOT via `??`, which would accept an empty string).
+  BETTER_AUTH_SECRET: z.string().optional(),
+  AUTH_SECRET: z.string().optional(),
+  // Browser-facing public origin BA mounts under (redirect_uri + state/session
+  // cookies bind to this). MUST be the origin users actually hit (proxies
+  // /api/v1 -> API), not the internal API origin. Falls back to app.baseUrl.
+  AUTH_TRUSTED_ORIGINS: withDefault(z.string(), ""),
 
-    // ===== Feishu / Lark OAuth (genericOAuth provider) =====
-    FEISHU_APP_ID: withDefault(z.string(), ""),
-    FEISHU_APP_SECRET: withDefault(z.string(), ""),
-    // "true" => Lark international (open.larksuite.com); else Feishu (open.feishu.cn).
-    FEISHU_INTL: z.string().optional(),
+  // ===== Feishu / Lark OAuth (genericOAuth provider) =====
+  FEISHU_APP_ID: withDefault(z.string(), ""),
+  FEISHU_APP_SECRET: withDefault(z.string(), ""),
+  // "true" => Lark international (open.larksuite.com); else Feishu (open.feishu.cn).
+  FEISHU_INTL: z.string().optional(),
 
-    LOG_LEVEL: z.string().optional(),
+  LOG_LEVEL: z.string().optional(),
 
-    // Secret-at-rest master passphrase (crypto/index.ts). Required in production
-    // so a missing key fails at STARTUP — not on the first encrypt/decrypt.
-    MCP_ENCRYPTION_KEY: z.string().optional(),
-    APP_SECRET: z.string().optional(),
+  // Secret-at-rest master passphrase (crypto/index.ts). Required in production
+  // so a missing key fails at STARTUP — not on the first encrypt/decrypt.
+  MCP_ENCRYPTION_KEY: z.string().optional(),
+  APP_SECRET: z.string().optional(),
 
-    // ===== Per-session actor sandbox (runtime + content-addressed mounts) =====
-    // SANDBOX_PROVIDER selects the runtime substrate: local (same-host
-    // device-runtime child), docker (DooD cloud-sandbox image), or e2b/cube
-    // (future bare adapters). Default resolves to "none" => sandbox provisioning
-    // is DISABLED (replaces the old SYNAPSE_SANDBOX_ENABLED boolean; a LOUD boot
-    // warning fires so a deploy that only set the removed flag notices). The
-    // shared transport facts (FRP_SHARED_TOKEN / SYNAPSE_TUNNEL_* /
-    // SYNAPSE_DEVICE_TUNNEL_EDGE_URL) are read under their EXISTING keys — they
-    // are shared with the frps compose service + the device control-plane SSRF
-    // gate, so they are NOT renamed here.
-    SANDBOX_PROVIDER: z.string().optional(),
-    SANDBOX_MODE: withDefault(z.enum(["resident", "bare", "auto"]), "auto"),
-    SANDBOX_LOCAL_CLI_PATH: withDefault(z.string(), ""),
-    SANDBOX_SERVER_ORIGIN: withDefault(z.string(), ""),
-    SANDBOX_DOCKER_IMAGE: withDefault(z.string(), ""),
-    SANDBOX_DOCKER_NETWORK: withDefault(z.string(), ""),
-    SANDBOX_DOCKER_STORAGE_VOLUME: withDefault(z.string(), ""),
-    SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT: withDefault(
-      z.string().min(1),
-      "/app/storage"
-    ),
-    // Non-negative optional int — MUST permit 0 (root), today's docker default.
-    SANDBOX_DOCKER_RUN_AS_UID: z.preprocess(
-      (v) => (v === "" || v == null ? undefined : v),
-      z.coerce.number().int().min(0).optional()
-    ),
-    // docker:bare (Mode-B) hardened-container knobs (P4a S10). The bare image is
-    // a STOCK hardened base (NO device-runtime/frp/bootstrap/secrets inside) — a
-    // keepalive `sleep infinity` container the API `docker exec`s into. Defaults
-    // to debian-slim.
-    SANDBOX_DOCKER_BARE_IMAGE: withDefault(z.string(), "debian:bookworm-slim"),
-    // Opt-in egress for a bare container: when true the container attaches to the
-    // named egress network instead of `--network none`. Must NOT be the compose
-    // default network or the resident egress network (superRefine).
-    SANDBOX_DOCKER_PURE_NETWORK: withDefault(z.string(), ""),
-    // Hardened-container resource caps (bare). Positive ints; conservative defaults.
-    SANDBOX_DOCKER_PIDS_LIMIT: z.preprocess(
-      (v) => (v === "" || v == null ? undefined : v),
-      z.coerce.number().int().min(1).default(512)
-    ),
-    SANDBOX_DOCKER_MEMORY: withDefault(z.string(), "1g"),
-    // cubesandbox:bare (Mode-B, OFF-BOX — P4b). The FIRST provider-backed bare
-    // substrate: a remote sandbox VM reached over the CubeSandbox wire client
-    // (control plane = E2B-compat REST; data plane = envd over CubeProxy). Defaults
-    // pin the local dev deployment; TEMPLATE has no default (required when selected).
-    SANDBOX_CUBESANDBOX_API_URL: withDefault(
-      z.string(),
-      "http://127.0.0.1:13000"
-    ),
-    SANDBOX_CUBESANDBOX_PROXY_URL: withDefault(
-      z.string(),
-      "http://127.0.0.1:11080"
-    ),
-    SANDBOX_CUBESANDBOX_DOMAIN: withDefault(z.string(), "cube.app"),
-    SANDBOX_CUBESANDBOX_TEMPLATE: withDefault(z.string(), ""),
-    // The in-sandbox absolute root the VFS maps onto (paths lower to
-    // `${VM_ROOT}${canonical}`). Non-empty; defaults to /workspace.
-    SANDBOX_CUBESANDBOX_VM_ROOT: withDefault(z.string().min(1), "/workspace"),
-    SANDBOX_CUBESANDBOX_ENVD_PORT: z.preprocess(
-      (v) => (v === "" || v == null ? undefined : v),
-      z.coerce.number().int().min(1).default(49983)
-    ),
-    // Optional management-plane API key (unused on the unauthenticated dev
-    // deployment; sent as X-API-Key + Authorization: Bearer when set).
-    SANDBOX_CUBESANDBOX_API_KEY: withDefault(z.string(), ""),
-    // Shared transport facts, read under their EXISTING keys (NOT renamed).
-    FRP_SHARED_TOKEN: withDefault(z.string(), ""),
-    SYNAPSE_TUNNEL_VHOST_HOST: withDefault(z.string(), ""),
-    SYNAPSE_DEVICE_TUNNEL_EDGE_URL: withDefault(z.string(), ""),
-    SYNAPSE_TUNNEL_SERVER_ADDR: withDefault(z.string(), ""),
-    SYNAPSE_TUNNEL_SERVER_PORT: withDefault(z.string(), ""),
-  })
-  .superRefine((env, ctx) => {
-    if (
-      env.NODE_ENV === "production" &&
-      !env.MCP_ENCRYPTION_KEY &&
-      !env.APP_SECRET
-    ) {
+  // ===== Per-session actor sandbox (runtime + content-addressed mounts) =====
+  // SANDBOX_PROVIDER selects the runtime substrate: local (same-host
+  // device-runtime child), docker (DooD cloud-sandbox image), or e2b/cube
+  // (future bare adapters). Default resolves to "none" => sandbox provisioning
+  // is DISABLED (replaces the old SYNAPSE_SANDBOX_ENABLED boolean; a LOUD boot
+  // warning fires so a deploy that only set the removed flag notices). The
+  // shared transport facts (FRP_SHARED_TOKEN / SYNAPSE_TUNNEL_* /
+  // SYNAPSE_DEVICE_TUNNEL_EDGE_URL) are read under their EXISTING keys — they
+  // are shared with the frps compose service + the device control-plane SSRF
+  // gate, so they are NOT renamed here.
+  SANDBOX_PROVIDER: z.string().optional(),
+  SANDBOX_MODE: withDefault(z.enum(["resident", "bare", "auto"]), "auto"),
+  SANDBOX_LOCAL_CLI_PATH: withDefault(z.string(), ""),
+  SANDBOX_SERVER_ORIGIN: withDefault(z.string(), ""),
+  SANDBOX_DOCKER_IMAGE: withDefault(z.string(), ""),
+  SANDBOX_DOCKER_NETWORK: withDefault(z.string(), ""),
+  SANDBOX_DOCKER_STORAGE_VOLUME: withDefault(z.string(), ""),
+  SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT: withDefault(
+    z.string().min(1),
+    "/app/storage"
+  ),
+  // Non-negative optional int — MUST permit 0 (root), today's docker default.
+  SANDBOX_DOCKER_RUN_AS_UID: z.preprocess(
+    (v) => (v === "" || v == null ? undefined : v),
+    z.coerce.number().int().min(0).optional()
+  ),
+  // docker:bare (Mode-B) hardened-container knobs (P4a S10). The bare image is
+  // a STOCK hardened base (NO device-runtime/frp/bootstrap/secrets inside) — a
+  // keepalive `sleep infinity` container the API `docker exec`s into. Defaults
+  // to debian-slim.
+  SANDBOX_DOCKER_BARE_IMAGE: withDefault(z.string(), "debian:bookworm-slim"),
+  // Opt-in egress for a bare container: when true the container attaches to the
+  // named egress network instead of `--network none`. Must NOT be the compose
+  // default network or the resident egress network (superRefine).
+  SANDBOX_DOCKER_PURE_NETWORK: withDefault(z.string(), ""),
+  // Hardened-container resource caps (bare). Positive ints; conservative defaults.
+  SANDBOX_DOCKER_PIDS_LIMIT: z.preprocess(
+    (v) => (v === "" || v == null ? undefined : v),
+    z.coerce.number().int().min(1).default(512)
+  ),
+  SANDBOX_DOCKER_MEMORY: withDefault(z.string(), "1g"),
+  // cubesandbox:bare (Mode-B, OFF-BOX — P4b). The FIRST provider-backed bare
+  // substrate: a remote sandbox VM reached over the CubeSandbox wire client
+  // (control plane = E2B-compat REST; data plane = envd over CubeProxy). Defaults
+  // pin the local dev deployment; TEMPLATE has no default (required when selected).
+  SANDBOX_CUBESANDBOX_API_URL: withDefault(
+    z.string(),
+    "http://127.0.0.1:13000"
+  ),
+  SANDBOX_CUBESANDBOX_PROXY_URL: withDefault(
+    z.string(),
+    "http://127.0.0.1:11080"
+  ),
+  SANDBOX_CUBESANDBOX_DOMAIN: withDefault(z.string(), "cube.app"),
+  SANDBOX_CUBESANDBOX_TEMPLATE: withDefault(z.string(), ""),
+  // The in-sandbox absolute root the VFS maps onto (paths lower to
+  // `${VM_ROOT}${canonical}`). Non-empty; defaults to /workspace.
+  SANDBOX_CUBESANDBOX_VM_ROOT: withDefault(z.string().min(1), "/workspace"),
+  SANDBOX_CUBESANDBOX_ENVD_PORT: z.preprocess(
+    (v) => (v === "" || v == null ? undefined : v),
+    z.coerce.number().int().min(1).default(49983)
+  ),
+  // Optional management-plane API key (unused on the unauthenticated dev
+  // deployment; sent as X-API-Key + Authorization: Bearer when set).
+  SANDBOX_CUBESANDBOX_API_KEY: withDefault(z.string(), ""),
+  // Shared transport facts, read under their EXISTING keys (NOT renamed).
+  FRP_SHARED_TOKEN: withDefault(z.string(), ""),
+  SYNAPSE_TUNNEL_VHOST_HOST: withDefault(z.string(), ""),
+  SYNAPSE_DEVICE_TUNNEL_EDGE_URL: withDefault(z.string(), ""),
+  SYNAPSE_TUNNEL_SERVER_ADDR: withDefault(z.string(), ""),
+  SYNAPSE_TUNNEL_SERVER_PORT: withDefault(z.string(), ""),
+})
+
+/**
+ * The raw, pre-superRefine env shape. Exported TYPE-ONLY for the config-free
+ * adapter-metadata leaf's `validate(env)` contract (the leaf imports this with
+ * `import type`, so no runtime config<->leaf edge exists). Equivalent to
+ * `z.infer<typeof envSchema>` since superRefine does not transform the output.
+ */
+export type RawEnv = z.infer<typeof envObjectSchema>
+
+export const envSchema = envObjectSchema.superRefine((env, ctx) => {
+  if (
+    env.NODE_ENV === "production" &&
+    !env.MCP_ENCRYPTION_KEY &&
+    !env.APP_SECRET
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["MCP_ENCRYPTION_KEY"],
+      message:
+        "MCP_ENCRYPTION_KEY (or APP_SECRET) is required in production to " +
+        "encrypt sensitive plugin/IM credentials at rest",
+    })
+  }
+  // Better Auth needs a stable signing secret in production. Resolve the same
+  // first-non-empty fallback used below; "" must NOT count as a valid secret.
+  if (env.NODE_ENV === "production") {
+    const authSecret = firstNonEmpty([
+      env.BETTER_AUTH_SECRET,
+      env.AUTH_SECRET,
+      env.APP_SECRET,
+    ])
+    if (!authSecret) {
       ctx.addIssue({
         code: "custom",
-        path: ["MCP_ENCRYPTION_KEY"],
+        path: ["BETTER_AUTH_SECRET"],
         message:
-          "MCP_ENCRYPTION_KEY (or APP_SECRET) is required in production to " +
-          "encrypt sensitive plugin/IM credentials at rest",
+          "BETTER_AUTH_SECRET (or AUTH_SECRET / APP_SECRET) is required in " +
+          "production to sign auth sessions",
       })
     }
-    // Better Auth needs a stable signing secret in production. Resolve the same
-    // first-non-empty fallback used below; "" must NOT count as a valid secret.
+  }
+  // A selected OCR provider must have its sidecar URL, or the api would run
+  // "configured" but every OCR call would fail at request time.
+  const ocrProvider = resolveOcrProviderName(env)
+  if (ocrProvider === "tesseract" && !env.TESSERACT_URL) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["TESSERACT_URL"],
+      message:
+        "TESSERACT_URL is required when OCR_PROVIDER=tesseract (the api runs no in-process OCR engine)",
+    })
+  }
+  if (ocrProvider === "ppocr" && !env.PPOCR_URL) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["PPOCR_URL"],
+      message: "PPOCR_URL is required when OCR_PROVIDER=ppocr",
+    })
+  }
+  // A selected document-extraction provider must have its sidecar URL / vendor
+  // credentials, or the api would boot "configured" but every PDF/office parse
+  // would fail at request time. (An UNconfigured provider — "none" — is a valid
+  // opt-out that only skips document parsing, so it is not gated here.)
+  const docProvider = resolveDocumentExtractionProviderName(env)
+  if (docProvider === "local" && !env.DOCEXTRACT_URL?.trim()) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["DOCEXTRACT_URL"],
+      message:
+        "DOCEXTRACT_URL is required when DOCUMENT_EXTRACTION_PROVIDER=local (the api runs no in-process document engine)",
+    })
+  }
+  if (
+    docProvider === "textin" &&
+    (!env.DOCEXTRACT_TEXTIN_APP_ID?.trim() ||
+      !env.DOCEXTRACT_TEXTIN_SECRET_CODE?.trim())
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["DOCEXTRACT_TEXTIN_APP_ID"],
+      message:
+        "DOCEXTRACT_TEXTIN_APP_ID and DOCEXTRACT_TEXTIN_SECRET_CODE are required when DOCUMENT_EXTRACTION_PROVIDER=textin",
+    })
+  }
+  if (
+    docProvider === "llamaparse" &&
+    !env.DOCEXTRACT_LLAMAPARSE_API_KEY?.trim()
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["DOCEXTRACT_LLAMAPARSE_API_KEY"],
+      message:
+        "DOCEXTRACT_LLAMAPARSE_API_KEY is required when DOCUMENT_EXTRACTION_PROVIDER=llamaparse",
+    })
+  }
+  // A selected transcription provider must have its sidecar URL, or the api
+  // would run "configured" but every transcription call would fail at request
+  // time. The deprecated AUDIO_FALLBACK_PROVIDER alias degrades to "none" when
+  // it can't reach a sidecar (see resolveTranscriptionProviderName), so a stale
+  // legacy value never trips this gate — only an explicit opt-in does.
+  const transcriptionProvider = resolveTranscriptionProviderName(env)
+  // Trim to match resolveTranscriptionProviderName: a whitespace-only URL must
+  // trip this fail-fast gate, not boot "configured" and then silently cache a
+  // terminal URL-parse failure per sha256 at request time.
+  if (
+    transcriptionProvider === "sherpa" &&
+    !env.TRANSCRIPTION_SHERPA_URL?.trim()
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["TRANSCRIPTION_SHERPA_URL"],
+      message:
+        "TRANSCRIPTION_SHERPA_URL is required when TRANSCRIPTION_PROVIDER=sherpa (the api runs no in-process ASR engine)",
+    })
+  }
+  if (
+    transcriptionProvider === "whisper" &&
+    !env.TRANSCRIPTION_WHISPER_URL?.trim()
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["TRANSCRIPTION_WHISPER_URL"],
+      message:
+        "TRANSCRIPTION_WHISPER_URL is required when TRANSCRIPTION_PROVIDER=whisper (the api runs no in-process ASR engine)",
+    })
+  }
+  // A selected sherpa-stream realtime provider must have its sidecar URL, or the
+  // api would boot "configured" but every /ws/asr session would fail to connect.
+  // (Unlike Volcengine — a cloud vendor that soft-fails per session via
+  // isConfigured() — the local sidecar URL is a hard boot requirement when
+  // explicitly selected, mirroring the batch sherpa/whisper gates above.)
+  if (
+    resolveAsrProviderName(env) === "sherpa-stream" &&
+    !env.REALTIME_ASR_SHERPA_URL?.trim()
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["REALTIME_ASR_SHERPA_URL"],
+      message:
+        "REALTIME_ASR_SHERPA_URL is required when ASR_PROVIDER=sherpa-stream (the api runs no in-process ASR engine)",
+    })
+  }
+  // A selected embedding provider must have its reach-env, or the api would boot
+  // "configured" and then fail every embed at request time (silently lexical).
+  const embeddingProvider = resolveEmbeddingProviderName(env)
+  if (embeddingProvider === "local" && !env.EMBEDDING_LOCAL_URL?.trim()) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["EMBEDDING_LOCAL_URL"],
+      message:
+        "EMBEDDING_LOCAL_URL is required when EMBEDDING_PROVIDER=local (the api runs no in-process embedding engine)",
+    })
+  }
+  if (embeddingProvider === "openai-compatible") {
+    const baseUrl = env.EMBEDDING_OPENAI_BASE_URL?.trim()
+    if (!baseUrl) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["EMBEDDING_OPENAI_BASE_URL"],
+        message:
+          "EMBEDDING_OPENAI_BASE_URL is required when EMBEDDING_PROVIDER=openai-compatible",
+      })
+    } else if (!/^https:\/\//i.test(baseUrl)) {
+      // PII-egress guard: memory text (query + every indexed passage) is sent to
+      // this host, so require TLS. (SSRF is out of scope by construction — this
+      // is global operator env, never tenant-supplied.)
+      ctx.addIssue({
+        code: "custom",
+        path: ["EMBEDDING_OPENAI_BASE_URL"],
+        message:
+          "EMBEDDING_OPENAI_BASE_URL must be https:// — memory text is sent to this host for embedding (PII egress)",
+      })
+    }
+    if (!env.EMBEDDING_OPENAI_API_KEY?.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["EMBEDDING_OPENAI_API_KEY"],
+        message:
+          "EMBEDDING_OPENAI_API_KEY is required when EMBEDDING_PROVIDER=openai-compatible",
+      })
+    }
+    if (!env.EMBEDDING_OPENAI_MODEL?.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["EMBEDDING_OPENAI_MODEL"],
+        message:
+          "EMBEDDING_OPENAI_MODEL is required when EMBEDDING_PROVIDER=openai-compatible",
+      })
+    }
+  }
+  // Sandbox: a docker provider is only reachable over the frp tunnel and needs
+  // its full run env at boot — move the old dockerBackendOptionsFromEnv
+  // fail-fast here so a misconfiguration is caught at STARTUP, not on the first
+  // provision. (An UNconfigured provider — "none" — is a valid opt-out.)
+  // Sandbox boot validation (R4 §1.9 config fold): resolve the SELECTED
+  // `${provider}:${mode}` adapter's metadata leaf and dispatch to its
+  // `validate` (+ `validateProduction` when NODE_ENV==='production'). The
+  // per-provider docker/cubesandbox blocks moved verbatim into the config-free
+  // adapter-metadata table so the registered set and the validated set can
+  // never drift. An UNconfigured provider ("none") resolves no entry → no
+  // sandbox validation, the valid opt-out.
+  const sandboxProvider = resolveSandboxProviderName(env)
+  const sandboxMode = resolveSandboxMode(env)
+  const sandboxMeta = sandboxAdapterMetadata(sandboxProvider, sandboxMode)
+  if (sandboxMeta) {
+    for (const iss of sandboxMeta.meta.config.validate(env)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [...iss.path],
+        message: iss.message,
+      })
+    }
     if (env.NODE_ENV === "production") {
-      const authSecret = firstNonEmpty([
-        env.BETTER_AUTH_SECRET,
-        env.AUTH_SECRET,
-        env.APP_SECRET,
-      ])
-      if (!authSecret) {
+      for (const iss of sandboxMeta.meta.config.validateProduction(
+        env,
+        env.NODE_ENV
+      )) {
         ctx.addIssue({
           code: "custom",
-          path: ["BETTER_AUTH_SECRET"],
-          message:
-            "BETTER_AUTH_SECRET (or AUTH_SECRET / APP_SECRET) is required in " +
-            "production to sign auth sessions",
+          path: [...iss.path],
+          message: iss.message,
         })
       }
     }
-    // A selected OCR provider must have its sidecar URL, or the api would run
-    // "configured" but every OCR call would fail at request time.
-    const ocrProvider = resolveOcrProviderName(env)
-    if (ocrProvider === "tesseract" && !env.TESSERACT_URL) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["TESSERACT_URL"],
-        message:
-          "TESSERACT_URL is required when OCR_PROVIDER=tesseract (the api runs no in-process OCR engine)",
-      })
-    }
-    if (ocrProvider === "ppocr" && !env.PPOCR_URL) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["PPOCR_URL"],
-        message: "PPOCR_URL is required when OCR_PROVIDER=ppocr",
-      })
-    }
-    // A selected document-extraction provider must have its sidecar URL / vendor
-    // credentials, or the api would boot "configured" but every PDF/office parse
-    // would fail at request time. (An UNconfigured provider — "none" — is a valid
-    // opt-out that only skips document parsing, so it is not gated here.)
-    const docProvider = resolveDocumentExtractionProviderName(env)
-    if (docProvider === "local" && !env.DOCEXTRACT_URL?.trim()) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["DOCEXTRACT_URL"],
-        message:
-          "DOCEXTRACT_URL is required when DOCUMENT_EXTRACTION_PROVIDER=local (the api runs no in-process document engine)",
-      })
-    }
-    if (
-      docProvider === "textin" &&
-      (!env.DOCEXTRACT_TEXTIN_APP_ID?.trim() ||
-        !env.DOCEXTRACT_TEXTIN_SECRET_CODE?.trim())
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["DOCEXTRACT_TEXTIN_APP_ID"],
-        message:
-          "DOCEXTRACT_TEXTIN_APP_ID and DOCEXTRACT_TEXTIN_SECRET_CODE are required when DOCUMENT_EXTRACTION_PROVIDER=textin",
-      })
-    }
-    if (
-      docProvider === "llamaparse" &&
-      !env.DOCEXTRACT_LLAMAPARSE_API_KEY?.trim()
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["DOCEXTRACT_LLAMAPARSE_API_KEY"],
-        message:
-          "DOCEXTRACT_LLAMAPARSE_API_KEY is required when DOCUMENT_EXTRACTION_PROVIDER=llamaparse",
-      })
-    }
-    // A selected transcription provider must have its sidecar URL, or the api
-    // would run "configured" but every transcription call would fail at request
-    // time. The deprecated AUDIO_FALLBACK_PROVIDER alias degrades to "none" when
-    // it can't reach a sidecar (see resolveTranscriptionProviderName), so a stale
-    // legacy value never trips this gate — only an explicit opt-in does.
-    const transcriptionProvider = resolveTranscriptionProviderName(env)
-    // Trim to match resolveTranscriptionProviderName: a whitespace-only URL must
-    // trip this fail-fast gate, not boot "configured" and then silently cache a
-    // terminal URL-parse failure per sha256 at request time.
-    if (
-      transcriptionProvider === "sherpa" &&
-      !env.TRANSCRIPTION_SHERPA_URL?.trim()
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["TRANSCRIPTION_SHERPA_URL"],
-        message:
-          "TRANSCRIPTION_SHERPA_URL is required when TRANSCRIPTION_PROVIDER=sherpa (the api runs no in-process ASR engine)",
-      })
-    }
-    if (
-      transcriptionProvider === "whisper" &&
-      !env.TRANSCRIPTION_WHISPER_URL?.trim()
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["TRANSCRIPTION_WHISPER_URL"],
-        message:
-          "TRANSCRIPTION_WHISPER_URL is required when TRANSCRIPTION_PROVIDER=whisper (the api runs no in-process ASR engine)",
-      })
-    }
-    // A selected sherpa-stream realtime provider must have its sidecar URL, or the
-    // api would boot "configured" but every /ws/asr session would fail to connect.
-    // (Unlike Volcengine — a cloud vendor that soft-fails per session via
-    // isConfigured() — the local sidecar URL is a hard boot requirement when
-    // explicitly selected, mirroring the batch sherpa/whisper gates above.)
-    if (
-      resolveAsrProviderName(env) === "sherpa-stream" &&
-      !env.REALTIME_ASR_SHERPA_URL?.trim()
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["REALTIME_ASR_SHERPA_URL"],
-        message:
-          "REALTIME_ASR_SHERPA_URL is required when ASR_PROVIDER=sherpa-stream (the api runs no in-process ASR engine)",
-      })
-    }
-    // A selected embedding provider must have its reach-env, or the api would boot
-    // "configured" and then fail every embed at request time (silently lexical).
-    const embeddingProvider = resolveEmbeddingProviderName(env)
-    if (embeddingProvider === "local" && !env.EMBEDDING_LOCAL_URL?.trim()) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["EMBEDDING_LOCAL_URL"],
-        message:
-          "EMBEDDING_LOCAL_URL is required when EMBEDDING_PROVIDER=local (the api runs no in-process embedding engine)",
-      })
-    }
-    if (embeddingProvider === "openai-compatible") {
-      const baseUrl = env.EMBEDDING_OPENAI_BASE_URL?.trim()
-      if (!baseUrl) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["EMBEDDING_OPENAI_BASE_URL"],
-          message:
-            "EMBEDDING_OPENAI_BASE_URL is required when EMBEDDING_PROVIDER=openai-compatible",
-        })
-      } else if (!/^https:\/\//i.test(baseUrl)) {
-        // PII-egress guard: memory text (query + every indexed passage) is sent to
-        // this host, so require TLS. (SSRF is out of scope by construction — this
-        // is global operator env, never tenant-supplied.)
-        ctx.addIssue({
-          code: "custom",
-          path: ["EMBEDDING_OPENAI_BASE_URL"],
-          message:
-            "EMBEDDING_OPENAI_BASE_URL must be https:// — memory text is sent to this host for embedding (PII egress)",
-        })
-      }
-      if (!env.EMBEDDING_OPENAI_API_KEY?.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["EMBEDDING_OPENAI_API_KEY"],
-          message:
-            "EMBEDDING_OPENAI_API_KEY is required when EMBEDDING_PROVIDER=openai-compatible",
-        })
-      }
-      if (!env.EMBEDDING_OPENAI_MODEL?.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["EMBEDDING_OPENAI_MODEL"],
-          message:
-            "EMBEDDING_OPENAI_MODEL is required when EMBEDDING_PROVIDER=openai-compatible",
-        })
-      }
-    }
-    // Sandbox: a docker provider is only reachable over the frp tunnel and needs
-    // its full run env at boot — move the old dockerBackendOptionsFromEnv
-    // fail-fast here so a misconfiguration is caught at STARTUP, not on the first
-    // provision. (An UNconfigured provider — "none" — is a valid opt-out.)
-    const sandboxProvider = resolveSandboxProviderName(env)
-    const sandboxMode = resolveSandboxMode(env)
-    if (sandboxProvider === "docker") {
-      // STORAGE_VOLUME holds the materialized sandbox roots and is required by
-      // BOTH modes: resident mounts it into the cloud-sandbox image; bare mounts
-      // its volume-subpath dirs into the hardened container. IMAGE / NETWORK are
-      // resident-only (moved into the resident branch below).
-      if (!env.SANDBOX_DOCKER_STORAGE_VOLUME?.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["SANDBOX_DOCKER_STORAGE_VOLUME"],
-          message:
-            "SANDBOX_DOCKER_STORAGE_VOLUME is required when SANDBOX_PROVIDER=docker",
-        })
-      }
-      // A docker resident sandbox runs the cloud-sandbox IMAGE on its egress
-      // NETWORK and rides the frp tunnel (no co-located loopback), so it requires
-      // IMAGE + NETWORK + FRP_SHARED_TOKEN + edge↔vhost consistency. (docker:bare
-      // needs none of these — it runs a stock hardened base with `--network none`.)
-      if (sandboxMode === "resident") {
-        if (!env.SANDBOX_DOCKER_IMAGE?.trim()) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["SANDBOX_DOCKER_IMAGE"],
-            message:
-              "SANDBOX_DOCKER_IMAGE is required when SANDBOX_PROVIDER=docker + SANDBOX_MODE=resident",
-          })
-        }
-        if (!env.SANDBOX_DOCKER_NETWORK?.trim()) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["SANDBOX_DOCKER_NETWORK"],
-            message:
-              "SANDBOX_DOCKER_NETWORK is required when SANDBOX_PROVIDER=docker + SANDBOX_MODE=resident",
-          })
-        }
-        if (!env.FRP_SHARED_TOKEN?.trim()) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["FRP_SHARED_TOKEN"],
-            message:
-              "FRP_SHARED_TOKEN is required when SANDBOX_PROVIDER=docker (a docker sandbox is only reachable over the frp tunnel)",
-          })
-        }
-        // frps routes by the HTTP Host header (SYNAPSE_TUNNEL_VHOST_HOST); the API
-        // reaches the device by fetching SYNAPSE_DEVICE_TUNNEL_EDGE_URL. If the two
-        // disagree the route silently won't match. Both default to `tunnel-edge`,
-        // so they only diverge under explicit custom config — reject there.
-        const effectiveVhost =
-          env.SYNAPSE_TUNNEL_VHOST_HOST?.trim() || "tunnel-edge"
-        const edgeUrl = env.SYNAPSE_DEVICE_TUNNEL_EDGE_URL?.trim()
-        let effectiveEdgeHost = "tunnel-edge"
-        if (edgeUrl) {
-          try {
-            effectiveEdgeHost = new URL(edgeUrl).hostname
-          } catch {
-            ctx.addIssue({
-              code: "custom",
-              path: ["SYNAPSE_DEVICE_TUNNEL_EDGE_URL"],
-              message: `SYNAPSE_DEVICE_TUNNEL_EDGE_URL is not a valid URL: '${edgeUrl}'`,
-            })
-          }
-        }
-        if (effectiveEdgeHost !== effectiveVhost) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["SYNAPSE_DEVICE_TUNNEL_EDGE_URL"],
-            message:
-              `SYNAPSE_DEVICE_TUNNEL_EDGE_URL host ('${effectiveEdgeHost}') must match ` +
-              `SYNAPSE_TUNNEL_VHOST_HOST ('${effectiveVhost}') — frps routes by the ` +
-              `vhost Host header, so a mismatch makes every sandbox dispatch fail to route`,
-          })
-        }
-      }
-      // docker:bare (Mode-B, P4a S10). frp is gated on mode==='resident' (above),
-      // so a docker bare sandbox boots WITHOUT frp (no tunnel). Two extra gates:
-      if (sandboxMode === "bare") {
-        // (0) BARE_IMAGE. docker:bare runs a STOCK hardened base image as a
-        // keepalive `sleep infinity` container; it must be a non-empty image ref.
-        // (withDefault seeds debian:bookworm-slim, so this only fires on a
-        // whitespace-only override that would `docker run` an empty image.)
-        if (!env.SANDBOX_DOCKER_BARE_IMAGE?.trim()) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["SANDBOX_DOCKER_BARE_IMAGE"],
-            message:
-              "SANDBOX_DOCKER_BARE_IMAGE is required (non-empty) when SANDBOX_PROVIDER=docker + SANDBOX_MODE=bare",
-          })
-        }
-        // (1) uid-PARITY. docker:bare does host-side fs ops through the SAME
-        // ExtendedLocalBackend as local:bare (the bytes are host-local under
-        // STORAGE_DIR); the container runs `--user <runAsUid>` and writes to the
-        // volume-subpath mounts. If the container uid ≠ the API uid, host-side and
-        // in-container writes fight over ownership. Require runAsUid === the API's
-        // own uid. (When the API runs as root, getuid()===0 and runAsUid must be 0
-        // — a documented root-in-container caveat.)
-        const apiUid =
-          typeof process.getuid === "function" ? process.getuid() : undefined
-        const runAsUid = env.SANDBOX_DOCKER_RUN_AS_UID
-        if (apiUid !== undefined && (runAsUid ?? 0) !== apiUid) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["SANDBOX_DOCKER_RUN_AS_UID"],
-            message:
-              `SANDBOX_DOCKER_RUN_AS_UID (${runAsUid ?? 0}) must equal the API process uid ` +
-              `(${apiUid}) for SANDBOX_PROVIDER=docker + SANDBOX_MODE=bare — docker:bare fs ` +
-              `ops are host-side, so a uid mismatch corrupts shared-volume ownership`,
-          })
-        }
-        // (2) PURE-NETWORK guard. A bare container defaults to `--network none`
-        // (kernel-level no egress). Opt-in egress via SANDBOX_DOCKER_PURE_NETWORK
-        // must name a DEDICATED network — never the compose default or the
-        // resident frp egress network (which reach the API/tunnel).
-        const pureNet = env.SANDBOX_DOCKER_PURE_NETWORK?.trim()
-        if (
-          pureNet &&
-          (pureNet === env.SANDBOX_DOCKER_NETWORK?.trim() ||
-            pureNet === "synapse-sandbox-egress" ||
-            pureNet === "bridge" ||
-            pureNet === "host")
-        ) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["SANDBOX_DOCKER_PURE_NETWORK"],
-            message:
-              `SANDBOX_DOCKER_PURE_NETWORK ('${pureNet}') must be a DEDICATED egress ` +
-              `network — not the compose default, 'bridge', 'host', or the resident ` +
-              `'synapse-sandbox-egress' network (those reach the API/tunnel; a bare ` +
-              `sandbox must not)`,
-          })
-        }
-      }
-    }
-    // cubesandbox (OFF-BOX, P4b): a remote sandbox provider is unreachable without
-    // its control/data-plane URLs + a template to instantiate, so fail fast at boot
-    // rather than on the first provision. (An UNconfigured provider — "none" — is a
-    // valid opt-out.) API_URL/PROXY_URL carry dev defaults (only a whitespace
-    // override trips them); TEMPLATE has no default and is always required.
-    if (sandboxProvider === "cubesandbox") {
-      if (!env.SANDBOX_CUBESANDBOX_API_URL?.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["SANDBOX_CUBESANDBOX_API_URL"],
-          message:
-            "SANDBOX_CUBESANDBOX_API_URL is required when SANDBOX_PROVIDER=cubesandbox",
-        })
-      }
-      if (!env.SANDBOX_CUBESANDBOX_PROXY_URL?.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["SANDBOX_CUBESANDBOX_PROXY_URL"],
-          message:
-            "SANDBOX_CUBESANDBOX_PROXY_URL is required when SANDBOX_PROVIDER=cubesandbox",
-        })
-      }
-      if (!env.SANDBOX_CUBESANDBOX_TEMPLATE?.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["SANDBOX_CUBESANDBOX_TEMPLATE"],
-          message:
-            "SANDBOX_CUBESANDBOX_TEMPLATE is required when SANDBOX_PROVIDER=cubesandbox (the sandbox template to instantiate)",
-        })
-      }
-    }
-  })
+  }
+})
 
 /**
  * First trim-non-empty string, or undefined. Used for secret fallback so a

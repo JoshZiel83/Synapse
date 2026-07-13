@@ -50,7 +50,6 @@ import type { HostProvider } from "./host-provider.js"
 import {
   readHostPidIdentity,
   verifyPidIdentity,
-  type SandboxBackendKind,
   type SandboxHandle,
   type SandboxLiveness,
   type SandboxRef,
@@ -143,7 +142,13 @@ function resolveAdapterForProvision(
   const adapter = resolveSandboxAdapter(
     config.sandbox.provider,
     config.sandbox.mode,
-    { hostProvider: options.hostProvider }
+    {
+      hostProvider: options.hostProvider,
+      // (§1.5) inject the spine's catalog + tunnel waiters so the RESIDENT
+      // adapter's ready() can perform the Mode-A control-plane wait WITHOUT
+      // adapter-registry importing this module (which would form a cycle).
+      readiness: { waitForCatalog, waitForTunnelEndpoint },
+    }
   )
   if (!adapter) {
     throw new SandboxServiceError(
@@ -185,10 +190,10 @@ export function sandboxLocalServerOrigin(): string {
  * STORAGE_DIR const) so it is deterministically unit-testable.
  */
 export function sandboxSpecVolumeSubpath(
-  kind: SandboxBackendKind,
+  provider: string,
   input: { storageDir: string; mountPoint: string; sessionId: string }
 ): string | undefined {
-  return kind === "docker" ? toSandboxVolumeSubpath(input) : undefined
+  return provider === "docker" ? toSandboxVolumeSubpath(input) : undefined
 }
 
 /**
@@ -984,40 +989,55 @@ export async function provisionSandbox(
         )
       )
     }
-    const spec: SandboxSpec = {
-      sessionId,
-      workspaceId: ctx.workspaceId,
-      sandboxRoot,
-      // Docker-ONLY: where this session's root lives RELATIVE to the storage
-      // volume mount (computed from STORAGE_DIR, never hardcoded). Undefined for
-      // the local backend — computing it there throws when STORAGE_DIR isn't
-      // under the volume mount point (bare-metal default /tmp/synapse-storage).
-      storageVolumeSubpath: sandboxSpecVolumeSubpath(adapter.kind, {
-        storageDir: STORAGE_DIR,
-        mountPoint: storageVolumeMountPoint(),
-        sessionId,
-      }),
-      fsHelperPath,
-      // The device dials back to the API. LOCAL backend: SANDBOX_SERVER_ORIGIN
-      // (loopback for a containerized local deploy) or config.app.baseUrl. The
-      // docker backend ignores this and builds its own origin from env.
-      serverOrigin: sandboxLocalServerOrigin(),
-      // ALWAYS run this per-session device in sandbox mode (--cmd-sandbox), even
-      // when bwrap is unavailable. The device-runtime's --cmd-sandbox branch
-      // fail-closes: bwrap present → confined commandline; bwrap absent → NO
-      // commandline tool at all. `commandlineEnabled` only decides whether WE
-      // pre-authorize the commandline grant, not whether the device runs unconfined.
-      confineCommands: true,
-      title: `Sandbox ${sessionId.slice(0, 8)}`,
-      // P3: the mount no longer carries pairing_session_id / sandbox_resource_id /
-      // host_pid. Pairing + resource id live on the sandboxes row (docker consume
-      // sets pairing_session_id; resource_id is written post-create via
-      // updateSandboxRow below), and a pre-bootstrap docker container is reaped by
-      // its session LABEL (reapDockerSandboxOrphans), not by a mount column — so
-      // onPairingCreated / onResourceCreated have nothing to persist and are dropped.
-      // onRuntimeReady still back-fills the mount's sole identity column, sandbox_id.
-      onRuntimeReady: (runtimeId) => persistAll({ sandboxId: runtimeId }),
-    }
+    // P3: the mount no longer carries pairing_session_id / sandbox_resource_id /
+    // host_pid. Pairing + resource id live on the sandboxes row (docker consume
+    // sets pairing_session_id; resource_id is written post-create via
+    // updateSandboxRow below), and a pre-bootstrap docker container is reaped by
+    // its session LABEL (reapDockerSandboxOrphans), not by a mount column — so
+    // onPairingCreated / onResourceCreated have nothing to persist and are dropped.
+    // onRuntimeReady still back-fills the mount's sole identity column, sandbox_id.
+    const onRuntimeReady = (runtimeId: string): Promise<void> =>
+      persistAll({ sandboxId: runtimeId })
+    // (R4 §1.10) Build the DISCRIMINATED spec. The spine builds the HOST variant
+    // only for a host-backed adapter (`!meta.offBox`); an OFF-BOX adapter
+    // (cubesandbox) gets the core ONLY — no host path can reach it (the host-RCE
+    // trap of mounting a session root into an off-box adapter is unrepresentable).
+    const spec: SandboxSpec = adapter.meta.offBox
+      ? {
+          offBox: true,
+          sessionId,
+          workspaceId: ctx.workspaceId,
+          title: `Sandbox ${sessionId.slice(0, 8)}`,
+          onRuntimeReady,
+        }
+      : {
+          sessionId,
+          workspaceId: ctx.workspaceId,
+          sandboxRoot,
+          // Docker-ONLY: where this session's root lives RELATIVE to the storage
+          // volume mount (computed from STORAGE_DIR, never hardcoded). Undefined
+          // for local — computing it there throws when STORAGE_DIR isn't under the
+          // volume mount point (bare-metal default /tmp/synapse-storage).
+          storageVolumeSubpath: sandboxSpecVolumeSubpath(adapter.provider, {
+            storageDir: STORAGE_DIR,
+            mountPoint: storageVolumeMountPoint(),
+            sessionId,
+          }),
+          fsHelperPath,
+          // The device dials back to the API. LOCAL backend: SANDBOX_SERVER_ORIGIN
+          // (loopback for a containerized local deploy) or config.app.baseUrl. The
+          // docker backend ignores this and builds its own origin from env.
+          serverOrigin: sandboxLocalServerOrigin(),
+          // ALWAYS run this per-session device in sandbox mode (--cmd-sandbox),
+          // even when bwrap is unavailable. The device-runtime's --cmd-sandbox
+          // branch fail-closes: bwrap present → confined commandline; bwrap absent
+          // → NO commandline tool at all. `commandlineEnabled` only decides whether
+          // WE pre-authorize the commandline grant, not whether the device runs
+          // unconfined.
+          confineCommands: true,
+          title: `Sandbox ${sessionId.slice(0, 8)}`,
+          onRuntimeReady,
+        }
     handle = await adapter.create(spec)
     liveSandboxHandles.set(handle.sandboxId, handle)
 
@@ -1035,7 +1055,7 @@ export async function provisionSandbox(
     // can signal it PID-reuse-safely. NULL for docker/off-box (no host pid) and
     // non-Linux hosts (readHostPidIdentity returns null there).
     const hostPidIdentity =
-      adapter.kind === "local" && handle.hostPid !== undefined
+      adapter.provider === "local" && handle.hostPid !== undefined
         ? readHostPidIdentity(handle.hostPid)
         : null
     await repo.updateSandboxRow(runtimeId, {
@@ -1048,24 +1068,23 @@ export async function provisionSandbox(
       deadlineAt: new Date(Date.now() + PROVISION_DEADLINE_MS),
     })
 
-    // ⑦/⑦b — catalog + tunnel readiness. Forked on adapter.catalogSource:
-    //   control_plane (resident) → wait for device.catalog.sync + the tunnel
-    //     endpoint to register (UNCHANGED Mode-A path).
-    //   api_authored (bare) → the API already authored + persisted the catalog
-    //     synchronously in create() (mintBareSandboxRuntimeTx) and there is NO
-    //     tunnel/endpoint to register (the data plane is dialed directly), so
-    //     BOTH waits are skipped. resolveRuntimeBuiltinIds below reads the same
-    //     already-committed catalog either way.
-    if (adapter.catalogSource === "control_plane") {
-      await waitForCatalog(runtimeId, {
-        timeoutMs: options.catalogTimeoutMs ?? 30_000,
-      })
-      const tunnelTimeoutMs = options.tunnelTimeoutMs ?? 30_000
-      if (tunnelTimeoutMs > 0) {
-        await waitForTunnelEndpoint(handle.runtimeLink.runtimeServiceId, {
-          timeoutMs: tunnelTimeoutMs,
-        })
-      }
+    // ⑦/⑦b — readiness (R4 §1.5/§6.9). The old catalogSource fork moved INTO the
+    // adapter's ready(): resident → wait for device.catalog.sync + the tunnel
+    // endpoint to register (UNCHANGED Mode-A path, injected waiters); bare (host +
+    // off-box) → the API already authored + persisted the catalog synchronously in
+    // create() and there is NO tunnel/endpoint to register, so ready is immediate.
+    // (cube's health+version+domain negotiation is a later sub-phase; ready() → ok
+    // now to preserve behavior.) A `{ ok:false }` fails provision (the catch tears
+    // the half-built sandbox down) rather than flipping a broken sandbox active.
+    const readiness = await adapter.ready(handle, {
+      catalogTimeoutMs: options.catalogTimeoutMs ?? 30_000,
+      tunnelTimeoutMs: options.tunnelTimeoutMs ?? 30_000,
+    })
+    if (!readiness.ok) {
+      throw new SandboxServiceError(
+        `provision for ${sessionId} failed readiness: ${readiness.reason ?? "not ready"}`,
+        503
+      )
     }
 
     // ⑧ build both authorization layers (once, full capability list).

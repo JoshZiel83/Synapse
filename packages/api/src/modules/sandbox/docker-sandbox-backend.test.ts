@@ -8,7 +8,11 @@ import {
   reapDockerSandboxOrphans,
   probeDockerContainerLiveness,
 } from "./docker-sandbox-backend.js"
-import { SandboxBackendError, type SandboxSpec } from "./sandbox-backend.js"
+import {
+  SandboxBackendError,
+  type SandboxSpec,
+  type SandboxHostSpec,
+} from "./sandbox-backend.js"
 import { toSandboxVolumeSubpath } from "./service.js"
 
 // A fake `docker` CLI: records argv, returns scripted stdout/exit per subcommand.
@@ -39,7 +43,9 @@ function fakeDocker(
   return { spawnImpl, calls }
 }
 
-function baseSpec(over: Partial<SandboxSpec> = {}): SandboxSpec {
+// R4 §1.10: SandboxSpec is a discriminated union; the fixture builds the HOST
+// variant so its override bag is typed to the host spec.
+function baseSpec(over: Partial<SandboxHostSpec> = {}): SandboxSpec {
   return {
     sessionId: "11111111-2222-3333-4444-555555555555",
     workspaceId: "ws-1",
@@ -571,7 +577,7 @@ test("docker create(): spec without storageVolumeSubpath fails loud (never mount
   // a guessed path. The failure happens after the pairing is created, so cleanup
   // cancels the pairing (no container, no device yet).
   const spec = baseSpec()
-  delete (spec as Partial<SandboxSpec>).storageVolumeSubpath
+  delete (spec as Partial<SandboxHostSpec>).storageVolumeSubpath
   await assert.rejects(
     () => backend.create(spec),
     /storageVolumeSubpath is required/

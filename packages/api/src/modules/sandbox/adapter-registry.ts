@@ -32,9 +32,10 @@ import { deleteRuntime, mintBareSandboxRuntime } from "../devices/service.js"
 import { bwrapAvailable, detectRipgrep } from "@synapse/device-runtime"
 import {
   createLocalSandboxBackend,
+  requireHostSpec,
   SandboxBackendError,
   type SandboxBackend,
-  type SandboxBackendKind,
+  type SandboxDataPlaneCredentials,
   type SandboxHandle,
   type SandboxInfo,
   type SandboxLiveness,
@@ -57,38 +58,166 @@ import {
   createDockerBareDataPlane,
   type SandboxDataPlane,
   type BareDataPlaneRebuildRow,
+  type WorkingSetBridge,
 } from "./data-plane.js"
+import { createProductWorkingSetBridge } from "./working-set-bridge.js"
 import { makeCubesandboxBareAdapter } from "./cubesandbox-adapter.js"
 import {
   registerBareDataPlane,
   unregisterBareDataPlane,
   getLiveBareDataPlane,
+  sandboxRootForSession,
 } from "./bare-dispatch.js"
 import { buildBareCoreCatalog } from "./core-catalog.js"
+import {
+  sandboxAdapterMetadata,
+  type SandboxAdapterMeta,
+  type AdapterEndpointContract,
+} from "./adapter-metadata.js"
 import type { SandboxCapabilityDescriptor } from "./model.js"
 
 const log = createLogger("sandbox.adapter-registry")
 
+/** (R4 §1.1 2d/2e) readiness + negotiated provider facts, surfaced to the spine. */
+export interface ReadinessReport {
+  ok: boolean
+  /** e.g. "envd_version_below_min", "unreachable". */
+  reason?: string
+  /** (2e) provider fact; preferred over process.* (threaded in a later phase). */
+  platform?: string
+  arch?: string
+  /** off-box negotiation results (a later phase). */
+  envdVersion?: string
+  domain?: string
+}
+
+/** (R4 §1.1 2f) one provider resource the reconciler may DELETE if untracked. */
+export interface OrphanResource {
+  resourceId: string
+}
+
+/**
+ * (R4 §1.5) Injected into the RESIDENT adapters so their `ready()` can wait for
+ * the control-plane catalog + tunnel endpoint WITHOUT adapter-registry importing
+ * sandbox/service.ts (which would form a module cycle). The spine passes its own
+ * waitForCatalog/waitForTunnelEndpoint when resolving the provision adapter.
+ */
+export interface ResidentReadinessWaiters {
+  waitForCatalog(
+    runtimeId: string,
+    opts: { timeoutMs: number; pollMs?: number }
+  ): Promise<void>
+  waitForTunnelEndpoint(
+    runtimeServiceId: string,
+    opts: { timeoutMs: number; pollMs?: number }
+  ): Promise<void>
+}
+
+/** The two readiness budgets the spine passes to `ready()` (§6.9). */
+export interface AdapterReadyOptions {
+  catalogTimeoutMs: number
+  /** `<= 0` opts out of the tunnel wait (test seam), preserved from the spine. */
+  tunnelTimeoutMs: number
+}
+
 export interface SandboxAdapter {
+  // ── identity / metadata ────────────────────────────────────────────────────
   readonly key: string
   readonly provider: string
   readonly mode: "resident" | "bare"
-  /** Written to sandboxes.adapter (== provider); the sole persisted adapter tag (P3). */
-  readonly kind: SandboxBackendKind
   readonly catalogSource: "control_plane" | "api_authored"
   /** Frozen descriptor for a bare adapter; null for a resident adapter. */
   readonly capabilities: SandboxCapabilityDescriptor | null
+  /**
+   * (2h) adapter-declared metadata REPLACES `readonly kind`. Sourced from the
+   * config-free adapter-metadata leaf. `meta.tag` (== provider) is the sole
+   * persisted adapter tag (written to sandboxes.adapter).
+   */
+  readonly meta: SandboxAdapterMeta
+  /**
+   * (2g) endpoint scheme + R3.2 identity predicate (from the leaf). null for
+   * resident. bare-dispatch resolves the identity predicate from the LEAF by tag
+   * (not this field) so an unknown row can't throw; this field is the adapter's
+   * own copy for symmetry.
+   */
+  readonly endpoint: AdapterEndpointContract | null
+
+  // ── lifecycle ──────────────────────────────────────────────────────────────
   create(spec: SandboxSpec): Promise<SandboxHandle>
   connect(ref: SandboxRef): Promise<SandboxHandle>
+
   /**
-   * OFF-BOX bare adapter seam (P4b). Reconstruct the data plane from a PERSISTED
-   * row on a bare-dispatch rebuild-on-miss (an `envd:`-scheme endpoint delegates
-   * here instead of a hardcoded fork). Host-side adapters (confinedFs:'native')
-   * leave this undefined — their plane rebuilds via the scheme-forked
-   * rebuildBarePlane. An adapter whose descriptor is confinedFs:'unsupported' MUST
-   * implement it (enforced by the P1.2 fail-closed guard).
+   * (2a/2d) readiness/negotiation BEFORE the active-flip. resident → catalog +
+   * tunnel wait; bare (host + off-box) → immediate ok (the api-authored catalog
+   * is already committed). ASYNC. On `{ ok:false }` the spine fails provision.
    */
-  rebuildDataPlane?(row: BareDataPlaneRebuildRow): SandboxDataPlane
+  ready(
+    handle: SandboxHandle,
+    opts: AdapterReadyOptions
+  ): Promise<ReadinessReport>
+
+  /**
+   * (2c) working-set contract: the adapter supplies the bridge the spine drives
+   * on provision (push) and teardown (pull-before-kill). R4 Phase 1c: ALL
+   * adapters return the pass-through product bridge for now; the off-box detached
+   * envd bridge lands in a later sub-phase.
+   */
+  workingSet(handle: SandboxHandle): WorkingSetBridge
+
+  /**
+   * (2a/§1.8) Reconstruct the data plane from a PERSISTED row on a bare-dispatch
+   * rebuild-on-miss. EVERY bare adapter implements it now: host adapters wrap
+   * createLocalBareDataPlane / createDockerBareDataPlane (the scheme forks moved
+   * off the spine INTO the adapters); off-box builds the remote plane. ASYNC (an
+   * off-box rebuild must connect + re-mint tokens — a later sub-phase). Resident
+   * adapters leave it undefined.
+   */
+  rebuildDataPlane?(row: BareDataPlaneRebuildRow): Promise<SandboxDataPlane>
+
+  /**
+   * (2b/§6.2) token-bearing reconnect seam for teardown/recovery pull. R4 Phase
+   * 1b: host adapters wrap their existing plane; off-box re-uses the token-less
+   * remote rebuild (tokens + re-persist land later). Uncalled in Phase 1a.
+   */
+  reconnectDataPlane?(
+    ref: SandboxRef,
+    opts: { executor?: unknown }
+  ): Promise<{
+    plane: SandboxDataPlane
+    credentials: SandboxDataPlaneCredentials | null
+  }>
+
+  /**
+   * (2f) orphan enumeration + destroy-retry so the reconciler can DELETE
+   * untracked provider resources. R4 Phase 1d: inert ([]) — docker keeps its
+   * existing label-reaper path in the spine; the provider sweep generalizes here
+   * later.
+   */
+  listOrphans?(opts: {
+    activeResourceIds: ReadonlySet<string>
+  }): Promise<OrphanResource[]>
+  destroyResource?(resourceId: string): Promise<void>
+}
+
+/**
+ * Fetch the metadata leaf for an adapter key (the registration invariant: every
+ * factory key is in the leaf table). Throws on a drift so a mis-registered
+ * adapter fails loud at construction, not silently at dispatch.
+ */
+function metaFor(
+  provider: string,
+  mode: "resident" | "bare"
+): {
+  meta: SandboxAdapterMeta
+  endpoint: AdapterEndpointContract | null
+} {
+  const entry = sandboxAdapterMetadata(provider, mode)
+  if (!entry) {
+    throw new SandboxBackendError(
+      `no adapter-metadata leaf for '${provider}:${mode}' (registry/metadata drift)`
+    )
+  }
+  return { meta: entry.meta, endpoint: entry.endpoint }
 }
 
 /** Build the docker backend options from the validated config.sandbox namespace.
@@ -114,25 +243,57 @@ export function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
 
 // ─────────────────────────── resident adapters (Mode-A) ──────────────────────
 
+/** (§1.5) resident readiness: the catalog + tunnel wait moved OFF the spine's
+ *  catalogSource fork INTO `ready()`. The waiters are injected (see
+ *  ResidentReadinessWaiters) so no adapter-registry→service cycle forms. When no
+ *  waiters are injected (a teardown-resolved adapter, which never calls ready),
+ *  ready is a no-op ok — preserving today's behavior exactly. */
+async function residentReady(
+  waiters: ResidentReadinessWaiters | undefined,
+  handle: SandboxHandle,
+  opts: AdapterReadyOptions
+): Promise<ReadinessReport> {
+  if (!waiters) return { ok: true }
+  await waiters.waitForCatalog(handle.runtimeLink.runtimeId, {
+    timeoutMs: opts.catalogTimeoutMs,
+  })
+  if (opts.tunnelTimeoutMs > 0) {
+    await waiters.waitForTunnelEndpoint(handle.runtimeLink.runtimeServiceId, {
+      timeoutMs: opts.tunnelTimeoutMs,
+    })
+  }
+  return { ok: true }
+}
+
 function makeLocalResidentAdapter(deps?: {
   hostProvider?: HostProvider
+  readiness?: ResidentReadinessWaiters
 }): SandboxAdapter {
   const hostProvider = deps?.hostProvider ?? createLocalHostProvider()
   const backend: SandboxBackend = createLocalSandboxBackend({ hostProvider })
+  const { meta, endpoint } = metaFor("local", "resident")
   return {
     key: "local:resident",
     provider: "local",
     mode: "resident",
-    kind: "local",
     catalogSource: "control_plane",
     capabilities: null,
+    meta,
+    endpoint,
     create: (spec) => backend.create(spec),
     connect: (ref) => backend.connect(ref),
+    ready: (handle, opts) => residentReady(deps?.readiness, handle, opts),
+    // R4 Phase 1c: resident sandboxes are CAS-materialized on the host; the
+    // product bridge is the existing pass-through spine primitive.
+    workingSet: () => createProductWorkingSetBridge(),
+    // R4 Phase 1d: resident/local has no provider resources to sweep.
+    listOrphans: async () => [],
   }
 }
 
 function makeDockerResidentAdapter(deps?: {
   dockerSpawnImpl?: SpawnImpl
+  readiness?: ResidentReadinessWaiters
 }): SandboxAdapter {
   // F-A: connect (teardown/liveness/reconnect) uses the ENV-FREE reconnect
   // backend; create (provision) lazily builds the provision backend ONLY when
@@ -140,16 +301,23 @@ function makeDockerResidentAdapter(deps?: {
   const reconnect = createDockerReconnectBackend({
     spawnImpl: deps?.dockerSpawnImpl,
   })
+  const { meta, endpoint } = metaFor("docker", "resident")
   return {
     key: "docker:resident",
     provider: "docker",
     mode: "resident",
-    kind: "docker",
     catalogSource: "control_plane",
     capabilities: null,
+    meta,
+    endpoint,
     create: (spec) =>
       createDockerSandboxBackend(dockerBackendOptionsFromEnv()).create(spec),
     connect: (ref) => reconnect.connect(ref),
+    ready: (handle, opts) => residentReady(deps?.readiness, handle, opts),
+    workingSet: () => createProductWorkingSetBridge(),
+    // R4 Phase 1d: the docker label reaper (reapDockerSandboxOrphans) stays in
+    // the reconcile spine for now; generalizing it through listOrphans is later.
+    listOrphans: async () => [],
   }
 }
 
@@ -209,14 +377,18 @@ export function makeLocalBareAdapter(
 ): SandboxAdapter {
   const mint = deps.mintRuntime ?? mintBareSandboxRuntime
   const descriptor = deps.descriptorOverride ?? buildLocalBareDescriptor()
+  const { meta, endpoint } = metaFor("local", "bare")
   return {
     key: "local:bare",
     provider: "local",
     mode: "bare",
-    kind: "local",
     catalogSource: "api_authored",
     capabilities: descriptor,
+    meta,
+    endpoint,
     async create(spec: SandboxSpec): Promise<SandboxHandle> {
+      // local:bare is host-backed (in-process plane over the session root).
+      const host = requireHostSpec(spec)
       const runtimeId = randomUUID()
       const serviceId = randomUUID()
       const dataPlaneEndpoint = `inprocess:${runtimeId}`
@@ -227,8 +399,8 @@ export function makeLocalBareAdapter(
         // persist the api-authored catalog (NO keypair, NO pairing, NO broker).
         await mint({
           runtimeId,
-          workspaceId: spec.workspaceId,
-          sessionId: spec.sessionId,
+          workspaceId: host.workspaceId,
+          sessionId: host.sessionId,
           serviceId,
           adapter: "local",
           dataPlaneEndpoint,
@@ -242,14 +414,14 @@ export function makeLocalBareAdapter(
         // ② build + register the in-process confined plane bound to this
         // session's root (the same bytes the CAS working-set bridge materialized).
         const plane = createLocalBareDataPlane({
-          sandboxRoot: spec.sandboxRoot,
+          sandboxRoot: host.sandboxRoot,
           descriptor,
         })
         registerBareDataPlane(runtimeId, plane)
         // ③ the runtime's DB identity now exists → let the spine back-fill mounts.
-        await spec.onRuntimeReady?.(runtimeId)
+        await host.onRuntimeReady?.(runtimeId)
         return makeLocalBareHandle({
-          sessionId: spec.sessionId,
+          sessionId: host.sessionId,
           runtimeId,
           serviceId,
           dataPlaneEndpoint,
@@ -258,7 +430,7 @@ export function makeLocalBareAdapter(
         if (minted) {
           const p = unregisterBareDataPlane(runtimeId)
           if (p) await p.dispose().catch(() => {})
-          await deleteRuntime(spec.workspaceId, runtimeId).catch(() => {})
+          await deleteRuntime(host.workspaceId, runtimeId).catch(() => {})
         }
         throw err
       }
@@ -274,6 +446,29 @@ export function makeLocalBareAdapter(
       // to drain any LIVE plane on kill().
       return makeLocalBareRefHandle(ref)
     },
+    // Bare (host) → catalog is authored synchronously in create()'s mint tx and
+    // there is NO tunnel endpoint to register, so ready is immediate. Same
+    // behavior as the old catalogSource==='api_authored' skip.
+    ready: async () => ({ ok: true }),
+    workingSet: () => createProductWorkingSetBridge(),
+    // §1.8: the host scheme fork moved OFF the spine INTO the adapter — wrap
+    // createLocalBareDataPlane, using the row-authoritative descriptor + root.
+    rebuildDataPlane: async (row: BareDataPlaneRebuildRow) =>
+      createLocalBareDataPlane({
+        sandboxRoot: row.sandboxRoot,
+        descriptor: row.descriptor,
+      }),
+    // R4 Phase 1b: host wraps the existing in-process plane (no data-plane
+    // secret). Uncalled in Phase 1a; the teardown/recovery pull wires it later.
+    reconnectDataPlane: async (ref) => ({
+      plane: createLocalBareDataPlane({
+        sandboxRoot: sandboxRootForSession(ref.sandboxId),
+        descriptor,
+      }),
+      credentials: null,
+    }),
+    // R4 Phase 1d: local has no provider resources to sweep.
+    listOrphans: async () => [],
   }
 }
 
@@ -467,14 +662,18 @@ export function makeDockerBareAdapter(
     buildDockerBareDescriptor({
       egress: runOpts.pureNetwork ? "named" : "none",
     })
+  const { meta, endpoint } = metaFor("docker", "bare")
   return {
     key: "docker:bare",
     provider: "docker",
     mode: "bare",
-    kind: "docker",
     catalogSource: "api_authored",
     capabilities: descriptor,
+    meta,
+    endpoint,
     async create(spec: SandboxSpec): Promise<SandboxHandle> {
+      // docker:bare is host-backed (volume-subpath mounts of the session root).
+      const host = requireHostSpec(spec)
       // uid-PARITY create-time probe (defense-in-depth over the boot superRefine):
       // docker:bare fs is host-side, so a container uid ≠ the API uid corrupts
       // shared-volume ownership. State the root-in-container caveat.
@@ -494,13 +693,13 @@ export function makeDockerBareAdapter(
       // create(), so they resolve for the volume-subpath mounts.
       const mountPoints = SANDBOX_MOUNT_POINTS.map((m) =>
         m.replace(/^\//, "")
-      ).filter((name) => existsSync(join(spec.sandboxRoot, name)))
+      ).filter((name) => existsSync(join(host.sandboxRoot, name)))
       if (mountPoints.length === 0) {
         throw new SandboxBackendError(
-          `docker:bare: no mount-point dirs exist under ${spec.sandboxRoot}`
+          `docker:bare: no mount-point dirs exist under ${host.sandboxRoot}`
         )
       }
-      const containerName = `synapse-sbx-bare-${sanitizeContainerName(spec.sessionId)}`
+      const containerName = `synapse-sbx-bare-${sanitizeContainerName(host.sessionId)}`
       // best-effort stale removal of a same-name container.
       await runDockerCapture(spawnImpl, ["rm", "-f", containerName]).catch(
         () => {}
@@ -565,13 +764,13 @@ export function makeDockerBareAdapter(
         })
         mintedRuntimeId = runtimeId
         const plane = createDockerBareDataPlane({
-          sandboxRoot: spec.sandboxRoot,
+          sandboxRoot: host.sandboxRoot,
           descriptor,
           containerId,
           spawnImpl,
         })
         registerBareDataPlane(runtimeId, plane)
-        await spec.onRuntimeReady?.(runtimeId)
+        await host.onRuntimeReady?.(runtimeId)
         return makeDockerBareHandle({
           sessionId: spec.sessionId,
           runtimeId,
@@ -602,6 +801,32 @@ export function makeDockerBareAdapter(
       // next dispatch (bare-dispatch registry miss forks on docker-exec:<cid>).
       return makeDockerBareRefHandle(ref, spawnImpl)
     },
+    // Bare (host) → catalog authored in create()'s mint tx; no tunnel endpoint.
+    ready: async () => ({ ok: true }),
+    workingSet: () => createProductWorkingSetBridge(),
+    // §1.8: the docker-exec scheme fork moved OFF the spine INTO the adapter.
+    // R3.2: the container id comes from the row's AUTHORITATIVE resourceId, NEVER
+    // sliced out of the free-string endpoint.
+    rebuildDataPlane: async (row: BareDataPlaneRebuildRow) =>
+      createDockerBareDataPlane({
+        sandboxRoot: row.sandboxRoot,
+        descriptor: row.descriptor,
+        containerId: row.resourceId ?? "",
+        spawnImpl,
+      }),
+    // R4 Phase 1b: host wraps the existing docker-exec plane (no data-plane
+    // secret). Uncalled in Phase 1a.
+    reconnectDataPlane: async (ref) => ({
+      plane: createDockerBareDataPlane({
+        sandboxRoot: sandboxRootForSession(ref.sandboxId),
+        descriptor,
+        containerId: ref.resourceId,
+        spawnImpl,
+      }),
+      credentials: null,
+    }),
+    // R4 Phase 1d: the docker label reaper stays in the reconcile spine for now.
+    listOrphans: async () => [],
   }
 }
 
@@ -733,17 +958,28 @@ let warnedNullResolve = false
  * to drift. e2b/cube (residual) stay UNregistered in P4a; a miss is the
  * fail-closed case both consumers key off of.
  */
+interface AdapterFactoryDeps {
+  hostProvider?: HostProvider
+  dockerSpawnImpl?: SpawnImpl
+  /** (§1.5) injected into the resident adapters so ready() can wait for catalog +
+   *  tunnel without an adapter-registry→service module cycle. */
+  readiness?: ResidentReadinessWaiters
+}
+
 const ADAPTER_FACTORIES: Record<
   string,
-  (deps?: {
-    hostProvider?: HostProvider
-    dockerSpawnImpl?: SpawnImpl
-  }) => SandboxAdapter
+  (deps?: AdapterFactoryDeps) => SandboxAdapter
 > = {
   "local:resident": (deps) =>
-    makeLocalResidentAdapter({ hostProvider: deps?.hostProvider }),
+    makeLocalResidentAdapter({
+      hostProvider: deps?.hostProvider,
+      readiness: deps?.readiness,
+    }),
   "docker:resident": (deps) =>
-    makeDockerResidentAdapter({ dockerSpawnImpl: deps?.dockerSpawnImpl }),
+    makeDockerResidentAdapter({
+      dockerSpawnImpl: deps?.dockerSpawnImpl,
+      readiness: deps?.readiness,
+    }),
   "local:bare": () => makeLocalBareAdapter(),
   "docker:bare": (deps) =>
     makeDockerBareAdapter({ dockerSpawnImpl: deps?.dockerSpawnImpl }),
@@ -770,7 +1006,7 @@ export function listRegisteredAdapterKeys(): string[] {
 export function resolveSandboxAdapter(
   provider: string,
   mode: "resident" | "bare",
-  deps?: { hostProvider?: HostProvider; dockerSpawnImpl?: SpawnImpl }
+  deps?: AdapterFactoryDeps
 ): SandboxAdapter | null {
   const key = `${provider}:${mode}`
   const factory = ADAPTER_FACTORIES[key]

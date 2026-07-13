@@ -28,15 +28,6 @@ import {
 } from "./host-provider.js"
 import { deleteRuntime, mintLocalSandboxRuntime } from "../devices/service.js"
 
-/** Which adapter produced/owns a sandbox runtime. Persisted on sandboxes.adapter
- *  so teardown picks the right adapter regardless of the API's current config. P2 registered local + docker (Mode-A
- *  resident); P4a adds the bare (Mode-B) reference adapters under the SAME
- *  provider strings ("local"/"docker") — the `sandboxes.mode` column
- *  disambiguates resident vs bare. Future provider substrates (e2b/cube) widen
- *  this when they land. P4b adds the first OFF-BOX provider substrate,
- *  "cubesandbox" (Mode-B bare only; confinedFs:'unsupported'). */
-export type SandboxBackendKind = "local" | "docker" | "cubesandbox"
-
 /**
  * Tristate liveness (R3.4). `probeLiveness()` returns this so lifecycle callers
  * can distinguish a CONFIRMED-dead runtime from one they simply could NOT probe:
@@ -58,10 +49,35 @@ export type SandboxLiveness = "alive" | "dead" | "unknown"
  * createCloudDevicePairing+bootstrap) — the spine only supplies session-scoped
  * facts and lifecycle callbacks.
  */
-export interface SandboxSpec {
+export interface SandboxSpecBase {
   /** The Synapse logical sandbox id == sessionId. Also the liveHandles key. */
   sessionId: string
   workspaceId: string
+  title?: string
+  /**
+   * Fired the instant the runtime's DB identity exists (docker: bootstrap consumed;
+   * local: mintLocalSandboxRuntimeTx). Carries the runtime id (the sandboxes.id ==
+   * runtimes.id) so the spine can back-fill the mount's sole identity column,
+   * file_mounts.sandbox_id. MUST be awaited; idempotent; a throw aborts create()
+   * (which then runs its own cleanup). Renamed from onDeviceClaimed (a sandbox runtime
+   * has no `devices` row — the identity is the runtime).
+   *
+   * (P3: the former onPairingCreated / onResourceCreated staged-persistence callbacks
+   * are gone — pairing + resource id live on the sandboxes row, written at mint /
+   * post-create, and a pre-bootstrap docker container is reaped by its session label,
+   * not a mount column. The mount carries only sandbox_id now.)
+   */
+  onRuntimeReady?: (runtimeId: string) => Promise<void>
+}
+
+/**
+ * (R4 §1.10) HOST-backed spec: the runtime runs on the API host (local/docker
+ * resident + bare), so it carries the host-facing facts. Flattened at the top
+ * level so existing spine + adapter reads (`spec.sandboxRoot`) are unchanged.
+ * `offBox` is the discriminant (absent/false ⇒ host).
+ */
+export interface SandboxHostSpec extends SandboxSpecBase {
+  readonly offBox?: false
   /** Per-session sandbox root on the API's view of the FS (materialized mounts live here). */
   sandboxRoot: string
   /**
@@ -80,21 +96,41 @@ export interface SandboxSpec {
   enableDelete?: boolean
   /** Always true for sandboxes (confine commands; device fail-closes if bwrap absent). */
   confineCommands: boolean
-  title?: string
-  /**
-   * Fired the instant the runtime's DB identity exists (docker: bootstrap consumed;
-   * local: mintLocalSandboxRuntimeTx). Carries the runtime id (the sandboxes.id ==
-   * runtimes.id) so the spine can back-fill the mount's sole identity column,
-   * file_mounts.sandbox_id. MUST be awaited; idempotent; a throw aborts create()
-   * (which then runs its own cleanup). Renamed from onDeviceClaimed (a sandbox runtime
-   * has no `devices` row — the identity is the runtime).
-   *
-   * (P3: the former onPairingCreated / onResourceCreated staged-persistence callbacks
-   * are gone — pairing + resource id live on the sandboxes row, written at mint /
-   * post-create, and a pre-bootstrap docker container is reaped by its session label,
-   * not a mount column. The mount carries only sandbox_id now.)
-   */
-  onRuntimeReady?: (runtimeId: string) => Promise<void>
+}
+
+/**
+ * (R4 §1.10) OFF-BOX spec (cubesandbox): the VM is the store, so NO host path
+ * ever reaches it — it carries ONLY the shared core. The spine builds this
+ * variant when `adapter.meta.offBox`, making the host-RCE trap (mounting a
+ * session root into an off-box adapter) impossible to express.
+ */
+export interface SandboxOffBoxSpec extends SandboxSpecBase {
+  readonly offBox: true
+}
+
+/**
+ * Everything provisionSandbox hands a backend to stand up one sandbox. A
+ * discriminated union: host-backed adapters get the host facts; off-box adapters
+ * get the core only. Prefer {@link requireHostSpec} over a `spec.host!` non-null
+ * — it narrows to {@link SandboxHostSpec} and fail-closes if an off-box spec
+ * reaches a host adapter.
+ */
+export type SandboxSpec = SandboxHostSpec | SandboxOffBoxSpec
+
+/**
+ * Narrow a {@link SandboxSpec} to its host variant for a host-backed adapter.
+ * Fail-closed: an off-box spec reaching a host adapter is a wiring bug (the
+ * spine only builds the host variant for `!meta.offBox`), so throw rather than
+ * read undefined host paths. Closure-safe (returns the narrowed value) so the
+ * caller can read `host.sandboxRoot` inside nested callbacks.
+ */
+export function requireHostSpec(spec: SandboxSpec): SandboxHostSpec {
+  if (spec.offBox === true) {
+    throw new SandboxBackendError(
+      "host-backed sandbox adapter received an off-box SandboxSpec (no host paths available)"
+    )
+  }
+  return spec
 }
 
 /** Identifies a sandbox runtime well enough to reconnect/kill it from another
@@ -140,10 +176,30 @@ export interface SandboxInfo {
   startedAt?: Date
 }
 
+/**
+ * (R4 §1.3, 2b) provider data-plane credentials captured at create() for an
+ * off-box adapter — the envd/traffic access tokens `control.create()` returns.
+ * NULL for adapters with no data-plane secret (local/docker bare, resident).
+ * R4 Phase 1b: captured here but NOT yet persisted (the encrypted-column write +
+ * re-inject-at-rebuild land in a later sub-phase). Never logged, never in
+ * provenance.
+ */
+export interface SandboxDataPlaneCredentials {
+  envdAccessToken?: string
+  trafficAccessToken?: string
+  /** forward-compat: any provider secret bag. */
+  extra?: Record<string, string>
+}
+
 /** A live sandbox handle — mirrors the e2b Sandbox INSTANCE methods we use. */
 export interface SandboxHandle {
   readonly adapter: string
   readonly mode: "resident" | "bare"
+  /**
+   * (R4 §1.3, 2b) provider credentials captured at create, to be persisted
+   * encrypted in a later sub-phase. null for adapters with no data-plane secret.
+   */
+  readonly credentials?: SandboxDataPlaneCredentials | null
   /** == sessionId (the liveSandboxHandles registry key). */
   readonly sandboxId: string
   /** Provider resource id (container id / pod / ""). */
@@ -203,7 +259,6 @@ export interface SandboxHandle {
 }
 
 export interface SandboxBackend {
-  readonly kind: SandboxBackendKind
   /** e2b: Sandbox.create(). Stand up a NEW sandbox; resolve once device+service
    *  ids are known (catalog wait + grants stay in the spine). */
   create(spec: SandboxSpec): Promise<SandboxHandle>
@@ -248,9 +303,11 @@ export function createLocalSandboxBackend(deps: {
   const mintRuntime = deps.mintRuntime ?? mintLocalSandboxRuntime
   const failCleanup = deps.failCleanup ?? defaultLocalFailCleanup
   return {
-    kind: "local",
     async create(spec: SandboxSpec): Promise<SandboxHandle> {
-      const brokerDir = join(spec.sandboxRoot, ".broker")
+      // Host-backed adapter: narrow to the host spec (fail-closed if an off-box
+      // spec ever reaches here) so host-path reads never see undefined.
+      const host = requireHostSpec(spec)
+      const brokerDir = join(host.sandboxRoot, ".broker")
       const broker = createFileBackedBroker({ brokerDir })
       const serviceKey = await broker.generateKeyPair("service:device_runtime")
       // FRESH UUID per provision (CORRECTION 1) — sessionId would PK-collide with
@@ -275,7 +332,7 @@ export function createLocalSandboxBackend(deps: {
         // ② author the on-disk identity the child `synapse-device run` loads.
         await broker.saveDeviceIdentity({
           deviceId: runtimeId,
-          serverOrigin: spec.serverOrigin,
+          serverOrigin: host.serverOrigin,
           hostKind: "local",
           services: [
             {
@@ -291,12 +348,12 @@ export function createLocalSandboxBackend(deps: {
         // ③ spawn the long-lived daemon (no `pair` child).
         const spawnParams: SpawnSandboxRuntimeParams = {
           brokerDir,
-          fsRoot: spec.sandboxRoot,
-          fsHelperPath: spec.fsHelperPath,
-          serverOrigin: spec.serverOrigin,
-          enableDelete: spec.enableDelete,
-          confineCommands: spec.confineCommands,
-          title: spec.title,
+          fsRoot: host.sandboxRoot,
+          fsHelperPath: host.fsHelperPath,
+          serverOrigin: host.serverOrigin,
+          enableDelete: host.enableDelete,
+          confineCommands: host.confineCommands,
+          title: host.title,
         }
         const runHandle = await hostProvider.run(spawnParams)
         return makeLocalHandle({
