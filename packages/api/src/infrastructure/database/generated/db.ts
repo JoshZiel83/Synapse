@@ -2365,17 +2365,18 @@ export interface RuntimeToolsLive {
 
 export interface Sandboxes {
   adapter: string;
-  arch: string | null;
+  arch: string;
   capabilityDescriptor: Generated<Json>;
   createdAt: Generated<Date>;
   dataPlaneCertFingerprint: string | null;
   deadlineAt: Date | null;
   errorMessage: string | null;
   hostPid: number | null;
+  hostPidIdentity: string | null;
   id: string;
   mode: SandboxesMode;
   pairingSessionId: string | null;
-  platform: string | null;
+  platform: string;
   resourceId: string | null;
   sessionId: string | null;
   stashManifestId: string | null;
@@ -2393,6 +2394,7 @@ export interface SandboxesLive {
   deadlineAt: Date | null;
   errorMessage: string | null;
   hostPid: number | null;
+  hostPidIdentity: string | null;
   id: string | null;
   mode: SandboxesMode | null;
   pairingSessionId: string | null;

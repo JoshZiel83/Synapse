@@ -78,8 +78,8 @@ test("updateRuntimeServiceTransport is a NO-OP on a bare_dataplane service (prot
       )
     )
     await db.executeQuery(
-      sql`INSERT INTO sandboxes (id, workspace_id, mode, adapter, state)
-          VALUES (${runtimeId}, ${workspaceId}, 'bare', 'local', 'active')`.compile(
+      sql`INSERT INTO sandboxes (id, workspace_id, mode, adapter, state, platform, arch)
+          VALUES (${runtimeId}, ${workspaceId}, 'bare', 'local', 'active', 'linux', 'x64')`.compile(
         db
       )
     )

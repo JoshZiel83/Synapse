@@ -168,8 +168,8 @@ async function insertSandboxRuntime(
     .values({ id: runtimeId, workspaceId: args.workspaceId, kind: "sandbox" })
     .execute()
   await sql`
-    INSERT INTO sandboxes (id, workspace_id, session_id, mode, adapter, state, resource_id, host_pid)
-    VALUES (${runtimeId}, ${args.workspaceId}, ${args.sessionId}, 'resident', ${args.adapter}, ${args.state}::sandboxes_state, ${args.resourceId ?? ""}, NULL)`.execute(
+    INSERT INTO sandboxes (id, workspace_id, session_id, mode, adapter, state, resource_id, host_pid, platform, arch)
+    VALUES (${runtimeId}, ${args.workspaceId}, ${args.sessionId}, 'resident', ${args.adapter}, ${args.state}::sandboxes_state, ${args.resourceId ?? ""}, NULL, 'linux', 'x64')`.execute(
     db
   )
   return runtimeId

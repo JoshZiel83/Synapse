@@ -73,8 +73,8 @@ async function seedService(
       )
     )
     await db.executeQuery(
-      sql`INSERT INTO sandboxes (id, workspace_id, mode, adapter, state)
-          VALUES (${runtimeId}, ${workspaceId}, 'resident', ${opts.mountBackend ?? "local"}, ${opts.mountStatus ?? "active"}::sandboxes_state)`.compile(
+      sql`INSERT INTO sandboxes (id, workspace_id, mode, adapter, state, platform, arch)
+          VALUES (${runtimeId}, ${workspaceId}, 'resident', ${opts.mountBackend ?? "local"}, ${opts.mountStatus ?? "active"}::sandboxes_state, 'linux', 'x64')`.compile(
         db
       )
     )

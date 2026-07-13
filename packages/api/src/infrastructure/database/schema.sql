@@ -3779,12 +3779,18 @@ CREATE TABLE sandboxes (
   stash_manifest_id UUID,
   data_plane_cert_fingerprint TEXT,
   -- Runtime platform facts for the capability projection's bundle/OS-guard logic.
-  -- local adapter: the API host's process.platform/process.arch (the sandbox runs
-  -- on this host). docker adapter: 'linux' + the container's declared arch. Off-box
-  -- (E2B/Cube): provider-declared. NULL degrades to the projection's linux/x64
-  -- last-resort default (see capability-projection/repo.ts) rather than fail-closing.
-  platform VARCHAR(40),                       -- darwin, linux, win32
-  arch VARCHAR(32),                           -- x64, arm64, ... (process.arch)
+  -- local adapter: the API host's process.platform/process.arch; docker: 'linux' +
+  -- the container's declared arch; off-box (E2B/Cube): provider-declared. R3.P2d:
+  -- NOT NULL + fail-closed (no back-compat) — every sandbox mint site populates
+  -- these, and a cloud bootstrap that omits them is rejected at the wire, so the
+  -- capability projection never has to guess a sandbox's platform.
+  platform VARCHAR(40) NOT NULL,              -- darwin, linux, win32
+  arch VARCHAR(32) NOT NULL,                  -- x64, arm64, ... (process.arch)
+  -- R3.6: durable process-identity token for a local sandbox's host_pid, of the
+  -- form '<boot_id>:<starttime>' (Linux /proc). Recovery signals a persisted PID
+  -- ONLY when this token still matches, eliminating the PID-reuse kill-wrong-
+  -- process hazard. NULL for docker/off-box (no host pid) and non-Linux hosts.
+  host_pid_identity TEXT,
   deadline_at TIMESTAMPTZ,
   error_message TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -3792,6 +3798,8 @@ CREATE TABLE sandboxes (
   UNIQUE (id, workspace_id)
 );
 CREATE INDEX idx_sandboxes_reconcile ON sandboxes(adapter, state) WHERE state NOT IN ('closed', 'failed');
+-- R3.P2b: TTL-reap sweep index — sandboxes stuck in 'provisioning' past deadline_at.
+CREATE INDEX idx_sandboxes_reap ON sandboxes(state, deadline_at) WHERE state = 'provisioning';
 
 CREATE TABLE devices (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -4766,63 +4774,79 @@ DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION validate_runtime_service_kind_guard();
 
--- sandbox mode <-> service_kind invariant (P1.6): a sandbox runtime's services
--- must match its mode — resident => device_runtime, bare => bare_dataplane. The
--- invariant otherwise lived only in TS mint code, so a hand-written / drifted row
--- (bare+device_runtime, resident+bare_dataplane, or a mix) could commit. Fires from
--- BOTH sides (a service row change, or a sandboxes.mode change) so neither ordering
--- escapes it. Deferred so runtime+sandbox+service can be minted in one tx. Early
--- returns for non-sandbox runtimes and the NULL-mode deferred-window (detail-
--- consistency triggers already cover a genuinely missing sandboxes row).
+-- sandbox mode <-> service_kind invariant (P1.6 + R3.8). A sandbox runtime's
+-- services must match its mode (resident => device_runtime, bare => bare_dataplane)
+-- AND, when state='active', it must have EXACTLY ONE of them. R3.8 fix: this is
+-- now SNAPSHOT-INDEPENDENT — at deferred (commit-time) execution it re-reads the
+-- FINAL committed runtime kind + sandbox mode/state + ALL of the runtime's services
+-- by runtime_id, instead of trusting the NEW.mode/NEW.service_kind of whichever row
+-- fired (which let device_runtime+bare_dataplane commit and mis-rejected a legit
+-- resident->bare->resident). Fires from runtime_services INSERT/UPDATE/DELETE — the
+-- DELETE arm closes the old "detach the last service" hole — AND from sandboxes
+-- mode/state changes. Exempt: non-sandbox / soft-deleted runtimes, and an absent
+-- sandboxes row (detail-consistency triggers cover a genuinely missing detail). The
+-- EXACTLY-ONE requirement applies ONLY to state='active': provisioning has not
+-- minted the service yet, and terminal (closed/failed/closing) states may have
+-- detached it during teardown.
 CREATE OR REPLACE FUNCTION validate_sandbox_mode_service_kind()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 DECLARE
+  v_runtime_id UUID;
   v_kind runtimes_kind;
   v_mode sandboxes_mode;
+  v_state sandboxes_state;
   v_required runtime_services_service_kind;
-  v_bad INT;
+  v_ok INT;
+  v_wrong INT;
 BEGIN
   IF TG_TABLE_NAME = 'runtime_services' THEN
-    SELECT kind INTO v_kind FROM runtimes WHERE id = NEW.runtime_id;
-    IF v_kind IS DISTINCT FROM 'sandbox' THEN RETURN NULL; END IF;
-    SELECT mode INTO v_mode FROM sandboxes WHERE id = NEW.runtime_id;
-    IF v_mode IS NULL THEN RETURN NULL; END IF;
-    v_required := CASE v_mode WHEN 'resident' THEN 'device_runtime'::runtime_services_service_kind
-                              ELSE 'bare_dataplane'::runtime_services_service_kind END;
-    IF NEW.service_kind IS DISTINCT FROM v_required THEN
-      RAISE EXCEPTION
-        'sandbox mode=% requires runtime_services.service_kind=% (runtime % has service_kind=%)',
-        v_mode, v_required, NEW.runtime_id, NEW.service_kind
-        USING ERRCODE = '23514', CONSTRAINT = 'sandbox_mode_service_kind_chk';
-    END IF;
-  ELSE  -- sandboxes
-    v_mode := NEW.mode;
-    IF v_mode IS NULL THEN RETURN NULL; END IF;
-    v_required := CASE v_mode WHEN 'resident' THEN 'device_runtime'::runtime_services_service_kind
-                              ELSE 'bare_dataplane'::runtime_services_service_kind END;
-    SELECT COUNT(*) INTO v_bad FROM runtime_services rs
-      WHERE rs.runtime_id = NEW.id AND rs.service_kind IS DISTINCT FROM v_required;
-    IF v_bad > 0 THEN
-      RAISE EXCEPTION
-        'sandbox % mode=% has % runtime_services row(s) whose service_kind is not %',
-        NEW.id, v_mode, v_bad, v_required
-        USING ERRCODE = '23514', CONSTRAINT = 'sandbox_mode_service_kind_chk';
-    END IF;
+    v_runtime_id := COALESCE(NEW.runtime_id, OLD.runtime_id);
+  ELSE
+    v_runtime_id := COALESCE(NEW.id, OLD.id);
   END IF;
+  IF v_runtime_id IS NULL THEN RETURN NULL; END IF;
+
+  SELECT kind INTO v_kind FROM runtimes WHERE id = v_runtime_id AND deleted_at IS NULL;
+  IF v_kind IS DISTINCT FROM 'sandbox' THEN RETURN NULL; END IF;
+  SELECT mode, state INTO v_mode, v_state FROM sandboxes WHERE id = v_runtime_id;
+  IF v_mode IS NULL THEN RETURN NULL; END IF;
+
+  v_required := CASE v_mode WHEN 'resident' THEN 'device_runtime'::runtime_services_service_kind
+                            ELSE 'bare_dataplane'::runtime_services_service_kind END;
+
+  SELECT COUNT(*) FILTER (WHERE service_kind = v_required),
+         COUNT(*) FILTER (WHERE service_kind IS DISTINCT FROM v_required)
+    INTO v_ok, v_wrong
+    FROM runtime_services WHERE runtime_id = v_runtime_id;
+
+  IF v_wrong > 0 THEN
+    RAISE EXCEPTION
+      'sandbox % (mode=%) has % runtime_services of the wrong service_kind (required %)',
+      v_runtime_id, v_mode, v_wrong, v_required
+      USING ERRCODE = '23514', CONSTRAINT = 'sandbox_mode_service_kind_chk';
+  END IF;
+
+  IF v_state = 'active' AND v_ok <> 1 THEN
+    RAISE EXCEPTION
+      'active sandbox % (mode=%) must have exactly one % service (has %)',
+      v_runtime_id, v_mode, v_required, v_ok
+      USING ERRCODE = '23514', CONSTRAINT = 'sandbox_mode_service_kind_chk';
+  END IF;
+
   RETURN NULL;
 END;
 $$;
 
 CREATE CONSTRAINT TRIGGER sandbox_mode_service_kind_on_service
-AFTER INSERT OR UPDATE OF service_kind, runtime_id ON runtime_services
+AFTER INSERT OR DELETE OR UPDATE OF service_kind, runtime_id ON runtime_services
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION validate_sandbox_mode_service_kind();
 
 CREATE CONSTRAINT TRIGGER sandbox_mode_service_kind_on_sandbox
-AFTER INSERT OR UPDATE OF mode ON sandboxes
+AFTER INSERT OR UPDATE OF mode, state ON sandboxes
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION validate_sandbox_mode_service_kind();

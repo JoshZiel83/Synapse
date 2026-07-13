@@ -1889,6 +1889,8 @@ async function insertSandboxExposure(
       sessionId: session.id as string,
       mode: "resident",
       adapter: "local",
+      platform: "linux",
+      arch: "x64",
     } as any)
     .execute()
   const svc = await db
