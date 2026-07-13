@@ -929,16 +929,46 @@ export async function coreInvokeBarePlane(input: {
           },
           ctx
         )
-        const text = Buffer.from(r.bytes).toString(encoding)
+        // Encoding round-trip fallback (mirrors the RESIDENT builtin, filesystem.ts
+        // ~L1144). When the caller did NOT request base64, decode utf-8 and re-encode:
+        // if the bytes do NOT survive the round-trip (non-UTF-8/binary), return BASE64
+        // instead of force-decoding binary to U+FFFD replacement chars (silent
+        // corruption). The CHOSEN encoding is reflected on BOTH the body's `encoding`
+        // field AND the _meta — never left as the requested value.
+        let content: string
+        let chosenEncoding: "utf-8" | "base64" = encoding
+        let encodingFallback = false
+        if (encoding === "utf-8") {
+          const decoded = Buffer.from(r.bytes).toString("utf8")
+          if (
+            Buffer.compare(
+              Buffer.from(decoded, "utf8"),
+              Buffer.from(r.bytes)
+            ) === 0
+          ) {
+            content = decoded
+          } else {
+            content = Buffer.from(r.bytes).toString("base64")
+            chosenEncoding = "base64"
+            encodingFallback = true
+          }
+        } else {
+          content = Buffer.from(r.bytes).toString("base64")
+        }
         return textResult(
           {
             path,
-            encoding,
-            content: text,
+            encoding: chosenEncoding,
+            content,
             total_size: r.totalSize,
             truncated: r.truncated,
           },
-          { total_size: r.totalSize, truncated: r.truncated }
+          {
+            encoding: chosenEncoding,
+            total_size: r.totalSize,
+            truncated: r.truncated,
+            ...(encodingFallback ? { encoding_fallback: true } : {}),
+          }
         )
       }
       case "fs_write": {
@@ -1207,6 +1237,11 @@ async function coreExec(
           }),
         },
       ],
+      // A non-zero exit or a killed command is a FAILED command — flag it so the
+      // agent loop / auto-retry can tell it failed (the resident commandline builtin
+      // sets this identically, commandline.ts ~L562). Without it every command,
+      // including a crash, looked like a success to downstream handling.
+      isError: res.exitCode !== 0 || res.killed,
       _meta: { exit_code: res.exitCode, killed: res.killed },
     },
   }

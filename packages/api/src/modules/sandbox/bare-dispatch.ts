@@ -40,6 +40,34 @@ import type { SandboxCapabilityDescriptor } from "./model.js"
 // rebuild-on-restart runs — never a registry-first gate (preservation #2).
 const liveBarePlanes = new Map<string, SandboxDataPlane>()
 
+// P1.3(b): singleflight the lazy rebuild-on-miss. Two concurrent misses for the
+// same runtime must NOT each build a plane — the second liveBarePlanes.set would
+// overwrite the first, orphaning the first plane's child process past teardown
+// (teardown only unregisters the plane it knows about). One in-flight promise per
+// runtimeId; the body does a compare-and-set + disposes any loser.
+const inflightBareRebuilds = new Map<
+  string,
+  Promise<{ plane: SandboxDataPlane } | { deny: McpDispatchResult }>
+>()
+
+// P1.3(c) / P8(A): a bare data-plane endpoint's scheme MUST match its persisted
+// adapter — local:bare ⇒ `inprocess:<id>`, docker:bare ⇒ `docker-exec:<cid>`.
+// An unknown adapter, a scheme/adapter mismatch, an empty id segment, or a null
+// endpoint is row CORRUPTION — fail closed, never fall through to the in-process
+// local plane on the API host. rebuildBarePlane forks on the SAME scheme set.
+const BARE_ENDPOINT_SCHEME_BY_ADAPTER: Record<string, string> = {
+  local: "inprocess:",
+  docker: "docker-exec:",
+}
+function bareEndpointMatchesAdapter(
+  adapter: string,
+  endpoint: string | null
+): boolean {
+  const prefix = BARE_ENDPOINT_SCHEME_BY_ADAPTER[adapter]
+  if (!prefix || endpoint === null || !endpoint.startsWith(prefix)) return false
+  return endpoint.slice(prefix.length).length > 0
+}
+
 export function registerBareDataPlane(
   runtimeId: string,
   plane: SandboxDataPlane
@@ -125,22 +153,6 @@ function rebuildBarePlane(opts: {
   })
 }
 
-/**
- * The bare data-plane endpoint schemes rebuildBarePlane recognizes:
- * `docker-exec:<cid>` → a docker:bare plane; `inprocess:<id>` → the local:bare
- * plane. ANYTHING else — null / empty / a typo / a future DIALABLE scheme like
- * `https:` — is row CORRUPTION, NOT an implicit local plane on the API host.
- * Kept in lockstep with rebuildBarePlane's fork so the fail-closed guard (P8A)
- * and the (TOTAL, never-throwing) rebuild can never disagree on what "local"
- * means. An empty endpoint is corruption, not a fall-through to local.
- */
-function isRecognizedBarePlaneEndpoint(endpoint: string | null): boolean {
-  return (
-    endpoint !== null &&
-    (endpoint.startsWith("docker-exec:") || endpoint.startsWith("inprocess:"))
-  )
-}
-
 function errResult(
   code: "permission_denied" | "runtime_constraint" | "invalid_request",
   message: string
@@ -172,46 +184,79 @@ export async function dispatchBareRuntimeTool(
     )
   }
 
-  // (1) Resolve the plane. HIT = live; MISS = lazy rebuild (this branch only).
+  // (1) Resolve the plane. HIT = live; MISS = singleflighted lazy rebuild — the
+  // only place the rebuild-on-restart runs (never a registry-first gate).
   let plane = liveBarePlanes.get(input.runtimeId)
   if (!plane) {
-    const row = await getBareSandboxForDispatch(input.runtimeId, input.run)
-    // A missing row / soft-deleted runtime / non-live state / non-bare mode ⇒
-    // hard runtime_constraint (mirrors no_tunnel_endpoint for the resident path).
-    if (
-      !row ||
-      row.runtimeDeletedAt !== null ||
-      row.state !== "active" ||
-      row.mode !== "bare" ||
-      !row.sessionId
-    ) {
-      return errResult(
-        "runtime_constraint",
-        `bare sandbox ${input.runtimeId} is not dispatchable (rebuild refused)`
-      )
+    let inflight = inflightBareRebuilds.get(input.runtimeId)
+    if (!inflight) {
+      inflight = (async (): Promise<
+        { plane: SandboxDataPlane } | { deny: McpDispatchResult }
+      > => {
+        const row = await getBareSandboxForDispatch(input.runtimeId, input.run)
+        // A missing row / soft-deleted runtime / non-live state / non-bare mode ⇒
+        // hard runtime_constraint (mirrors no_tunnel_endpoint for resident).
+        if (
+          !row ||
+          row.runtimeDeletedAt !== null ||
+          row.state !== "active" ||
+          row.mode !== "bare" ||
+          !row.sessionId
+        ) {
+          return {
+            deny: errResult(
+              "runtime_constraint",
+              `bare sandbox ${input.runtimeId} is not dispatchable (rebuild refused)`
+            ),
+          }
+        }
+        // P1.3(a): the persisted capability_descriptor must Zod-decode. NULL =
+        // corrupt/hand-edited row (e.g. maxWriteBytes:"corrupt") — fail closed
+        // rather than run the plane with a NaN/defaulted safety cap.
+        if (!row.capabilityDescriptor) {
+          return {
+            deny: errResult(
+              "runtime_constraint",
+              `bare sandbox ${input.runtimeId} has an undecodable capability descriptor (rebuild refused)`
+            ),
+          }
+        }
+        // P1.3(c) / P8(A): the persisted endpoint scheme MUST match the persisted
+        // adapter and carry a non-empty id. A null / empty / typo'd / mismatched /
+        // future 'https:' endpoint is CORRUPTION — NOT an implicit local plane on
+        // the API host. rebuildBarePlane stays TOTAL for the recognized set (a raw
+        // throw there would escape the McpDispatchResult contract).
+        if (!bareEndpointMatchesAdapter(row.adapter, row.dataPlaneEndpoint)) {
+          return {
+            deny: errResult(
+              "runtime_constraint",
+              `bare sandbox ${input.runtimeId} data-plane endpoint does not match adapter '${row.adapter}' (rebuild refused)`
+            ),
+          }
+        }
+        const factory = input.planeFactory ?? rebuildBarePlane
+        const built = factory({
+          sandboxRoot: sandboxRootForSession(row.sessionId),
+          descriptor: row.capabilityDescriptor,
+          dataPlaneEndpoint: row.dataPlaneEndpoint,
+        })
+        // P1.3(b) compare-and-set: if a concurrent miss already registered a
+        // plane, KEEP that one and dispose ours so no child escapes teardown.
+        const existing = liveBarePlanes.get(input.runtimeId)
+        if (existing) {
+          await built.dispose().catch(() => {})
+          return { plane: existing }
+        }
+        liveBarePlanes.set(input.runtimeId, built)
+        return { plane: built }
+      })().finally(() => {
+        inflightBareRebuilds.delete(input.runtimeId)
+      })
+      inflightBareRebuilds.set(input.runtimeId, inflight)
     }
-    // P8(A): the persisted data-plane endpoint MUST carry a recognized,
-    // non-dialable scheme. A null / empty / typo'd / future 'https:' endpoint is
-    // CORRUPTION — NOT an implicit local plane. Without this guard
-    // rebuildBarePlane's else-branch silently falls through to the LOCAL plane
-    // and executes on the API host. Fail-closed here (rebuildBarePlane stays
-    // TOTAL for the recognized set — a raw throw there would escape the
-    // McpDispatchResult contract).
-    if (!isRecognizedBarePlaneEndpoint(row.dataPlaneEndpoint)) {
-      return errResult(
-        "runtime_constraint",
-        `bare sandbox ${input.runtimeId} has an unrecognized data-plane endpoint scheme (rebuild refused)`
-      )
-    }
-    const descriptor =
-      row.capabilityDescriptor as unknown as SandboxCapabilityDescriptor
-    const factory = input.planeFactory ?? rebuildBarePlane
-    plane = factory({
-      sandboxRoot: sandboxRootForSession(row.sessionId),
-      descriptor,
-      dataPlaneEndpoint: row.dataPlaneEndpoint,
-    })
-    liveBarePlanes.set(input.runtimeId, plane)
+    const resolved = await inflight
+    if ("deny" in resolved) return resolved.deny
+    plane = resolved.plane
   }
 
   // (2) Envelope expiry — checked IN-FORK (no in-sandbox verifier). This is

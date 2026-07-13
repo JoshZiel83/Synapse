@@ -157,8 +157,6 @@ export class DeviceSdk {
         description: parsed.description,
         deviceType: parsed.deviceType,
         context: parsed.context,
-        requestedPubkeyFingerprint: parsed.requestedPubkeyFingerprint,
-        selfChallenge: parsed.selfChallenge,
       }
     )
     return RuntimePairingTicketViewSchema.parse(res.data)

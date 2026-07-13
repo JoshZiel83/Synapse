@@ -2009,6 +2009,20 @@ export async function consumeLocalPairingTx(args: {
  * in the on-disk identity file); only the SERVICE key is registered here — that
  * is what device.hello verifies.
  */
+// P1.6: real OS facts persisted on the sandbox row at mint, read by the
+// capability projection's bundle-eligibility + Windows-guard logic (COALESCE
+// d.platform, sb.platform, 'linux'). A host-side sandbox's platform is knowable
+// exactly here — local runs directly on the API host; docker (DooD) is a linux
+// container on that host, so its arch matches the host. Off-box providers
+// (E2B/Cube) will declare their own platform/arch when those adapters land.
+function sandboxHostPlatformArch(adapter: string): {
+  platform: string
+  arch: string
+} {
+  if (adapter === "docker") return { platform: "linux", arch: process.arch }
+  return { platform: process.platform, arch: process.arch }
+}
+
 export async function mintLocalSandboxRuntimeTx(args: {
   runtimeId: string
   workspaceId: string
@@ -2046,6 +2060,7 @@ export async function mintLocalSandboxRuntimeTx(args: {
         hostPid: null,
         pairingSessionId: null,
         capabilityDescriptor: sql`${JSON.stringify(args.capabilityDescriptor ?? {})}::jsonb`,
+        ...sandboxHostPlatformArch(args.adapter ?? "local"),
       } as never)
       .execute()
     await trx
@@ -2131,6 +2146,7 @@ export async function mintBareSandboxRuntimeTx(args: {
         // NO pairing session — a bare sandbox never pairs.
         pairingSessionId: null,
         capabilityDescriptor: sql`${JSON.stringify(args.capabilityDescriptor)}::jsonb`,
+        ...sandboxHostPlatformArch(args.adapter),
       } as never)
       .execute()
     await trx

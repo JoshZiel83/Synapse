@@ -2,9 +2,9 @@
 // DB-FREE unit gates (B10 + the Mode-A classifier regression pin). Proves the
 // fail-OPEN class this closes: pty is a DISTINCT capability whose bytes never
 // route through a command-text matcher, and a commandline/sandbox grant can
-// NEVER cover pty.open. NULL builtin_kind (device-proxied non-builtin exposure)
-// preserves its historical cua-shaped behavior (null-reachability analysis);
-// only a genuinely-unknown NON-NULL kind fail-closes.
+// NEVER cover pty.open. Both a NULL builtin_kind (device-proxied non-builtin
+// exposure) and a genuinely-unknown NON-NULL kind have NO registered projector
+// and fail-close (R2 P1.1: NULL no longer borrows cua's tool-name-blind matcher).
 
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -95,20 +95,32 @@ test("classifier Mode-A regression — filesystem/commandline/browser/cua projec
 
 // ─────────────── classifier: NULL builtin_kind (non-builtin exposure) ─────────
 
-test("classifier — NULL builtin_kind (device-proxied non-builtin exposure) preserves cua-shaped behavior (null-reachability analysis)", () => {
+test("classifier — NULL builtin_kind (device-proxied non-builtin exposure) fail-closes (UnregisteredBuiltinKindError → permission_denied)", () => {
   // A stdio/http/sse/custom exposure projects builtin_kind=NULL and is
-  // dispatchable with no transport restriction. Pre-P4a it fell through the
-  // `case "cua": default:` collapse to a cua action. PRESERVED — a `case null`
-  // projector produces the identical cua-shaped action (no Mode-A regression).
-  const action = buildRequestedAction({
-    capability: null,
-    toolName: "acme_proxy_tool",
-    visibleToolName: "acme_proxy_tool",
-    args: {},
-  })
-  assert.equal(action.capability, "cua")
-  assert.equal(action.cua?.access, "read")
-  assert.equal(action.pty, undefined)
+  // dispatchable with no transport restriction. Pre-R2 it fell through to a
+  // cua-shaped action — a fail-OPEN, since the cua matcher compares only
+  // read/write and NOT tool name, so the NULL exposure's tool would be
+  // authorized under ANY cua grant. R2 P1.1: NULL has NO registered projector
+  // and now fails closed (throws → permission_denied), mirroring the unknown
+  // NON-NULL case below.
+  assert.throws(
+    () =>
+      buildRequestedAction({
+        capability: null,
+        toolName: "acme_proxy_tool",
+        visibleToolName: "acme_proxy_tool",
+        args: {},
+      }),
+    (err: unknown) => {
+      assert.ok(err instanceof Error)
+      assert.equal((err as Error).name, "UnregisteredBuiltinKindError")
+      assert.equal(
+        (err as { synapseCode?: string }).synapseCode,
+        "permission_denied"
+      )
+      return true
+    }
+  )
 })
 
 test("classifier — genuinely-unknown NON-NULL builtin_kind fail-closes (UnregisteredBuiltinKindError → permission_denied)", () => {

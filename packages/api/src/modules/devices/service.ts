@@ -335,6 +335,16 @@ export async function consumePairing(
         "remote_agent_daemon is not paired via /pairing-sessions in v1; use the daemon claim endpoint (§5.4)",
     })
   }
+  if (input.serviceKind !== "device_runtime") {
+    // Only device_runtime is minted through local pairing; consumeLocalPairingTx
+    // always writes 'device_runtime', so any other kind (e.g. bare_dataplane —
+    // bare sandboxes direct-mint) would be a silent lie. Reject explicitly.
+    throw new DeviceModuleError({
+      statusCode: 400,
+      code: "service_kind_not_pairable",
+      message: `${input.serviceKind} is not paired via /pairing-sessions; local sandboxes direct-mint`,
+    })
+  }
 
   const pubkeyFingerprint = createHash("sha256")
     .update(input.devicePubkey)

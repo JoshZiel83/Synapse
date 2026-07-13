@@ -591,7 +591,10 @@ function unionWithRuntime(
       // projector (capability:"pty", gated by ptyPolicyAllows on cwd/isolation),
       // so the old `pty→null` special-case (which mis-routed pty into the cua
       // generic shape) is DROPPED. A NULL builtin_kind (device-proxied
-      // non-builtin exposure) is handled by an explicit `case null` projector.
+      // non-builtin exposure) has NO registered projector: its explicit
+      // `case null` FAILS CLOSED (throws UnregisteredBuiltinKindError →
+      // permission_denied) rather than mis-routing into the cua grant matcher
+      // (R2 P1.1 — the cua matcher ignores tool name, so that was a fail-open).
       requestedAction = buildRequestedAction({
         capability: row.builtinKind,
         toolName: row.visibleToolName,
@@ -1312,16 +1315,16 @@ class InvalidExecFileArgsError extends Error {
 
 /**
  * Raised by buildRequestedAction's classifier registry when a dispatched tool
- * carries a builtin_kind that has NO registered requested-action projector — a
- * genuinely-unknown NON-NULL kind (e.g. a future runtime_exposures_builtin_kind
- * enum value not yet taught to this classifier). Fail-closed: the call site maps
- * it to permission_denied rather than silently mis-routing the call to a wrong
- * capability's grant matcher.
- *
- * NOTE (P4a S8 null-reachability analysis): a NULL builtin_kind (a device-proxied
- * non-builtin/stdio exposure) is NOT unregistered — it has an EXPLICIT `case null`
- * projector that preserves its historical cua-shaped behavior, so it never
- * reaches this error. Only non-null unknowns fail closed here.
+ * carries a builtin_kind that has NO registered requested-action projector.
+ * Fail-closed: the call site maps it to permission_denied rather than silently
+ * mis-routing the call to a wrong capability's grant matcher. Two cases raise it:
+ *   - a genuinely-unknown NON-NULL kind (e.g. a future
+ *     runtime_exposures_builtin_kind enum value not yet taught to this
+ *     classifier — the `default` branch), and
+ *   - a NULL builtin_kind (a device-proxied non-builtin/stdio exposure — the
+ *     explicit `case null` branch). NULL has no registered projector; routing it
+ *     into the cua shape was a fail-OPEN (the cua matcher ignores tool name), so
+ *     R2 P1.1 makes it fail closed here.
  */
 class UnregisteredBuiltinKindError extends Error {
   readonly synapseCode = "permission_denied"
@@ -1655,21 +1658,26 @@ export function buildRequestedAction(args: {
     case "cua":
       return cuaProjector(tool, args.toolName, summary, detail)
     case null:
-      // P4a S8 null-reachability analysis (explicit `case null` — preserves the
-      // pre-P4a `case "cua": default:` behavior for a NULL builtin_kind).
+      // R2 P1.1 fail-closed. A device-proxied NON-builtin exposure
+      // (transport='stdio'|'http'|'sse'|'custom') projects builtin_kind=NULL
+      // (schema CHECK chk_runtime_exposures_builtin_kind). Such an exposure is
+      // dispatchable: device.catalog.sync persists whatever the authenticated
+      // device publishes with NO transport restriction, the projection SELECT +
+      // handler assembly have no transport filter, and dispatchRuntimeTool routes
+      // it through here. No first-party device-runtime builtin emits a non-builtin
+      // transport today (zero production NULL exposures — the real cua builtin
+      // carries builtin_kind='cua', not NULL), but the wire contract fully
+      // supports it, so NULL is STRUCTURALLY REACHABLE.
       //
-      // A device-proxied NON-builtin exposure (transport='stdio'|'http'|'sse'|
-      // 'custom') projects builtin_kind=NULL (schema CHECK chk_runtime_exposures_
-      // builtin_kind). Such an exposure is dispatchable: device.catalog.sync
-      // persists whatever the authenticated device publishes with NO transport
-      // restriction, the projection SELECT + handler assembly have no transport
-      // filter, and dispatchRuntimeTool routes it through here. No first-party
-      // device-runtime builtin emits a non-builtin transport today, but the wire
-      // contract fully supports it — so NULL is STRUCTURALLY REACHABLE for a real
-      // dispatched tool. Its historical behavior (the collapsed `default`) was a
-      // cua-shaped generic action; PRESERVED EXACTLY here to avoid a Mode-A
-      // regression. Only genuinely-unknown NON-NULL kinds fail closed (default).
-      return cuaProjector(tool, args.toolName, summary, detail)
+      // The prior behavior routed NULL into the cua-shaped generic action. The
+      // cua matcher compares only read/write, NOT tool name, so a NULL exposure's
+      // tool would be wrongly authorized under ANY cua grant — a fail-OPEN. NULL
+      // has no registered projector, so it now FAILS CLOSED (mapped to
+      // permission_denied at the call site) rather than mis-routing into cua.
+      throw new UnregisteredBuiltinKindError(
+        "null builtin_kind (non-builtin proxied exposure) has no registered projector",
+        { reason: "null_builtin_kind_not_registered" }
+      )
     case "pty":
       // NEW pty projector (P4a S8). A pty builtin_kind produces a capability:
       // "pty" action gated by ptyPolicyAllows on cwd/isolation ONLY — command/
@@ -1708,9 +1716,9 @@ export function buildRequestedAction(args: {
  * cua requested-action projector. CUA_WRITE_TOOLS is the single source of truth
  * for which cua tool names require access='write' — imported from
  * @synapse/device-protocol so this classifier and the device-side enforcement in
- * device-runtime/src/builtins/cua.ts stay in lockstep. Also serves the NULL
- * (device-proxied non-builtin) projector (P4a S8 — preserves historical
- * behavior).
+ * device-runtime/src/builtins/cua.ts stay in lockstep. Serves the `case "cua"`
+ * projector ONLY — a NULL builtin_kind no longer routes here (R2 P1.1: NULL
+ * fails closed instead of borrowing cua's tool-name-blind matcher).
  */
 function cuaProjector(
   tool: string,

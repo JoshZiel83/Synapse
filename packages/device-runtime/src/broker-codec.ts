@@ -24,8 +24,8 @@ const DeviceIdentityRecordSchema = z.strictObject({
   serverOrigin: z.string().min(1),
   hostKind: z.enum(HOST_KINDS),
   services: z.array(DeviceIdentityServiceSchema),
-  devicePubkeyFingerprint: z.string().min(1),
-  devicePrivateKeyRef: z.string().min(1),
+  devicePubkeyFingerprint: z.string().min(1).optional(),
+  devicePrivateKeyRef: z.string().min(1).optional(),
 }) satisfies z.ZodType<DeviceIdentityRecord>
 
 export function parseKeystoreJsonText(

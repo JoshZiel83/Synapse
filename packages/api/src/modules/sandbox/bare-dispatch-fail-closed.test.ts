@@ -29,6 +29,7 @@ import {
   __clearBareDataPlanes,
 } from "./bare-dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
+import { decodeSandboxCapabilityDescriptor } from "./model.js"
 
 function uniq(p: string): string {
   return `${p}-${Math.random().toString(36).slice(2, 10)}`
@@ -224,6 +225,111 @@ for (const badEndpoint of ["https://attacker.example", "", "inprocessTYPO:x"]) {
     })
   })
 }
+
+// P1.3(a) unit guard: the repo-exit decoder must ALLOW isolation:null (a
+// no-commandline sandbox is a valid, common shape) yet REJECT a corrupt cap.
+test("P1.3(a): decodeSandboxCapabilityDescriptor allows isolation:null and rejects a non-number cap", () => {
+  const ok = buildLocalBareDescriptor({ isolation: null })
+  assert.ok(
+    decodeSandboxCapabilityDescriptor(ok),
+    "isolation:null must decode — a sandbox with no commandline is valid"
+  )
+  const corrupt = { ...ok, core: { ...ok.core, maxWriteBytes: "corrupt" } }
+  assert.equal(
+    decodeSandboxCapabilityDescriptor(corrupt),
+    null,
+    "a non-number safety cap must fail the decode (fail-closed)"
+  )
+})
+
+// P1.3(a): a corrupt persisted descriptor (the review's maxWriteBytes:"corrupt")
+// must fail the WHOLE bare dispatch closed at the rebuild-on-miss path, never run
+// the plane with a NaN/defaulted safety cap.
+test("P1.3(a): a corrupt capability_descriptor fails the bare dispatch CLOSED (no plane built)", async () => {
+  await withTestDb(async (db) => {
+    __clearBareDataPlanes()
+    const { workspaceId, sessionId } = await seedSession(db)
+    const runtimeId = randomUUID()
+    const serviceId = randomUUID()
+    const good = buildLocalBareDescriptor({ isolation: "bwrap" })
+    const corrupt = { ...good, core: { ...good.core, maxWriteBytes: "corrupt" } }
+    const minted = await mintBareSandboxRuntimeTx({
+      runtimeId,
+      workspaceId,
+      sessionId,
+      serviceId,
+      adapter: "local",
+      dataPlaneEndpoint: `inprocess:${runtimeId}`,
+      capabilityDescriptor: corrupt as unknown as Record<string, unknown>,
+      exposures: buildBareCoreCatalog(good),
+      executor: db,
+    })
+    await db
+      .updateTable("sandboxes")
+      .set({ state: "active" } as any)
+      .where("id", "=", runtimeId)
+      .execute()
+    const fsIds = minted.assignedIds["builtin/filesystem"]!
+    const fsRead = fsIds.tools["fs_read"]!
+    const res = await dispatchBareRuntimeTool({
+      runtimeId,
+      runtimeServiceId: serviceId,
+      envelope: envelopeFor({
+        exposureId: fsIds.runtime_exposure_id,
+        toolId: fsRead.runtime_tool_id,
+        toolRevisionId: fsRead.runtime_tool_revision_id,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      args: { path: "/conversation/hello.txt" },
+      builtinKind: "filesystem",
+      toolName: "fs_read",
+      grant: fsReadGrant(),
+      run: db,
+      sandboxProvider: "local",
+    })
+    assert.equal(res.ok, false, "corrupt descriptor must NOT dispatch")
+    assert.equal(res.error?.code, "runtime_constraint")
+    assert.match(res.error?.message ?? "", /descriptor|rebuild refused/)
+    assert.equal(
+      getLiveBareDataPlane(runtimeId),
+      undefined,
+      "no plane built on a corrupt descriptor"
+    )
+    __clearBareDataPlanes()
+  })
+})
+
+// P1.3(c): a WELL-FORMED but wrong-adapter endpoint (docker-exec: on a local
+// sandbox) is a MISMATCH. The old scheme-only guard accepted any recognized
+// scheme and would have built a DOCKER plane for a LOCAL sandbox; the
+// adapter-bound guard denies it.
+test("P1.3(c): a docker-exec: endpoint on a LOCAL adapter is a mismatch → runtime_constraint", async () => {
+  await withTestDb(async (db) => {
+    __clearBareDataPlanes()
+    const r = await seedActiveBareRuntime(db, `docker-exec:${randomUUID()}`)
+    const res = await dispatchBareRuntimeTool({
+      runtimeId: r.runtimeId,
+      runtimeServiceId: r.serviceId,
+      envelope: envelopeFor({
+        exposureId: r.exposureId,
+        toolId: r.toolId,
+        toolRevisionId: r.toolRevisionId,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      args: { path: "/conversation/hello.txt" },
+      builtinKind: "filesystem",
+      toolName: "fs_read",
+      grant: fsReadGrant(),
+      run: db,
+      sandboxProvider: "local",
+    })
+    assert.equal(res.ok, false, "wrong-adapter endpoint must NOT dispatch")
+    assert.equal(res.error?.code, "runtime_constraint")
+    assert.match(res.error?.message ?? "", /does not match adapter|rebuild refused/)
+    assert.equal(getLiveBareDataPlane(r.runtimeId), undefined)
+    __clearBareDataPlanes()
+  })
+})
 
 test("P2(B): a bare sandbox dispatch is refused when SANDBOX_PROVIDER=none (and dispatches otherwise)", async () => {
   await withTestDb(async (db) => {

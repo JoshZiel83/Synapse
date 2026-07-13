@@ -43,9 +43,9 @@ export interface DeviceIdentityRecord {
     privateKeyRef: string
   }>
   /** Fingerprint of the device-level public key (NOT the service key). */
-  devicePubkeyFingerprint: string
+  devicePubkeyFingerprint?: string
   /** Broker-internal handle to the device-level private key. */
-  devicePrivateKeyRef: string
+  devicePrivateKeyRef?: string
 }
 
 /**

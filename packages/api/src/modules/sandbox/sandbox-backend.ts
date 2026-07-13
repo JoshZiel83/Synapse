@@ -215,7 +215,6 @@ export function createLocalSandboxBackend(deps: {
     async create(spec: SandboxSpec): Promise<SandboxHandle> {
       const brokerDir = join(spec.sandboxRoot, ".broker")
       const broker = createFileBackedBroker({ brokerDir })
-      const deviceKey = await broker.generateKeyPair("device")
       const serviceKey = await broker.generateKeyPair("service:device_runtime")
       // FRESH UUID per provision (CORRECTION 1) — sessionId would PK-collide with
       // a soft-deleted runtime on re-provision.
@@ -241,8 +240,6 @@ export function createLocalSandboxBackend(deps: {
           deviceId: runtimeId,
           serverOrigin: spec.serverOrigin,
           hostKind: "local",
-          devicePubkeyFingerprint: deviceKey.publicKeyFingerprint,
-          devicePrivateKeyRef: deviceKey.privateKeyRef,
           services: [
             {
               serviceKind: "device_runtime",

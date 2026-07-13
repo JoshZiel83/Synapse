@@ -145,8 +145,6 @@ export const StartPairingInputSchema = z.strictObject({
   description: z.string().max(2000).optional(),
   deviceType: z.enum(DEVICE_TYPES).optional(),
   context: z.record(z.string(), z.unknown()).optional(),
-  requestedPubkeyFingerprint: z.string().optional(),
-  selfChallenge: z.string().optional(),
 })
 export type StartPairingInput = z.infer<typeof StartPairingInputSchema>
 

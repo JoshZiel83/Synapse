@@ -18,7 +18,10 @@ import {
   WHOLE_SCOPE,
 } from "@synapse/device-runtime"
 import type { RuntimeCatalogTool } from "@synapse/device-protocol"
-import { buildBareCoreCatalog } from "./core-catalog.js"
+import {
+  buildBareCoreCatalog,
+  BARE_TOOL_DESCRIPTION_OVERRIDES,
+} from "./core-catalog.js"
 import { buildLocalBareDescriptor } from "./adapter-registry.js"
 import {
   createLocalBareDataPlane,
@@ -114,11 +117,28 @@ test("golden-drift: every bare filesystem tool is a SUBSET of the device builtin
       deviceTool,
       `bare fs tool ${t.name} is backed by the device builtin`
     )
-    assert.equal(
-      t.description,
-      deviceTool!.description,
-      `${t.name} description`
-    )
+    // FULL SEPARATE CONTRACT (owner decision): a tool whose bare semantics/result
+    // fields diverge publishes a bare-SPECIFIC truthful description, NOT the
+    // resident one. For those we assert the override is a non-empty string that
+    // DIFFERS from resident (the lie is gone); a non-overridden tool must still
+    // match the resident description byte-for-byte (no silent drift).
+    if (t.name in BARE_TOOL_DESCRIPTION_OVERRIDES) {
+      assert.ok(
+        typeof t.description === "string" && t.description.length > 0,
+        `${t.name} has a non-empty bare-specific description`
+      )
+      assert.notEqual(
+        t.description,
+        deviceTool!.description,
+        `${t.name} bare description must diverge from resident`
+      )
+    } else {
+      assert.equal(
+        t.description,
+        deviceTool!.description,
+        `${t.name} description`
+      )
+    }
     // Reduced-fidelity: the bare schema is a documented SUBSET of the device
     // schema. Top-level shape + every param the bare catalog DOES advertise must
     // match the device's definition exactly (no silent divergence), but the bare
@@ -172,6 +192,12 @@ test("reduced-fidelity: bare STRIPS line_range (fs_read) + include_sha256 (fs_st
     !("include_sha256" in (schemaOf(bareFs.get("fs_stat")!).properties ?? {})),
     "bare fs_stat omits include_sha256"
   )
+  // The bare plane has no in-sandbox index, so `indexed` could never be honored
+  // and is stripped (F-D reduced-fidelity).
+  assert.ok(
+    !("indexed" in (schemaOf(bareFs.get("fs_search")!).properties ?? {})),
+    "bare fs_search omits indexed"
+  )
 
   // The shared resident schema is UNTOUCHED (structuredClone, not a live delete).
   const exposures = await builtin.describeExposures()
@@ -186,6 +212,58 @@ test("reduced-fidelity: bare STRIPS line_range (fs_read) + include_sha256 (fs_st
     "include_sha256" in (schemaOf(deviceFs.get("fs_stat")!).properties ?? {}),
     "device fs_stat STILL has include_sha256 (shared schema not corrupted)"
   )
+})
+
+test("full separate contract: every BARE_TOOL_DESCRIPTION_OVERRIDES tool ships a non-empty bare-specific description that DIFFERS from resident (fs + commandline)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "synapse-override-"))
+  const fsBuiltin = createFilesystemBuiltin({
+    rootPath: root,
+    enableRead: true,
+    enableWrite: true,
+    enableDelete: true,
+    allowUnversionedWrite: true,
+    ripgrepPath: process.execPath,
+  })
+  const cmdBuiltin = createCommandlineBuiltin({})
+  // Resident descriptions by tool name, across BOTH device builtins the bare
+  // catalog derives from.
+  const residentDesc = new Map<string, string>()
+  for (const builtin of [fsBuiltin, cmdBuiltin]) {
+    for (const exp of await builtin.describeExposures()) {
+      for (const t of exp.tools) residentDesc.set(t.name, t.description)
+    }
+  }
+
+  const bare = buildBareCoreCatalog(
+    buildLocalBareDescriptor({ isolation: "bwrap", search: true })
+  )
+  const bareTools = new Map<string, RuntimeCatalogTool>()
+  for (const exp of bare) {
+    for (const t of exp.tools) bareTools.set(t.name, t)
+  }
+
+  const overridden = Object.keys(BARE_TOOL_DESCRIPTION_OVERRIDES)
+  assert.ok(overridden.length > 0, "there is at least one override")
+  for (const name of overridden) {
+    const bareTool = bareTools.get(name)
+    assert.ok(bareTool, `overridden tool ${name} is present in the bare catalog`)
+    assert.equal(
+      bareTool!.description,
+      BARE_TOOL_DESCRIPTION_OVERRIDES[name],
+      `${name} publishes the bare override verbatim`
+    )
+    assert.ok(
+      bareTool!.description.length > 0,
+      `${name} bare description is non-empty`
+    )
+    const resident = residentDesc.get(name)
+    assert.ok(resident, `resident builtin defines ${name}`)
+    assert.notEqual(
+      bareTool!.description,
+      resident,
+      `${name} bare description DIFFERS from resident (no lie)`
+    )
+  }
 })
 
 test("gate: fs_search is OMITTED from the bare catalog when descriptor.core.search is false", () => {

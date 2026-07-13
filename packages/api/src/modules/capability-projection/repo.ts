@@ -138,6 +138,12 @@ export async function selectRuntimeCapabilityToolsForSubjects(
     // device — d.id === r.id and its title/platform/arch are non-null).
     .innerJoin("runtimes as r", "r.id", "dx.runtimeId")
     .leftJoin("devices as d", "d.id", "r.id")
+    // P1.6: a device-less sandbox runtime has no `devices` row, so its real OS
+    // facts live on the `sandboxes` detail row (populated at mint from the
+    // adapter — local: the API host's process.platform/arch; docker: linux +
+    // host arch; off-box: provider-declared). LEFT JOIN so a device runtime is
+    // unaffected (d.* wins the COALESCE below).
+    .leftJoin("sandboxes as sb", "sb.id", "r.id")
     .innerJoin("runtimeTools as dt", "dt.exposureId", "dx.id")
     .innerJoin("runtimeToolRevisions as dtr", "dtr.id", "dt.latestRevisionId")
     .innerJoin(
@@ -168,19 +174,23 @@ export async function selectRuntimeCapabilityToolsForSubjects(
       // Device-only column: NULL for a sandbox runtime (LEFT JOIN) — the null
       // fallback the mask resolver already tolerates.
       "d.conversationTypeMaskOverride as deviceConversationTypeMaskOverride",
-      // Commit 8: surface device.platform so the commandline matcher can
-      // apply Windows-specific guards (cwd unsupported in v1) at projection
-      // time instead of relying solely on device-side bottom-of-stack
-      // rejection. normalizeDevicePlatform turns the raw DB string into
-      // "win32" | "linux" | "darwin" | undefined.
-      sql<string>`COALESCE(d.platform, 'linux')`.as("devicePlatform"),
+      // Surface platform so the commandline matcher can apply Windows-specific
+      // guards (cwd unsupported in v1) at projection time instead of relying
+      // solely on device-side bottom-of-stack rejection. normalizeDevicePlatform
+      // turns the raw DB string into "win32" | "linux" | "darwin" | undefined.
+      // P1.6: prefer the device row (real device), then the sandbox row (device-
+      // less sandbox's real OS facts), then the linux last-resort default so a
+      // missed/older NULL row degrades to prior behavior instead of fail-closing
+      // bundled-toolchain grants.
+      sql<string>`COALESCE(d.platform, sb.platform, 'linux')`.as(
+        "devicePlatform"
+      ),
       // Surface arch alongside platform so isBundleAvailableForPlatform can
       // exact-match against the runtime manifest's platformKey
-      // (`<platform>-<arch>`). Without arch the API would have to assume
-      // the device's arch matches an entry, which previously caused
-      // "approved-but-unrunnable" for arm-only or x64-only manifests. A
-      // device-less sandbox runtime is a linux/x64 container by construction.
-      sql<string>`COALESCE(d.arch, 'x64')`.as("deviceArch"),
+      // (`<platform>-<arch>`). P1.6: sourcing arch from the sandbox row (not a
+      // hardcoded x64) fixes the arm64 "approved-but-unrunnable" regression for
+      // sandboxes on non-x64 hosts.
+      sql<string>`COALESCE(d.arch, sb.arch, 'x64')`.as("deviceArch"),
     ])
     .where("resource.workspaceId", "=", params.workspaceId)
     .where("resource.deletedAt", "is", null)

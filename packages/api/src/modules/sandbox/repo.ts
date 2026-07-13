@@ -19,6 +19,10 @@ import {
   normalizePendingRefresh,
   mergePendingRefreshConflicts,
 } from "./pending-conflicts.js"
+import {
+  type SandboxCapabilityDescriptor,
+  decodeSandboxCapabilityDescriptor,
+} from "./model.js"
 
 // Re-export the Executor type so module files (e.g. grants.ts) can accept an
 // injectable executor WITHOUT importing the forbidden kysely.js path.
@@ -716,7 +720,14 @@ export interface BareSandboxDispatchRow {
   adapter: string
   state: SandboxRow["state"]
   runtimeDeletedAt: Date | null
-  capabilityDescriptor: Record<string, unknown>
+  /**
+   * Zod-decoded (P1.3) persisted descriptor, or NULL when the JSONB failed to
+   * decode (corrupt/hand-edited row). The dispatch fork hard-denies on null
+   * rather than running the plane with a NaN/defaulted safety cap. NULL is also
+   * expected for a resident sandbox's `{}`-degenerate descriptor, but a resident
+   * row never reaches the bare dispatch fork (the mode gate denies first).
+   */
+  capabilityDescriptor: SandboxCapabilityDescriptor | null
   /**
    * The bare_dataplane service's scheme-tagged non-dialable endpoint
    * (`inprocess:<runtimeId>` for local:bare; `docker-exec:<containerId>` for
@@ -761,8 +772,11 @@ export async function getBareSandboxForDispatch(
     adapter: row.adapter as string,
     state: row.state as SandboxRow["state"],
     runtimeDeletedAt: (row.runtimeDeletedAt as Date | null) ?? null,
-    capabilityDescriptor:
-      (row.capabilityDescriptor as Record<string, unknown> | null) ?? {},
+    // P1.3: Zod-decode at the repo exit; null on any decode failure so the
+    // dispatch fork fails closed instead of trusting a corrupt safety cap.
+    capabilityDescriptor: decodeSandboxCapabilityDescriptor(
+      row.capabilityDescriptor
+    ),
     dataPlaneEndpoint: (row.dataPlaneEndpoint as string | null) ?? null,
   }
 }

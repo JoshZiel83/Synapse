@@ -1,5 +1,7 @@
 // Shared types for the sandbox manager.
 
+import { z } from "zod"
+
 /**
  * Conflict-sidecar path prefix WITHIN a mount. On a refresh conflict, dir_sync
  * preserves the agent's pre-conflict local FILE version at
@@ -86,6 +88,55 @@ export interface SandboxCapabilityDescriptor {
   setTimeout?: boolean
   pause?: boolean
   portIngress?: boolean
+}
+
+/**
+ * Repo-exit Zod decode for the persisted `sandboxes.capability_descriptor` JSONB
+ * (P1.3). The descriptor is a TRUST boundary: the bare data plane reads its per-op
+ * safety caps (maxWriteBytes / maxReadBytes / maxConcurrentExec) from it, so a
+ * corrupt or hand-edited row — e.g. `maxWriteBytes:"corrupt"` — must NOT silently
+ * disable a cap. `getBareSandboxForDispatch` safeParses at the repo exit and the
+ * dispatch fork fails CLOSED on a decode miss rather than running with a NaN /
+ * defaulted cap. NOT `.strict()` — forward-compat provider knobs (extra keys) are
+ * tolerated; `isolation` MUST allow null (a no-commandline sandbox). Kept in sync
+ * with SandboxCapabilityDescriptor by the `satisfies` assertion below.
+ */
+export const SandboxCapabilityDescriptorSchema = z.object({
+  mode: z.enum(["resident", "bare"]),
+  transportDefault: z.enum(["direct", "indirect"]),
+  confinedFs: z.enum(["native", "unsupported"]),
+  core: z.object({
+    atomicWrite: z.boolean(),
+    staleWriteGuard: z.enum(["strict", "advisory"]),
+    rangeRead: z.boolean(),
+    search: z.boolean(),
+    mkdir: z.boolean(),
+    move: z.boolean(),
+    remove: z.boolean(),
+    pty: z.boolean(),
+    maxReadBytes: z.number().int().nonnegative(),
+    maxWriteBytes: z.number().int().nonnegative(),
+    maxConcurrentExec: z.number().int().nonnegative(),
+  }),
+  advancedTools: z.array(z.string()),
+  isolation: z.enum(["bwrap", "container", "provider"]).nullable(),
+  egress: z.enum(["none", "named"]).optional(),
+  reconnectable: z.boolean(),
+  setTimeout: z.boolean().optional(),
+  pause: z.boolean().optional(),
+  portIngress: z.boolean().optional(),
+}) satisfies z.ZodType<SandboxCapabilityDescriptor>
+
+/**
+ * Decode a persisted capability_descriptor JSONB. Returns null on ANY decode
+ * failure (missing field, wrong type, non-finite/negative cap) — the bare
+ * dispatch fork treats null as a hard fail-closed deny.
+ */
+export function decodeSandboxCapabilityDescriptor(
+  raw: unknown
+): SandboxCapabilityDescriptor | null {
+  const parsed = SandboxCapabilityDescriptorSchema.safeParse(raw)
+  return parsed.success ? parsed.data : null
 }
 
 export interface SandboxProvisionResult {

@@ -15,6 +15,7 @@ import {
   stat,
 } from "node:fs/promises"
 import { createHash } from "node:crypto"
+import { Buffer } from "node:buffer"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { WHOLE_SCOPE, bwrapAvailable } from "@synapse/device-runtime"
@@ -587,6 +588,121 @@ test("P7: deriveConfinementAccess is FAIL-CLOSED (read/unknown tool → read; wr
   )
   // A commandline grant confers no fs-plane write.
   assert.equal(deriveConfinementAccess(cmdGrant(), "fs_write"), "read")
+})
+
+function metaOf(res: { result?: unknown }): Record<string, unknown> {
+  return ((res.result as { _meta?: Record<string, unknown> })._meta ??
+    {}) as Record<string, unknown>
+}
+
+test("Part A#1: a binary fs_read (default utf-8) falls back to base64 on the body AND _meta (no U+FFFD corruption)", async () => {
+  const { root, plane } = await makeSandbox()
+  // Bytes that do NOT round-trip through utf-8 (0xff/0xfe/0x80/0xfd are invalid
+  // UTF-8 lead/continuation bytes). Before the fix these force-decoded to U+FFFD.
+  const binary = Buffer.from([0xff, 0xfe, 0x00, 0x80, 0xfd])
+  await writeFile(join(root, "conversation", "blob.bin"), binary)
+  const res = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_read",
+    // NO encoding requested → utf-8 default → must auto-fall-back to base64.
+    args: { path: "/conversation/blob.bin" },
+    ctx: { scope: WHOLE_SCOPE, access: READ },
+  })
+  assert.equal(res.ok, true)
+  const body = bodyOf(res)
+  assert.equal(body["encoding"], "base64", "body.encoding reflects the fallback")
+  const meta = metaOf(res)
+  assert.equal(meta["encoding"], "base64", "_meta.encoding reflects the fallback")
+  assert.equal(meta["encoding_fallback"], true)
+  // The returned base64 decodes back to the EXACT original bytes (no corruption).
+  assert.ok(
+    Buffer.from(body["content"] as string, "base64").equals(binary),
+    "base64 content round-trips to the original bytes"
+  )
+})
+
+test("Part A#1: a UTF-8 fs_read still returns utf8 (no spurious base64 fallback)", async () => {
+  const { root, plane } = await makeSandbox()
+  await writeFile(join(root, "conversation", "note.txt"), "hello world")
+  const res = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_read",
+    args: { path: "/conversation/note.txt" },
+    ctx: { scope: WHOLE_SCOPE, access: READ },
+  })
+  assert.equal(res.ok, true)
+  const body = bodyOf(res)
+  assert.equal(body["encoding"], "utf-8")
+  assert.equal(body["content"], "hello world")
+  const meta = metaOf(res)
+  assert.equal(meta["encoding"], "utf-8")
+  assert.ok(
+    !("encoding_fallback" in meta),
+    "no encoding_fallback flag for clean utf-8"
+  )
+})
+
+// A minimal fake plane that returns a controlled exec result — lets us assert the
+// CORE's isError wiring deterministically WITHOUT depending on bwrap being present.
+function fakeExecPlane(result: {
+  exitCode: number | null
+  killed?: boolean
+}): SandboxDataPlane {
+  return {
+    async exec() {
+      return {
+        exitCode: result.exitCode,
+        stdout: "out",
+        stderr: "",
+        truncated: false,
+        killed: result.killed ?? false,
+      }
+    },
+  } as unknown as SandboxDataPlane
+}
+
+test("Part A#2: a non-zero-exit / killed command yields result.isError===true; a zero-exit yields falsy", async () => {
+  const ctx: ConfinementCtx = { scope: WHOLE_SCOPE, access: WRITE }
+  const failed = await coreInvokeBarePlane({
+    plane: fakeExecPlane({ exitCode: 3 }),
+    builtinKind: "commandline",
+    toolName: "bash",
+    args: { command: "exit 3" },
+    ctx,
+  })
+  assert.equal(failed.ok, true, "a failed command is still a RESULT, not a fork error")
+  assert.equal(
+    (failed.result as { isError?: boolean }).isError,
+    true,
+    "non-zero exit ⇒ isError"
+  )
+
+  const killed = await coreInvokeBarePlane({
+    plane: fakeExecPlane({ exitCode: null, killed: true }),
+    builtinKind: "commandline",
+    toolName: "bash",
+    args: { command: "sleep 999" },
+    ctx,
+  })
+  assert.equal(
+    (killed.result as { isError?: boolean }).isError,
+    true,
+    "killed ⇒ isError"
+  )
+
+  const okExec = await coreInvokeBarePlane({
+    plane: fakeExecPlane({ exitCode: 0 }),
+    builtinKind: "commandline",
+    toolName: "exec_file",
+    args: { program: "true" },
+    ctx,
+  })
+  assert.ok(
+    !(okExec.result as { isError?: boolean }).isError,
+    "zero-exit ⇒ isError falsy"
+  )
 })
 
 test("B5: exec concurrency cap rejects an over-cap concurrent invocation", async (t) => {
