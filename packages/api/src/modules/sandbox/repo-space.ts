@@ -268,6 +268,27 @@ export async function getFailedRecoverableMounts(
 }
 
 /**
+ * (R4 §6.3/§6.5) Does this session have any 'failed' recoverable mount (a
+ * materialized_dir preserved by a teardown pull/commit failure)? The off-box
+ * closing reaper re-drive uses this: a 'closing' off-box row with NO active mounts
+ * but pending FAILED mounts must NOT DELETE the VM (+ rm the preserved dirs) — that
+ * unrecovered work belongs to recoverFailedSandboxMounts' re-pull.
+ */
+export async function sessionHasFailedRecoverableMounts(
+  client: Executor,
+  sessionId: string
+): Promise<boolean> {
+  const result = await sql<{ one: number }>`
+    SELECT 1 AS one
+    FROM file_mounts
+    WHERE session_id = ${sessionId}
+      AND status = 'failed'
+      AND materialized_dir IS NOT NULL
+    LIMIT 1`.execute(client)
+  return result.rows.length > 0
+}
+
+/**
  * Append a new snapshot to a space's DAG and advance current_snapshot_id, all
  * under a short transaction that serializes version assignment via
  * SELECT ... FOR UPDATE on the file_spaces row. The caller must have already

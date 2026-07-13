@@ -323,6 +323,14 @@ export interface WorkingSetBridge {
     baseManifestSha256?: string
     latestManifestSha256?: string
   }): Promise<unknown>
+  /**
+   * (R4 §6.3/§6.4) OFF-BOX PULL-only: reconcile the VM tree into the mirror
+   * (`input.dir` == the mount's materializedDir), delete-PRUNING the mirror to
+   * EXACTLY the VM listing (F1), so a subsequent commitSpaces scan of the same
+   * mirror sees the true VM working set (incl. deletes). Host bridges leave this
+   * undefined — their bytes are always in the mirror dir (no pull).
+   */
+  pull?(input: { dir: string }): Promise<void>
 }
 
 // ─────────────────────────── local:bare reference plane ──────────────────────

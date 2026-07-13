@@ -29,6 +29,7 @@ import {
   updateFileMount,
   getActiveMountsForSession,
   getFailedRecoverableMounts,
+  sessionHasFailedRecoverableMounts,
   getFileSpace,
   ensureContentBlob,
   appendSnapshot,
@@ -50,11 +51,13 @@ import type { HostProvider } from "./host-provider.js"
 import {
   readHostPidIdentity,
   verifyPidIdentity,
+  type SandboxDataPlaneCredentials,
   type SandboxHandle,
   type SandboxLiveness,
   type SandboxRef,
   type SandboxSpec,
 } from "./sandbox-backend.js"
+import type { WorkingSetBridge } from "./data-plane.js"
 import {
   reapDockerSandboxOrphans,
   type SpawnImpl,
@@ -62,6 +65,7 @@ import {
 import {
   markBareDataPlaneClosing,
   clearBareDataPlaneClosing,
+  unregisterBareDataPlane,
 } from "./bare-dispatch.js"
 import {
   resolveSandboxAdapter,
@@ -1092,6 +1096,26 @@ export async function provisionSandbox(
       )
     }
 
+    // ⑦c (R4 §1.4 / §6.3, P0) — OFF-BOX PROVISION PUSH. Each mount's base was
+    // materialized into its host MIRROR (materializedDir) above, but an off-box VM
+    // does NOT share that dir — so replicate each mount's base INTO the VM over the
+    // TOKEN-BEARING envd working-set bridge (delete-aware; a fresh VM starts empty,
+    // so this is all writes). Without this the VM starts with an EMPTY working set
+    // and the turn's edits are computed against nothing. Host adapters need no push
+    // (their plane reads/writes the SAME <sandboxRoot>/<subpath> the fs-helper
+    // materialized), so the redundant second host materialize is gated off here.
+    if (adapter.meta.offBox) {
+      const pushBridge = adapter.workingSet(handle)
+      for (let i = 0; i < mounts.length; i++) {
+        const dir = mounts[i].materializedDir
+        if (!dir) continue
+        await pushBridge.applyManifest({
+          manifestSha256: specs[i]?.baseManifestSha ?? undefined,
+          targetDir: dir,
+        })
+      }
+    }
+
     // ⑧ build both authorization layers (once, full capability list).
     // The device fail-closes at boot: it advertises a commandline builtin in its
     // catalog ONLY when ITS OWN host can confine commands (bwrap+userns). So the
@@ -2109,6 +2133,244 @@ export async function markSandboxResourceGone(
 }
 
 /**
+ * (R4 §1.4c / §6.3) A minimal SandboxHandle carrying ONLY what an off-box
+ * `adapter.workingSet(handle)` reads — the TOKEN-BEARING credentials (from
+ * reconnect) + the resource id — so the teardown/recovery pull runs on a
+ * token-bearing transport, never a token-less connect. The lifecycle methods are
+ * never invoked by workingSet(); they fail loud if a future caller misuses this.
+ */
+function workingSetHandleFromRef(
+  ref: SandboxRef,
+  credentials: SandboxDataPlaneCredentials | null
+): SandboxHandle {
+  const unsupported = (): never => {
+    throw new SandboxServiceError(
+      "working-set handle: lifecycle methods are not supported",
+      500
+    )
+  }
+  return {
+    adapter: ref.adapter,
+    mode: ref.mode,
+    credentials,
+    sandboxId: ref.sandboxId,
+    resourceId: ref.resourceId,
+    runtimeLink: {
+      mode: "bare",
+      runtimeId: ref.runtimeId,
+      runtimeServiceId: ref.runtimeServiceId ?? "",
+      dataPlaneEndpoint: `envd:${ref.resourceId}`,
+    },
+    getHost: unsupported,
+    setTimeout: async () => {},
+    isRunning: async () => false,
+    probeLiveness: async () => "unknown",
+    getInfo: () => ({
+      adapter: ref.adapter,
+      sandboxId: ref.sandboxId,
+      runtimeId: ref.runtimeId,
+      runtimeServiceId: ref.runtimeServiceId ?? "",
+    }),
+    kill: async () => {},
+  }
+}
+
+interface TeardownOffBoxArgs {
+  sessionId: string
+  run: Executor
+  ctx: SessionContext | null
+  mounts: FileMountRow[]
+  runtimeId: string
+  ref: SandboxRef
+  adapter: SandboxAdapter
+  options: TeardownSandboxOptions
+}
+
+/**
+ * (R4 §6.3, P0) OFF-BOX teardown — drain → reconnect → PULL → commit → gate-DELETE.
+ * The VM is the SOLE store of the turn's work, so it MUST be pulled out BEFORE the
+ * DELETE; the DELETE is gated on pull+commit success, and on failure the VM is
+ * KEPT (state left 'closing' for the closing reaper's recovery re-pull, §6.5).
+ *
+ * Ordering rationale (see report): the ORIGINAL live plane is DRAINED (dispose,
+ * which awaits in-flight fs/exec) WITHOUT control.kill — that settles writers that
+ * passed the close-gate. `control.pause` is SKIPPED: this deployment's control
+ * client exposes no pause, and pausing a microVM risks suspending envd itself
+ * (making the pull unreachable); placed after the pull it is a no-op before the
+ * immediate DELETE. So the drain is the writer-freeze we guarantee; a detached
+ * background writer (`nohup &`) is a documented residual. The PULL then runs on a
+ * freshly-RECONNECTED token-bearing transport (never the disposed plane, never a
+ * token-less connect).
+ */
+async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
+  const { sessionId, run, ctx, mounts, runtimeId, ref, adapter, options } = args
+
+  // ① CLOSE-GATE (non-swallowing, §6.6 #5-A): CAS the row to 'closing' ONLY when it
+  // is still non-terminal. A false means the row is already terminal or another
+  // teardown owns the lifecycle → ABORT rather than kill+commit under an unset
+  // fence (which would violate the R3.8 exactly-one-when-active invariant).
+  const fenced = await repo.casFlipSandboxClosing(runtimeId, run)
+  if (!fenced) {
+    log.warn(
+      { sessionId, runtimeId },
+      "off-box teardown: close-gate CAS lost (row terminal or a concurrent teardown owns it) — aborting"
+    )
+    return
+  }
+  markBareDataPlaneClosing(runtimeId)
+
+  try {
+    // ② DRAIN the ORIGINAL live plane (awaitFsIdle/awaitExecIdle live inside
+    // dispose) WITHOUT control.kill — settle writers that already passed the gate.
+    const livePlane = unregisterBareDataPlane(runtimeId)
+    if (livePlane) await livePlane.dispose().catch(() => {})
+    const liveHandle = liveSandboxHandles.get(sessionId)
+    if (liveHandle) liveSandboxHandles.delete(sessionId)
+
+    // ③ PAUSE — SKIPPED (see doc-comment). ④ RECONNECT + ⑤ PULL + ⑥ COMMIT.
+    let pullOk = true
+    let commitOk = true
+    if (mounts.length > 0) {
+      try {
+        // Decrypt the persisted creds so reconnect can FALL BACK to them when the
+        // deployment's connect does not re-mint (§6.2).
+        const persisted =
+          (await repo.getBareSandboxForDispatch(runtimeId, run))?.credentials ??
+          null
+        const rc = await adapter.reconnectDataPlane!(ref, {
+          persistedCredentials: persisted,
+          executor: run,
+          workspaceId: ctx?.workspaceId,
+        })
+        // The reconnect's confined plane is unused here — we drive the raw
+        // working-set transport (built from the same token-bearing creds).
+        await rc.plane.dispose().catch(() => {})
+        const wsBridge: WorkingSetBridge = adapter.workingSet(
+          workingSetHandleFromRef(ref, rc.credentials)
+        )
+        // ⑤ PULL each mount VM→mirror(materializedDir) with delete-prune (F1).
+        for (const mount of mounts) {
+          if (mount.materializedDir && wsBridge.pull) {
+            await wsBridge.pull({ dir: mount.materializedDir })
+          }
+        }
+      } catch (err) {
+        pullOk = false
+        log.error(
+          { sessionId, runtimeId, err },
+          "off-box teardown reconnect/pull failed — preserving VM for recovery re-pull"
+        )
+      }
+
+      // ⑥ COMMIT (scan the PULLED mirror = materializedDir) only if the pull
+      // succeeded. Same fail-closed commit semantics as the host path.
+      if (pullOk) {
+        try {
+          const commitOverride: Partial<CommitDeps> | undefined =
+            options.executor
+              ? {
+                  dbh: run,
+                  loadCtx: (sid) => loadSessionContext(sid, run),
+                  runInTx: (fn) => fn(run),
+                }
+              : undefined
+          await commitSpaces(
+            sessionId,
+            ["conversation", "actor", "actor-conversation"],
+            commitOverride
+          )
+        } catch (err) {
+          commitOk = false
+          log.error({ sessionId, err }, "off-box teardown commit failed")
+        }
+      } else {
+        commitOk = false
+      }
+    }
+
+    // ⑦-guard: a 'closing' off-box row RE-DRIVEN by the closing reaper with NO
+    // active mounts may still have FAILED mounts pending a recovery re-pull (their
+    // materializedDir under sandboxRootFor is the preserved, not-yet-committed
+    // work). DELETEing the VM + rm(sandboxRoot) now would destroy it — defer to
+    // recoverFailedSandboxMounts (which reconnect→pull→commits, THEN kills).
+    if (
+      mounts.length === 0 &&
+      (await sessionHasFailedRecoverableMounts(run, sessionId))
+    ) {
+      log.warn(
+        { sessionId, runtimeId },
+        "off-box teardown: no active mounts but FAILED recoverable mounts pending — leaving VM + state='closing' for recovery re-pull"
+      )
+      return
+    }
+
+    // ⑦ GATE the DELETE on pull+commit success.
+    if (pullOk && commitOk) {
+      // Pull+commit durable → NOW DELETE the VM (best-effort; the row goes terminal
+      // regardless — a stranded VM is swept by its create() TTL / the orphan sweep).
+      try {
+        const killHandle = liveHandle ?? (await adapter.connect(ref))
+        await killHandle.kill().catch(() => {})
+      } catch (err) {
+        log.error(
+          { sessionId, runtimeId, err },
+          "off-box teardown: VM DELETE failed after successful pull+commit (TTL/orphan-sweep backstops)"
+        )
+      }
+      // delete the live mirror dirs (CAS is the source of truth) + close mounts.
+      await rm(sandboxRootFor(sessionId), {
+        recursive: true,
+        force: true,
+      }).catch(() => {})
+      await cleanupDirs([sandboxRootFor(sessionId)]).catch(() => {})
+      for (const mount of mounts) {
+        await updateFileMount(run, mount.id, {
+          status: "closed",
+          closedAt: true,
+        }).catch(() => {})
+      }
+      // revoke grants + terminal state + soft-delete (state already 'closing' from
+      // the close-gate, so this satisfies the R3.8 exactly-one-when-active trigger).
+      if (ctx) {
+        await revokeSandboxGrants({
+          workspaceId: ctx.workspaceId,
+          runtimeId,
+          actorId: ctx.actorId,
+          conversationId: ctx.conversationId,
+          executor: run,
+        }).catch((err) => log.error({ sessionId, err }, "revoke grants failed"))
+        await repo
+          .updateSandboxRow(runtimeId, { state: "closed" }, run)
+          .catch(() => {})
+        await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
+          log.error({ sessionId, err }, "soft-delete runtime failed")
+        )
+      }
+    } else {
+      // ⑦-fail: PULL/COMMIT FAILED → KEEP the VM alive (its unpulled bytes are the
+      // sole source of truth), mark mounts 'failed' (preserving materializedDir),
+      // and LEAVE state='closing' so the closing reaper re-drives recovery (§6.5).
+      // NEVER kill / soft-delete here — that would DELETE unpulled agent work.
+      const stage = pullOk ? "commit" : "pull"
+      for (const mount of mounts) {
+        await updateFileMount(run, mount.id, {
+          status: "failed",
+          errorMessage: `off-box teardown ${stage} failed (VM preserved for recovery re-pull)`,
+        }).catch(() => {})
+      }
+      log.error(
+        { sessionId, runtimeId, pullOk, commitOk },
+        `off-box teardown ${stage} failed — VM preserved, left state='closing' for the closing reaper`
+      )
+    }
+  } finally {
+    // Always clear the in-process close-gate tombstone. The DB state
+    // ('closing'/'closed') keeps denying rebuilds thereafter.
+    clearBareDataPlaneClosing(runtimeId)
+  }
+}
+
+/**
  * Teardown (R3.7 REORDERED — no lost write, trigger-safe). The order is now
  * CLOSE-GATE → STOP writer → CONFIRM-DEAD → FINAL commit → cleanup, so:
  *   1. CLOSE-GATE: flip the sandbox OUT of state='active' (→ 'closing') AND set an
@@ -2154,6 +2416,42 @@ export async function teardownSandbox(
       (await repo.getSandboxBySessionForControl(sessionId, run))?.id ?? null
   }
   if (mounts.length === 0 && !runtimeId) return
+
+  // (R4 §6.3, P0) OFF-BOX teardown fork. An off-box VM is the SOLE store of the
+  // turn's work — it must be PULLED before the VM is DELETEd. Resolve the owning
+  // adapter (row-driven) and, when it is off-box, hand off to the
+  // drain→reconnect→PULL→commit→gate-DELETE ordering. Host adapters (compute-only,
+  // bytes in the host dir throughout) keep the kill-then-commit order below.
+  // adapterForRow is wrapped so an unknown/legacy tag can't throw — it falls
+  // through to the host path (which resolves its own connect-only backend).
+  if (runtimeId) {
+    const offBoxRef = await buildSandboxRefFromSandboxRow(
+      mounts,
+      run,
+      sessionId
+    )
+    if (offBoxRef) {
+      let offBoxAdapter: SandboxAdapter | null = null
+      try {
+        offBoxAdapter = adapterForRow(offBoxRef.adapter, offBoxRef.mode)
+      } catch {
+        offBoxAdapter = null
+      }
+      if (offBoxAdapter?.meta.offBox) {
+        await teardownOffBoxSandbox({
+          sessionId,
+          run,
+          ctx,
+          mounts,
+          runtimeId,
+          ref: offBoxRef,
+          adapter: offBoxAdapter,
+          options,
+        })
+        return
+      }
+    }
+  }
 
   // ① CLOSE-GATE (R3.7 step 1): state OUT of 'active' + in-process tombstone,
   // BEFORE stopping the writer. Deny same-process bare dispatch (tombstone) +
@@ -2374,6 +2672,32 @@ export async function recoverFailedSandboxMounts(): Promise<RecoverFailedMountsR
   let recovered = 0
   let stillFailed = 0
   for (const [sessionId, sessionMounts] of bySession) {
+    // (R4 §6.5, F2) OFF-BOX recovery fork. An off-box VM whose bytes are UNPULLED
+    // must be RECONNECTED + PULLED + committed BEFORE it is killed — never the
+    // host "confirm-dead then commit the host dir" path (which would commit a
+    // never-pulled empty mirror and lose all VM work). Resolve the owning adapter
+    // row-driven; when off-box, hand off to recoverOffBoxSession.
+    const recoveryRef = await buildSandboxRefFromSandboxRow(sessionMounts)
+    if (recoveryRef) {
+      let recoveryAdapter: SandboxAdapter | null = null
+      try {
+        recoveryAdapter = adapterForRow(recoveryRef.adapter, recoveryRef.mode)
+      } catch {
+        recoveryAdapter = null
+      }
+      if (recoveryAdapter?.meta.offBox) {
+        const res = await recoverOffBoxSession(
+          sessionId,
+          sessionMounts,
+          recoveryRef,
+          recoveryAdapter
+        )
+        recovered += res.recovered
+        stillFailed += res.stillFailed
+        continue
+      }
+    }
+
     // Confirm the runtime is stopped before snapshotting. If it's still alive
     // (teardown's kill was swallowed), make ONE more attempt to stop it via the
     // persisted ref, then re-check. A runtime that survives both is left for the
@@ -2401,14 +2725,117 @@ export async function recoverFailedSandboxMounts(): Promise<RecoverFailedMountsR
 }
 
 /**
+ * (R4 §6.5, F2) OFF-BOX recovery — reconnect → PULL → commit → THEN kill. A
+ * 'failed'-mount off-box sandbox reached recovery because a prior teardown pull/
+ * commit failed and LEFT the VM alive with unpulled work; re-pull it (over a
+ * token-bearing reconnect transport) into each mount's mirror, commit the mirror,
+ * and only after ALL mounts commit DELETE the VM + soft-delete the runtime. On a
+ * pull failure the mounts stay 'failed' and the VM stays alive for the next sweep
+ * (never a kill-before-pull that would lose the bytes).
+ */
+async function recoverOffBoxSession(
+  sessionId: string,
+  sessionMounts: FileMountRow[],
+  ref: SandboxRef,
+  adapter: SandboxAdapter
+): Promise<{ recovered: number; stillFailed: number }> {
+  const run = repo.defaultDbh()
+  const runtimeId = ref.runtimeId
+  // ① reconnect a token-bearing transport + PULL each mount VM→mirror (VM alive).
+  try {
+    const persisted =
+      (await repo.getBareSandboxForDispatch(runtimeId, run))?.credentials ??
+      null
+    const rc = await adapter.reconnectDataPlane!(ref, {
+      persistedCredentials: persisted,
+      executor: run,
+      workspaceId: sessionMounts[0]?.workspaceId,
+    })
+    await rc.plane.dispose().catch(() => {})
+    const wsBridge: WorkingSetBridge = adapter.workingSet(
+      workingSetHandleFromRef(ref, rc.credentials)
+    )
+    for (const mount of sessionMounts) {
+      if (mount.materializedDir && wsBridge.pull) {
+        await wsBridge.pull({ dir: mount.materializedDir })
+      }
+    }
+  } catch (err) {
+    console.error(
+      `[sandbox] off-box recovery: reconnect/pull failed for session ${sessionId}; ` +
+        `leaving ${sessionMounts.length} mount(s) 'failed', VM preserved:`,
+      err
+    )
+    return { recovered: 0, stillFailed: sessionMounts.length }
+  }
+
+  // ② commit each mount (scans the mirror the pull populated) — same engine as host.
+  let recovered = 0
+  let stillFailed = 0
+  let allCommitted = true
+  for (const mount of sessionMounts) {
+    const outcome = await recoverOneFailedMount(mount)
+    if (outcome === "recovered") recovered++
+    else if (outcome === "stillFailed") {
+      stillFailed++
+      allCommitted = false
+    }
+    // "skipped" (dir already gone) counts as neither.
+  }
+
+  // ③ only after EVERY mount committed → DELETE the VM + terminal + soft-delete.
+  if (allCommitted) {
+    try {
+      const handle = await adapter.connect(ref)
+      await handle.kill().catch(() => {})
+    } catch (err) {
+      console.error(
+        `[sandbox] off-box recovery: VM DELETE failed for ${sessionId} (TTL/orphan-sweep backstops):`,
+        err
+      )
+    }
+    const ctx = await loadSessionContext(sessionId, run)
+    if (ctx) {
+      await repo
+        .updateSandboxRow(runtimeId, { state: "closed" }, run)
+        .catch(() => {})
+      await deleteRuntime(ctx.workspaceId, runtimeId, run).catch(() => {})
+    }
+  }
+  return { recovered, stillFailed }
+}
+
+/**
  * Confirm the per-session sandbox runtime is NOT alive before recovery commits
  * snapshot its live dirs. Returns true when it's already gone or we successfully
  * killed it; false when it's still alive after a kill attempt (caller must skip).
+ *
+ * (R4 §6.5, F2) An OFF-BOX runtime must NEVER reach here — its bytes live in the
+ * VM and are pulled by recoverOffBoxSession, not confirmed-dead-then-host-committed.
+ * As defense-in-depth, if an off-box ref is somehow routed here, return FALSE (skip
+ * the generic host commit) so a never-pulled empty mirror is never snapshotted.
  */
 async function ensureRuntimeStoppedForRecovery(
   sessionId: string,
   mounts: FileMountRow[]
 ): Promise<boolean> {
+  // (R4 §6.5, F2) Defense-in-depth: an off-box runtime's mirror is populated by a
+  // PULL, not by confirming the VM dead. If one is routed here, refuse the generic
+  // host commit (return false) so an unpulled empty mirror is never snapshotted.
+  const ref = await buildSandboxRefFromSandboxRow(mounts, repo.defaultDbh())
+  if (ref) {
+    try {
+      if (adapterForRow(ref.adapter, ref.mode).meta.offBox) {
+        console.warn(
+          `[sandbox] recovery: off-box runtime for session ${sessionId} reached the ` +
+            `host-commit gate; skipping (off-box recovery pulls first)`
+        )
+        return false
+      }
+    } catch {
+      // unknown/legacy tag → fall through to the host liveness path.
+    }
+  }
   const live0 = await isSandboxRuntimeAlive(mounts)
   if (live0 === "dead") return true // confirmed gone → safe to commit
   if (live0 === "unknown") {

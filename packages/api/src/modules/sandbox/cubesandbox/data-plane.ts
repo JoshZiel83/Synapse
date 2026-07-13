@@ -115,14 +115,14 @@ export interface RemoteBareDataPlaneOptions {
 // ─────────────────────────── pure path helpers ───────────────────────────────
 
 /** Strip trailing slashes from the VM root ("/workspace/" → "/workspace"). */
-function trimTrailingSlash(p: string): string {
+export function trimTrailingSlash(p: string): string {
   const trimmed = p.replace(/\/+$/, "")
   return trimmed === "" ? "/" : trimmed
 }
 
 /** Lower a canonical VFS path ("/conversation/x") to the in-VM absolute path
  *  ("${vmRoot}/conversation/x"). canonical always begins with "/". */
-function vfsToVm(canonical: string, vmRoot: string): string {
+export function vfsToVm(canonical: string, vmRoot: string): string {
   const root = trimTrailingSlash(vmRoot)
   if (canonical === "/") return root
   return root === "/" ? canonical : `${root}${canonical}`
@@ -131,7 +131,11 @@ function vfsToVm(canonical: string, vmRoot: string): string {
 /** Back-translate an envd-returned in-VM absolute path to a VFS path (strip the VM
  *  root). A path NOT under the VM root returns `fallback` so `/workspace/...` (or a
  *  bare/relative envd path) never leaks to the model. */
-function vmToVfs(vmPath: string, vmRoot: string, fallback: string): string {
+export function vmToVfs(
+  vmPath: string,
+  vmRoot: string,
+  fallback: string
+): string {
   const root = trimTrailingSlash(vmRoot)
   if (vmPath === root) return "/"
   if (root === "/") return vmPath.startsWith("/") ? vmPath : fallback
@@ -186,7 +190,9 @@ function fileTypeToKind(
 /** Parse an envd RFC-3339 modifiedTime into epoch-ms. Routes through the canonical
  *  fail-loud parser (never a bare Date.parse); an absent/unparseable value becomes
  *  'absent' (undefined) — NEVER a fabricated now (datetime discipline). */
-function parseMtimeMs(modifiedTime: string | undefined): number | undefined {
+export function parseMtimeMs(
+  modifiedTime: string | undefined
+): number | undefined {
   if (!modifiedTime) return undefined
   try {
     const ms = new Date(fromExternalRfc3339(modifiedTime)).getTime()

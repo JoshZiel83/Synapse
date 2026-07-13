@@ -10,15 +10,21 @@
 //     <sandboxRoot>/<subpath> bytes the fs-helper materialized, through the same
 //     vfs kernel.
 //
-//   DETACHED path (S12 — docker:bare remote bridge, config/test-flagged):
-//     NO volume mounts; the working set lives inside the container's own
-//     /conversation|… and is driven ENTIRELY via `docker exec` (never docker cp /
-//     tar -x). applyManifest materializes base into an API-local scratch MIRROR
-//     then replicates into the container write-tmp-then-Move with explicit Removes
-//     for delete-propagation; scanManifest reconciles the container tree back into
-//     the mirror through a per-sandbox stat-cache, then runs the EXISTING fused
-//     scanCommitDir on the mirror. This is the CI PROOF of the exact remote
-//     bridge contract envd will implement, before envd exists (the R2 escape).
+//   DETACHED path (S12/R4 — off-box remote bridge): NO volume mounts; the working
+//     set lives inside the sandbox VM and is driven ENTIRELY over a
+//     WorkingSetTransport (never docker cp / tar -x). applyManifest materializes
+//     base into an API-local scratch MIRROR then replicates into the VM
+//     write-then-Move with explicit Removes for delete-propagation; scanManifest
+//     reconciles the VM tree back into the mirror through a per-sandbox stat-cache
+//     (delete-PRUNING the mirror to exactly the VM listing — F1), then runs the
+//     EXISTING fused scanCommitDir on the mirror.
+//
+// R4 Phase 1c abstracts the container seam from `docker exec` to a transport
+// interface (WorkingSetTransport) BOTH a docker-exec wrapper AND the off-box envd
+// client satisfy. The docker-exec transport keeps the CI-proven S12 path (and its
+// tests) working verbatim; the envd transport (cubesandbox/working-set.ts) is the
+// prod off-box bridge. The delete-aware-mirror + stat-cache algorithm is identical
+// across both — only the transport differs.
 
 import { createHash } from "node:crypto"
 import { materializeSnapshot, scanCommitDir } from "./materialize.js"
@@ -47,53 +53,133 @@ export function createProductWorkingSetBridge(): WorkingSetBridge {
   }
 }
 
-// ─────────────────────────── DETACHED bridge (S12) ───────────────────────────
+// ─────────────────────────── DETACHED bridge (S12/R4) ─────────────────────────
 
-/** A single container file's identity as `docker exec find … -printf` reports it. */
+/** A single container/VM file's identity as the transport reports it. */
 export interface ContainerFileStat {
   /** Canonicalized in-container relpath (POSIX, no leading slash, mount-rooted). */
   relpath: string
   size: number
-  /** mtime in whole seconds (find %T@ truncated — the cross-host granularity we rely on). */
+  /** mtime in whole seconds (docker `find %T@` truncated — the docker-transport
+   *  granularity). For the envd transport this is Math.trunc(ms/1000) and is NOT
+   *  the reconcile key (see `mtimeKey`). */
   mtimeSec: number
+  /**
+   * (F6) FULL-resolution mtime key. The envd transport sets this to the RFC-3339
+   * millisecond stamp so a same-size same-SECOND in-place edit is NOT a false
+   * cache hit (a lost update). When present on EITHER the listing entry or the
+   * cached entry, the stat-cache reconcile keys on THIS (never the truncated
+   * second). The docker-exec transport leaves it undefined (`find %T@` carries no
+   * sub-second precision), so docker keeps its (size, mtimeSec) key.
+   */
+  mtimeKey?: string
 }
 
-/** Per-sandbox stat-cache entry: skip re-hashing a file whose (size,mtime) match. */
+/** Per-sandbox stat-cache entry: skip re-hashing a file whose stat matches. */
 export interface StatCacheEntry {
   size: number
   mtimeSec: number
   sha256: string
+  /** (F6) full-resolution mtime key mirrored from the fetched ContainerFileStat. */
+  mtimeKey?: string
 }
 
 export type StatCache = Map<string, StatCacheEntry>
 
+// ─────────────────────────── the transport seam ──────────────────────────────
+
 /**
- * The `docker exec` seam. Injected so the whole detached bridge is unit-testable
- * against a fake container (the CI proof) without a real daemon. The default (a
- * real spawn) is built by makeRealDockerExec below. `stdin` bytes are piped to
- * the exec'd process (for the write path); the result carries exit + streams.
+ * The container/VM transport the detached bridge drives. Abstracted (R4 §1.4) so
+ * the SAME delete-aware-mirror + stat-cache algorithm runs over EITHER a docker
+ * `exec` wrapper (the CI proof) OR the off-box envd client (prod). Keys are
+ * mount-rooted relpaths (`/conversation/x.py`), identical across transports — that
+ * is what the docker-vs-envd list-parity invariant (2d) guarantees.
+ */
+export interface WorkingSetTransport {
+  /** Enumerate every REGULAR file under the given roots (docker: `find -type f`;
+   *  envd: recursive listDir). Symlinks/other are excluded; dotfiles/dotdirs are
+   *  included. Relpaths are mount-rooted. */
+  list(mountRoots: string[]): Promise<ContainerFileStat[]>
+  /** Read a file's whole bytes (docker: `cat`; envd: readFile). */
+  read(relpath: string): Promise<Buffer>
+  /** Write a file's whole bytes, creating parents (docker: tmp-write + `mv -f`;
+   *  envd: writeFile whole-file replace). */
+  write(relpath: string, bytes: Buffer): Promise<void>
+  /** Remove a file (docker: `rm -f`; envd: remove). Idempotent. */
+  remove(relpath: string): Promise<void>
+}
+
+/**
+ * The `docker exec` seam. Injected so the docker-exec transport is unit-testable
+ * against a fake container (the CI proof) without a real daemon. `stdin` bytes are
+ * piped to the exec'd process (for the write path).
  */
 export type DockerExecFn = (
   argv: string[],
   opts?: { stdin?: Buffer }
 ) => Promise<{ code: number; stdout: string; stderr: string }>
 
-export interface DetachedBridgeOptions {
+/**
+ * (R4 §1.4a) The docker-exec WorkingSetTransport — wraps the CI-proven
+ * find/cat/(cat>tmp+mv)/rm argv verbatim so the docker:bare S12 detached path (and
+ * its tests) keep working unchanged. Delete-propagation writes go tmp-then-Move
+ * (atomic-ish rename); Removes are explicit `rm -f`.
+ */
+export function makeDockerExecTransport(opts: {
   containerId: string
+  exec: DockerExecFn
+}): WorkingSetTransport {
+  const { containerId, exec } = opts
+  const findArgs = (mountRoots: string[]): string[] => [
+    "exec",
+    containerId,
+    "find",
+    ...mountRoots,
+    "-type",
+    "f",
+    "-printf",
+    "%s %T@ %p\\n",
+  ]
+  return {
+    async list(mountRoots) {
+      const res = await exec(findArgs(mountRoots))
+      return parseFindListing(res.stdout)
+    },
+    async read(relpath) {
+      const res = await exec(["exec", containerId, "cat", relpath])
+      return Buffer.from(res.stdout, "binary")
+    },
+    async write(relpath, bytes) {
+      const tmp = `${relpath}.synapse-tmp`
+      await exec(["exec", "-i", containerId, "sh", "-c", `cat > '${tmp}'`], {
+        stdin: bytes,
+      })
+      await exec(["exec", containerId, "mv", "-f", tmp, relpath])
+    },
+    async remove(relpath) {
+      await exec(["exec", containerId, "rm", "-f", relpath])
+    },
+  }
+}
+
+export interface DetachedBridgeOptions {
   /** API-local scratch MIRROR dir — materializeSnapshot/scanCommitDir operate here. */
   mirrorDir: string
-  /** In-container mount roots to enumerate (e.g. ["/conversation","/actor",…]). */
+  /** In-container/VM mount roots to enumerate (VM-absolute for envd, e.g.
+   *  ["/workspace/conversation"]; container-absolute for docker). */
   mountRoots: string[]
-  /** The `docker exec` seam (test-injected; default = real spawn). */
-  exec: DockerExecFn
+  /** The container/VM transport (docker-exec or envd). */
+  transport: WorkingSetTransport
   /** Per-sandbox stat-cache (caller owns lifetime; survives across scans). */
   statCache: StatCache
-  /** Injected for tests: read a mirror file's bytes (default = fs). */
+  /** Injected: read a mirror file's bytes (default = empty). */
   readMirrorFile?: (relpath: string) => Promise<Buffer>
-  /** Injected for tests: list the mirror's files as canonical relpaths (default = fs walk). */
+  /** Injected: list the mirror's files as canonical relpaths (default = []). */
   listMirrorFiles?: () => Promise<string[]>
-  /** Injected for tests: write fetched container bytes back into the mirror. */
+  /** Injected: write fetched container/VM bytes back into the mirror. */
   writeMirrorFile?: (relpath: string, bytes: Buffer) => Promise<void>
+  /** (F1) Injected: remove a mirror file the VM no longer has (delete-prune). */
+  removeMirrorFile?: (relpath: string) => Promise<void>
 }
 
 /** The plan a host-side diff produces for replicating the mirror into the container. */
@@ -108,7 +194,8 @@ export interface ReplicationPlan {
  * Pure host-side diff: what to write (mirror files) vs. what to Remove (container
  * files no longer in the mirror). Delete-propagation is EXPLICIT (never implicit),
  * exactly as the envd bridge must do it — a file the agent deleted upstream is
- * removed in-container, not silently left behind.
+ * removed in-container, not silently left behind. (This is the PUSH-side delete
+ * set; its PULL-side twin is the mirror prune in fetchChangedIntoMirror — F1.)
  */
 export function planReplication(
   mirrorFiles: readonly string[],
@@ -120,9 +207,30 @@ export function planReplication(
 }
 
 /**
- * Reconcile a container `find` listing against the stat-cache: (size,mtime) match
- * ⇒ reuse the cached sha (NO re-hash); mismatch/miss ⇒ the file must be fetched
- * (`docker exec cat`) + hashed. Returns the shas to reuse and the relpaths to fetch.
+ * (F6) Does a cached stat still identify the listed file? Size must match, and the
+ * mtime is compared at FULL resolution when EITHER side carries a `mtimeKey` (the
+ * envd RFC-3339 ms stamp) — so a same-size same-SECOND in-place edit is a MISS
+ * (re-fetched), never a false hit. Only when NEITHER side has a full-resolution
+ * key (the docker `find %T@` path) does it fall back to the truncated second.
+ */
+function statCacheHit(hit: StatCacheEntry, f: ContainerFileStat): boolean {
+  if (hit.size !== f.size) return false
+  if (f.mtimeKey !== undefined || hit.mtimeKey !== undefined) {
+    // Full-resolution compare: an absent key on either side is treated as a
+    // mismatch (fetch) rather than silently degrading to the truncated second.
+    return (
+      f.mtimeKey !== undefined &&
+      hit.mtimeKey !== undefined &&
+      f.mtimeKey === hit.mtimeKey
+    )
+  }
+  return hit.mtimeSec === f.mtimeSec
+}
+
+/**
+ * Reconcile a container/VM listing against the stat-cache: a stat match ⇒ reuse
+ * the cached sha (NO re-hash); mismatch/miss ⇒ the file must be fetched + hashed.
+ * Returns the shas to reuse and the relpaths to fetch. (F6-aware — see statCacheHit.)
  */
 export function reconcileStatCache(
   listing: readonly ContainerFileStat[],
@@ -132,7 +240,7 @@ export function reconcileStatCache(
   const toFetch: string[] = []
   for (const f of listing) {
     const hit = cache.get(f.relpath)
-    if (hit && hit.size === f.size && hit.mtimeSec === f.mtimeSec) {
+    if (hit && statCacheHit(hit, f)) {
       reused.push({ relpath: f.relpath, sha256: hit.sha256 })
     } else {
       toFetch.push(f.relpath)
@@ -154,7 +262,8 @@ export function parseFindListing(stdout: string): ContainerFileStat[] {
     const mtime = Math.trunc(Number(t.slice(firstSp + 1, secondSp)))
     const abs = t.slice(secondSp + 1)
     // Store the ABSOLUTE in-container path as the relpath key (mount-rooted; e.g.
-    // "/conversation/x.py"). Canonical + stable across scans.
+    // "/conversation/x.py"). Canonical + stable across scans. No mtimeKey — `find
+    // %T@` carries no sub-second precision, so docker keeps its (size, sec) key.
     if (!Number.isFinite(size) || !Number.isFinite(mtime)) continue
     out.push({ relpath: abs, size, mtimeSec: mtime })
   }
@@ -166,46 +275,39 @@ function sha256Hex(bytes: Buffer): string {
 }
 
 /**
- * The detached remote bridge (S12). Implements the SAME WorkingSetBridge contract
- * the product bridge does, but drives the working set through `docker exec` +
- * host-computed plans. This is the exercisable model of the envd wire bridge.
+ * The detached remote bridge (S12/R4). Implements the SAME WorkingSetBridge
+ * contract the product bridge does, but drives the working set through a
+ * WorkingSetTransport + host-computed plans. This is the exercisable model of the
+ * envd wire bridge AND (over the envd transport) the prod off-box bridge itself.
  */
 export interface DetachedWorkingSetBridge extends WorkingSetBridge {
-  /** Enumerate the container tree (exposed for the stash/scan paths + tests). */
+  /** Enumerate the container/VM tree (exposed for the stash/scan paths + tests). */
   listContainer(): Promise<ContainerFileStat[]>
   planFor(mirrorFiles: string[]): Promise<ReplicationPlan>
   /**
-   * Steps ①②③ of scanManifest WITHOUT the final scanCommitDir: enumerate the
-   * container tree, reconcile against the stat-cache, and `docker exec cat` +
-   * hash + cache + mirror-write ONLY the (size,mtime)-mismatched files. Exposed so
-   * the stat-cache contract (and the forced-commit-failure stash exfiltration) can
-   * be exercised without the fs-helper. Returns the relpaths that were re-fetched.
+   * The PULL primitive: enumerate the container/VM tree, reconcile against the
+   * stat-cache, fetch + hash + cache + mirror-write ONLY the changed files, then
+   * (F1) PRUNE the mirror — remove every mirror file absent from the listing so
+   * the mirror reflects EXACTLY the VM (a VM-deleted file must not resurrect from
+   * the base copy) BEFORE any scanCommitDir. Returns the fetched/reused/pruned
+   * relpaths.
    */
-  fetchChangedIntoMirror(): Promise<{ fetched: string[]; reused: string[] }>
+  fetchChangedIntoMirror(): Promise<{
+    fetched: string[]
+    reused: string[]
+    pruned: string[]
+  }>
 }
 
 export function createDetachedWorkingSetBridge(
   opts: DetachedBridgeOptions
 ): DetachedWorkingSetBridge {
-  const { containerId, mirrorDir, mountRoots, exec, statCache } = opts
+  const { mirrorDir, mountRoots, transport, statCache } = opts
   const readMirrorFile = opts.readMirrorFile ?? (async () => Buffer.alloc(0))
   const listMirrorFiles = opts.listMirrorFiles ?? (async () => [])
 
-  const findArgs = (): string[] => [
-    "exec",
-    containerId,
-    "find",
-    ...mountRoots,
-    "-type",
-    "f",
-    "-printf",
-    "%s %T@ %p\\n",
-  ]
-
-  const listContainer = async (): Promise<ContainerFileStat[]> => {
-    const res = await exec(findArgs())
-    return parseFindListing(res.stdout)
-  }
+  const listContainer = (): Promise<ContainerFileStat[]> =>
+    transport.list(mountRoots)
 
   const planFor = async (mirrorFiles: string[]): Promise<ReplicationPlan> => {
     const container = await listContainer()
@@ -218,22 +320,46 @@ export function createDetachedWorkingSetBridge(
   const fetchChangedIntoMirror = async (): Promise<{
     fetched: string[]
     reused: string[]
+    pruned: string[]
   }> => {
     const listing = await listContainer()
     const { reused, toFetch } = reconcileStatCache(listing, statCache)
     const byPath = new Map(listing.map((f) => [f.relpath, f]))
     for (const rel of toFetch) {
-      const res = await exec(["exec", containerId, "cat", rel])
-      const bytes = Buffer.from(res.stdout, "binary")
+      const bytes = await transport.read(rel)
       const sha = sha256Hex(bytes)
       const f = byPath.get(rel)
       if (f) {
-        statCache.set(rel, { size: f.size, mtimeSec: f.mtimeSec, sha256: sha })
+        statCache.set(rel, {
+          size: f.size,
+          mtimeSec: f.mtimeSec,
+          mtimeKey: f.mtimeKey,
+          sha256: sha,
+        })
       }
       // write current bytes into the mirror so scanCommitDir sees them.
       await opts.writeMirrorFile?.(rel, bytes)
     }
-    return { fetched: toFetch, reused: reused.map((r) => r.relpath) }
+    // (F1 / §6.4) PULL-side delete-propagation: rebuild the mirror to EXACTLY the
+    // listing. Every mirror file absent from the VM listing is a file the agent
+    // deleted upstream — REMOVE it from the mirror (and drop its stat-cache entry)
+    // so the following scanCommitDir sees the delete instead of resurrecting the
+    // stale base copy. This is the pull-side twin of planReplication.removes.
+    const present = new Set(listing.map((f) => f.relpath))
+    const mirrorFiles = await listMirrorFiles()
+    const pruned: string[] = []
+    for (const rel of mirrorFiles) {
+      if (!present.has(rel)) {
+        await opts.removeMirrorFile?.(rel)
+        statCache.delete(rel)
+        pruned.push(rel)
+      }
+    }
+    return {
+      fetched: toFetch,
+      reused: reused.map((r) => r.relpath),
+      pruned,
+    }
   }
 
   return {
@@ -247,28 +373,23 @@ export function createDetachedWorkingSetBridge(
         manifestSha256: input.manifestSha256,
         targetDir: mirrorDir,
       })
-      // ② replicate the mirror INTO the container (container-world), via
-      //    write-tmp-then-Move + explicit Removes. NEVER docker cp / tar -x.
+      // ② replicate the mirror INTO the container/VM (container-world), via
+      //    write-then-Move + explicit Removes. NEVER docker cp / tar -x.
       const mirrorFiles = await listMirrorFiles()
       const plan = await planFor(mirrorFiles)
-      // Writes: pipe bytes to a tmp path, then Move into place (atomic-ish rename).
       for (const rel of plan.writes) {
         const bytes = await readMirrorFile(rel)
-        const tmp = `${rel}.synapse-tmp`
-        await exec(["exec", "-i", containerId, "sh", "-c", `cat > '${tmp}'`], {
-          stdin: bytes,
-        })
-        await exec(["exec", containerId, "mv", "-f", tmp, rel])
+        await transport.write(rel, bytes)
       }
       // Removes: delete-propagation for files the agent removed upstream.
       for (const rel of plan.removes) {
-        await exec(["exec", containerId, "rm", "-f", rel])
+        await transport.remove(rel)
       }
     },
 
     async scanManifest(input) {
       // ①②③ enumerate + reconcile via the stat-cache + fetch only the changed
-      //      files into the mirror.
+      //      files into the mirror + (F1) PRUNE the mirror to the VM listing.
       await fetchChangedIntoMirror()
       // ④ run the EXISTING fused scan/commit engine on the MIRROR (Mode-A verbatim).
       return scanCommitDir({

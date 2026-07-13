@@ -7,6 +7,7 @@ export {
   updateFileMount,
   getActiveMountsForSession,
   getFailedRecoverableMounts,
+  sessionHasFailedRecoverableMounts,
   appendSnapshot,
   getSnapshotManifestSha,
 } from "./repo-space.js"

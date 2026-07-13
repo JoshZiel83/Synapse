@@ -735,6 +735,30 @@ export async function casFlipSandboxActive(
 }
 
 /**
+ * (R4 §6.3/§6.6 #5-A) CAS the teardown CLOSE-GATE. Only flip a row still in a
+ * non-terminal state (provisioning/active/closing) to 'closing' — so a concurrent
+ * reprovision/reaper that already drove it terminal (closed/failed) wins and the
+ * teardown ABORTS rather than laying a fence on a row someone else owns. Returns
+ * true iff it flipped/re-affirmed exactly one non-terminal row. (The 'closing'→
+ * 'closing' self-flip re-affirms an in-progress teardown's own fence and bumps
+ * updated_at, pacing the closing-retry reaper.) Off-box teardown MUST NOT swallow
+ * a false here: proceeding to kill+commit under an unset fence violates the R3.8
+ * exactly-one-when-active invariant.
+ */
+export async function casFlipSandboxClosing(
+  id: string,
+  run: Executor = db
+): Promise<boolean> {
+  const res = await run
+    .updateTable("sandboxes")
+    .set({ state: "closing", updatedAt: new Date() } as never)
+    .where("id", "=", id)
+    .where("state", "in", ["provisioning", "active", "closing"])
+    .executeTakeFirst()
+  return Number(res.numUpdatedRows ?? 0n) === 1
+}
+
+/**
  * R3.P2b — TTL reaper candidate query. Sandboxes STILL 'provisioning' whose
  * deadline_at has passed: a provision that crashed/hung before its CAS active
  * flip. Restricted to state='provisioning' (the idx_sandboxes_reap partial index)

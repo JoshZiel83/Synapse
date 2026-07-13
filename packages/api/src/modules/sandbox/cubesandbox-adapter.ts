@@ -34,8 +34,13 @@ import {
   buildCubesandboxBareDescriptor,
   type SandboxCapabilityDescriptor,
 } from "./model.js"
-import type { BareDataPlaneRebuildRow, SandboxDataPlane } from "./data-plane.js"
-import { createProductWorkingSetBridge } from "./working-set-bridge.js"
+import type {
+  BareDataPlaneRebuildRow,
+  SandboxDataPlane,
+  WorkingSetBridge,
+} from "./data-plane.js"
+import type { StatCache } from "./working-set-bridge.js"
+import { createCubeEnvdWorkingSetBridge } from "./cubesandbox/working-set.js"
 import { sandboxAdapterMetadata } from "./adapter-metadata.js"
 import type {
   AdapterReadyOptions,
@@ -431,10 +436,26 @@ export function makeCubesandboxBareAdapter(
         domain: info.domain,
       }
     },
-    // R4 Phase 1c: ALL adapters return the pass-through product bridge for now;
-    // the off-box envd DETACHED bridge (delete-aware mirror over the plane's
-    // RemoteEnvdTransport) replaces this in a later sub-phase.
-    workingSet: () => createProductWorkingSetBridge(),
+    // (R4 §1.4c, P0) OFF-BOX working set = the envd DETACHED bridge (delete-aware
+    // mirror + stat-cache) over a TOKEN-BEARING transport built from the handle's
+    // (create-captured) OR reconnect-supplied creds — NEVER a token-less connect.
+    // The spine drives applyManifest (provision PUSH base→VM) + pull (teardown/
+    // recovery PULL VM→mirror, delete-pruned) + scanManifest. A fresh stat-cache
+    // per bridge (leak-free; the pull re-fetches on a cold cache — always correct;
+    // F6 full-ms keying prevents a same-second false hit on any warm entry).
+    workingSet: (handle): WorkingSetBridge => {
+      const envd = envdFactory(
+        runOpts,
+        handle.resourceId,
+        tokensForEnvd(handle.credentials)
+      )
+      const statCache: StatCache = new Map()
+      return createCubeEnvdWorkingSetBridge({
+        envd,
+        vmRoot: runOpts.vmRoot,
+        statCache,
+      })
+    },
     // §1.8 seam: reconstruct the REMOTE plane from the PERSISTED row — resource_id
     // (== sandbox id) + descriptor + the DECRYPTED creds threaded by the dispatch
     // repo exit. deployment-wide connection facts (domain/proxy/vmRoot/port) come
