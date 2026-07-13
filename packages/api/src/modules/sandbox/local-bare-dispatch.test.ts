@@ -22,6 +22,7 @@ import {
 import {
   dispatchBareRuntimeTool,
   registerBareDataPlane,
+  getLiveBareDataPlane,
   __clearBareDataPlanes,
 } from "./bare-dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
@@ -391,6 +392,70 @@ test("B3: lazy rebuild-on-miss hard-denies a non-active/deleted runtime (registr
     assert.equal(res.ok, false)
     assert.equal(res.error?.code, "runtime_constraint")
     assert.match(res.error?.message ?? "", /rebuild refused/)
+    __clearBareDataPlanes()
+  })
+})
+
+test("#5-B: a HIT whose row went 'closing' cross-process is denied + the stale plane is dropped", async () => {
+  await withTestDb(async (db) => {
+    __clearBareDataPlanes()
+    const { workspaceId, sessionId } = await seedSession(db)
+    const runtimeId = randomUUID()
+    const serviceId = randomUUID()
+    const descriptor = buildLocalBareDescriptor({ isolation: "bwrap" })
+    const minted = await mintBareSandboxRuntimeTx({
+      runtimeId,
+      workspaceId,
+      sessionId,
+      serviceId,
+      adapter: "local",
+      dataPlaneEndpoint: `inprocess:${runtimeId}`,
+      capabilityDescriptor: descriptor as unknown as Record<string, unknown>,
+      exposures: buildBareCoreCatalog(descriptor),
+      executor: db,
+    })
+    const fsIds = minted.assignedIds["builtin/filesystem"]!
+    const fsRead = fsIds.tools["fs_read"]!
+    const root = await makePlaneRoot()
+    const plane: SandboxDataPlane = createLocalBareDataPlane({
+      sandboxRoot: root,
+      descriptor,
+    })
+    registerBareDataPlane(runtimeId, plane)
+    // Simulate a CROSS-PROCESS teardown: another replica flipped the row to
+    // 'closing' WITHOUT touching this process's in-process registry/tombstone. The
+    // in-process close-gate (closingBarePlanes) is empty here, so only the #5-B
+    // persisted-state re-check can catch it.
+    await db
+      .updateTable("sandboxes")
+      .set({ state: "closing" } as never)
+      .where("id", "=", runtimeId)
+      .execute()
+    const res = await dispatchBareRuntimeTool({
+      runtimeId,
+      runtimeServiceId: serviceId,
+      envelope: envelopeFor({
+        exposureId: fsIds.runtime_exposure_id,
+        toolId: fsRead.runtime_tool_id,
+        toolRevisionId: fsRead.runtime_tool_revision_id,
+        capabilityId: randomUUID(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      args: { path: "/conversation/hello.txt" },
+      builtinKind: "filesystem",
+      toolName: "fs_read",
+      grant: fsReadGrant(),
+      run: db,
+      sandboxProvider: "local",
+    })
+    assert.equal(res.ok, false)
+    assert.equal(res.error?.code, "runtime_constraint")
+    assert.match(res.error?.message ?? "", /no longer active|cross-process/)
+    assert.equal(
+      getLiveBareDataPlane(runtimeId),
+      undefined,
+      "the stale local plane is dropped so the next dispatch re-gates via the DB"
+    )
     __clearBareDataPlanes()
   })
 })

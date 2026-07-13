@@ -24,6 +24,7 @@ import type { McpDispatchResult } from "../devices/dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
 import {
   getBareSandboxForDispatch,
+  getBareDispatchLiveness,
   verifyBareDispatchTarget,
   type Executor,
 } from "./repo.js"
@@ -136,11 +137,63 @@ export function clearBareDataPlaneClosing(runtimeId: string): void {
   closingBarePlanes.delete(runtimeId)
 }
 
+// (R4 §3.4 #5-B) short-TTL cross-process HIT re-check. A liveBarePlanes HIT means
+// the plane is live IN THIS PROCESS; the in-process `closingBarePlanes` tombstone
+// only covers a SAME-process teardown. In a ≥2-replica topology (an off-box VM is
+// reachable from any replica), replica-1 can hold a live plane for a runtime
+// replica-2 already tore down — or a periodic reaper flipped the row non-active
+// under this very process. So before dispatching on a HIT, consult a short-TTL
+// cached read of the persisted state / soft-delete; on a non-active signal, treat
+// the HIT as stale → deny (+ drop the local plane). The TTL keeps the common case
+// DB-free; the staleness window is bounded by the TTL.
+const HIT_RECHECK_TTL_MS = 500
+const hitLivenessCache = new Map<string, { live: boolean; expiresAt: number }>()
+
+/** Returns false when the persisted row says this bare runtime is no longer
+ *  dispatchable (missing / soft-deleted / state != 'active'). Cached for a short
+ *  TTL. Fail-OPEN on a read error: the plane is live in-process and a transient DB
+ *  blip must not kill an active dispatch — the same-process tombstone + the MISS-path
+ *  DB gate still fence a real teardown, and a truly-dead VM fails at the envd layer. */
+async function hitStillDispatchable(
+  runtimeId: string,
+  run: Executor | undefined
+): Promise<boolean> {
+  const now = nowMs()
+  const cached = hitLivenessCache.get(runtimeId)
+  if (cached && cached.expiresAt > now) return cached.live
+  let live: boolean
+  try {
+    const st = await getBareDispatchLiveness(runtimeId, run)
+    // Deny only on a TEARDOWN signal — a missing row, a soft-deleted runtime, or a
+    // terminal/closing state (closing/failed/closed). 'provisioning' stays
+    // dispatchable: in prod the plane is registered by create() BEFORE the
+    // active-flip, so a live HIT can legitimately front a provisioning row; only a
+    // teardown/reaper drives it to a non-dispatchable state. (The MISS-path rebuild
+    // gate is stricter — active-only — because a rebuild should only resurrect a
+    // fully-provisioned runtime.)
+    live =
+      !!st &&
+      st.runtimeDeletedAt === null &&
+      (st.state === "active" || st.state === "provisioning")
+  } catch {
+    live = true // fail-open (see doc)
+  }
+  hitLivenessCache.set(runtimeId, { live, expiresAt: now + HIT_RECHECK_TTL_MS })
+  return live
+}
+
+/** Wall-clock now (isolated so tests can note the dependency); Date.now is allowed
+ *  in normal runtime code (only workflow scripts forbid it). */
+function nowMs(): number {
+  return Date.now()
+}
+
 /** Test-only: drop every live plane + fence/tombstone (isolation between tests). */
 export function __clearBareDataPlanes(): void {
   liveBarePlanes.clear()
   bareTeardownGen.clear()
   closingBarePlanes.clear()
+  hitLivenessCache.clear()
 }
 
 /** The per-session sandbox FS root (host-side, under STORAGE_DIR). Exported so a
@@ -278,6 +331,21 @@ export async function dispatchBareRuntimeTool(
   // (1) Resolve the plane. HIT = live; MISS = singleflighted lazy rebuild — the
   // only place the rebuild-on-restart runs (never a registry-first gate).
   let plane = liveBarePlanes.get(input.runtimeId)
+  if (plane) {
+    // (R4 §3.4 #5-B) cross-process HIT re-check — a HIT proves the plane is live in
+    // THIS process, not that the runtime is still active elsewhere. On a stale HIT
+    // (a cross-process teardown / reaper drove the row non-active), drop the local
+    // plane so the next dispatch MISSES → the DB rebuild gate, and deny now.
+    const dispatchable = await hitStillDispatchable(input.runtimeId, input.run)
+    if (!dispatchable) {
+      const stale = unregisterBareDataPlane(input.runtimeId)
+      if (stale) await stale.dispose().catch(() => {})
+      return errResult(
+        "runtime_constraint",
+        `bare sandbox ${input.runtimeId} is no longer active (cross-process teardown)`
+      )
+    }
+  }
   if (!plane) {
     let inflight = inflightBareRebuilds.get(input.runtimeId)
     if (!inflight) {

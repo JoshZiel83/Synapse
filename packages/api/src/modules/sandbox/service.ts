@@ -2610,10 +2610,33 @@ export async function teardownSandbox(
   // BEFORE stopping the writer. Deny same-process bare dispatch (tombstone) +
   // cross-process rebuild (DB 'closing'); satisfy the R3.8 exactly-one-when-active
   // invariant for every write below.
+  // (R4 §3.4 #5 Link A) The fence-lay write is a CAS that must NOT be swallowed: if
+  // it flips 0 rows the row already went terminal (closed/failed) — another teardown
+  // / reaper owns the lifecycle and ALREADY closed this row's mounts (every terminal
+  // transition does) — so BAIL rather than kill+commit under an unset fence. (A
+  // 'closing'→'closing' self-flip returns true, so the closing-retry reaper still
+  // re-drives an in-progress teardown.)
   if (runtimeId) {
-    await repo
-      .updateSandboxRow(runtimeId, { state: "closing" }, run)
-      .catch(() => {})
+    let fenced = false
+    try {
+      fenced = await repo.casFlipSandboxClosing(runtimeId, run)
+    } catch (err) {
+      // A transient DB error leaves the fence state UNKNOWN — do NOT proceed to
+      // kill+commit under an unset fence; bail so the closing reaper / reconcile
+      // re-drives on a later pass.
+      log.error(
+        { sessionId, runtimeId, err },
+        "teardown: close-gate CAS threw — bailing (retry next reaper pass)"
+      )
+      return
+    }
+    if (!fenced) {
+      log.info(
+        { sessionId, runtimeId },
+        "teardown: close-gate CAS flipped 0 rows (already terminal / owned elsewhere) — bailing without kill/commit"
+      )
+      return
+    }
     markBareDataPlaneClosing(runtimeId)
   }
 

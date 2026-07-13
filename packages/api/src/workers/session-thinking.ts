@@ -1323,6 +1323,28 @@ export function startSessionThinkingWorker() {
           // is cleared in the OUTER finally so the fenced renew covers the whole
           // critical section (model + all side-effects), not just actorThink.
           if (sandboxEnabled) {
+            // (R4 §3.4 #5 Link C) commitSpaces SCANS the live tree + APPENDS a
+            // snapshot per space. A worker whose lock lapsed must NOT commit: the
+            // new owner will also scan+append, entangling two turns' snapshots. The
+            // interval-driven `lockLost` flag can be up to TTL/2 stale, so re-fence
+            // with a FRESH renew immediately before the commit and bail on loss —
+            // throwing SessionLockLostError routes to the cooperative-stop catch
+            // (replayUnsafeStarted is still false here → wakeups are RESTORED, so the
+            // new owner redoes the turn's commit exactly once).
+            let holdsLockForCommit = false
+            try {
+              holdsLockForCommit = await renewLock(
+                redis,
+                sessionLock,
+                SESSION_LOCK_TTL
+              )
+            } catch {
+              holdsLockForCommit = false
+            }
+            if (!holdsLockForCommit) {
+              lockLost = true
+              throw new SessionLockLostError(sessionId)
+            }
             try {
               // Skip spaces whose turn-start refresh FAILED: their live tree is
               // half-synced (base unadvanced), so committing now could entangle

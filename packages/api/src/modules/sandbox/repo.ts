@@ -945,6 +945,32 @@ export interface BareSandboxDispatchRow {
   dataPlaneEndpoint: string | null
 }
 
+/**
+ * (R4 §3.4 #5-B) Lightweight cross-process liveness for a bare runtime — ONLY the
+ * sandbox state + the runtime soft-delete flag, no descriptor/creds decode. Feeds
+ * the short-TTL HIT re-check in bare-dispatch so a live in-process plane HIT can't
+ * outlive a cross-process teardown (a ≥2-replica topology an off-box VM enables).
+ */
+export async function getBareDispatchLiveness(
+  runtimeId: string,
+  run: Executor = db
+): Promise<{
+  state: SandboxRow["state"]
+  runtimeDeletedAt: Date | null
+} | null> {
+  const row = await run
+    .selectFrom("sandboxes as sb")
+    .innerJoin("runtimes as r", "r.id", "sb.id")
+    .select(["sb.state", "r.deletedAt as runtimeDeletedAt"])
+    .where("sb.id", "=", runtimeId)
+    .executeTakeFirst()
+  if (!row) return null
+  return {
+    state: row.state as SandboxRow["state"],
+    runtimeDeletedAt: (row.runtimeDeletedAt as Date | null) ?? null,
+  }
+}
+
 export async function getBareSandboxForDispatch(
   runtimeId: string,
   run: Executor = db
