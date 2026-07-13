@@ -588,10 +588,7 @@ function unionWithRuntime(
     let requestedAction
     try {
       // P4a S8: pass builtin_kind STRAIGHT THROUGH to the classifier registry.
-      // pty is now in RUNTIME_AUTHORIZATION_CAPABILITIES and has its own
-      // projector (capability:"pty", gated by ptyPolicyAllows on cwd/isolation),
-      // so the old `pty→null` special-case (which mis-routed pty into the cua
-      // generic shape) is DROPPED. A NULL builtin_kind (device-proxied
+      // A NULL builtin_kind (device-proxied
       // non-builtin exposure) has NO registered projector: its explicit
       // `case null` FAILS CLOSED (throws UnregisteredBuiltinKindError →
       // permission_denied) rather than mis-routing into the cua grant matcher
@@ -1376,13 +1373,12 @@ function principalKindFor(principal: RuntimePrincipal): OperationPrincipalKind {
 export function buildRequestedAction(args: {
   /**
    * The dispatched exposure's `builtin_kind` (a builtin_kind-keyed classifier
-   * registry, P4a S8). The four device builtins project identically to before;
-   * `pty` gets its own projector (was previously mis-routed pty→null→cua); a
+   * registry, P4a S8). The four device builtins project identically to before; a
    * NULL kind (device-proxied non-builtin/stdio exposure) has an explicit
    * cua-preserving projector; a genuinely-unknown non-null kind fail-closes via
    * UnregisteredBuiltinKindError.
    */
-  capability: "filesystem" | "commandline" | "browser" | "cua" | "pty" | null
+  capability: "filesystem" | "commandline" | "browser" | "cua" | null
   toolName: string
   /** The unnamespaced tool name as the device exposes it (e.g. "bash",
    *  "cua_click"). Used to distinguish read vs write at the tool level. */
@@ -1689,27 +1685,6 @@ export function buildRequestedAction(args: {
         "null builtin_kind (non-builtin proxied exposure) has no registered projector",
         { reason: "null_builtin_kind_not_registered" }
       )
-    case "pty":
-      // NEW pty projector (P4a S8). A pty builtin_kind produces a capability:
-      // "pty" action gated by ptyPolicyAllows on cwd/isolation ONLY — command/
-      // byte content is NEVER routed into a command-text matcher (that would be
-      // fail-OPEN: a narrow command grant would become a full interactive
-      // shell). The capability-equality guard makes a commandline/sandbox grant
-      // structurally unable to cover pty.open. This REPLACES the prior pty→null→
-      // cua mis-routing (the `row.builtinKind === "pty" ? null` call-site special
-      // case is dropped). pty is TEST-ONLY in P4a (no production pty exposure).
-      return {
-        capability: "pty",
-        toolName: args.toolName,
-        summary,
-        detail,
-        pty: {
-          workingDirectory:
-            typeof args.args["working_directory"] === "string"
-              ? (args.args["working_directory"] as string)
-              : "/conversation",
-        },
-      }
     default:
       // Genuinely-unknown NON-NULL builtin_kind (a future
       // runtime_exposures_builtin_kind enum value this classifier hasn't been

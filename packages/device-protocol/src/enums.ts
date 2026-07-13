@@ -56,7 +56,6 @@ export const RUNTIME_BUILTIN_KINDS = [
   "commandline",
   "browser",
   "cua",
-  "pty",
 ] as const
 export type RuntimeBuiltinKind = (typeof RUNTIME_BUILTIN_KINDS)[number]
 

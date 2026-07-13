@@ -1,6 +1,6 @@
 // Golden-drift (F-D): the api-authored bare catalog is the descriptor-gated
-// subset actually backed by a device builtin — no dead/unbacked tool, and NO pty
-// in P4a. The filesystem tool DEFS derive from the resident builtin's TOOLS[]
+// subset actually backed by a device builtin — no dead/unbacked tool.
+// The filesystem tool DEFS derive from the resident builtin's TOOLS[]
 // (filesystemCoreToolDefs), but the BARE catalog is a documented REDUCED-FIDELITY
 // surface: params the bare data plane ignores are stripped and fs_search is gated
 // on ripgrep. This file asserts BOTH the schema shape (subset-of-device) AND the
@@ -97,19 +97,12 @@ async function makeBarePlaneCore(
   return { plane, writeCtx: { scope: WHOLE_SCOPE, access: "write" } }
 }
 
-test("F-D: the bare catalog exposes NO pty (production) and is descriptor-gated", () => {
+test("F-D: the bare catalog is descriptor-gated", () => {
   const withBwrap = buildBareCoreCatalog(
     buildLocalBareDescriptor({ isolation: "bwrap" })
   )
   const kinds = withBwrap.map((e) => e.builtin_kind)
   assert.deepEqual([...kinds].sort(), ["commandline", "filesystem"])
-  assert.ok(!kinds.includes("pty" as never), "no pty exposure (F-D)")
-  // No exposure or tool anywhere is pty-flavored.
-  for (const exp of withBwrap) {
-    for (const t of exp.tools) {
-      assert.ok(!/pty/i.test(t.name), `no pty tool: ${t.name}`)
-    }
-  }
 
   // isolation:null → filesystem ONLY (no commandline; fail-closed).
   const noBwrap = buildBareCoreCatalog(

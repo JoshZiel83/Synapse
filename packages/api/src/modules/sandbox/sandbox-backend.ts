@@ -8,7 +8,7 @@
 // SCOPE: this abstracts the LIFECYCLE layer only (stand up / tear down a
 // sandbox runtime + expose a port). The DATA PLANE (filesystem + commands)
 // stays on Synapse's device-runtime MCP builtins reached via the frp tunnel +
-// dispatchSyncTool — it is NOT modeled here (no commands/files/pty).
+// dispatchSyncTool — it is NOT modeled here (no commands/files).
 //
 // Two backends implement this:
 //   - local  → adapts the existing two-phase HostProvider (pair + run as a

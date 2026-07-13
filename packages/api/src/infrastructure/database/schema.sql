@@ -211,7 +211,7 @@ CREATE TYPE runtime_control_plane_sessions_transport AS ENUM ('websocket');
 CREATE TYPE runtime_pairing_sessions_mode AS ENUM ('local_qr', 'cloud_bootstrap');
 CREATE TYPE runtime_pairing_sessions_status AS ENUM ('pending', 'confirmed', 'consumed', 'expired', 'cancelled', 'rejected');
 CREATE TYPE runtime_exposures_transport AS ENUM ('builtin', 'stdio', 'http', 'sse', 'custom');
-CREATE TYPE runtime_exposures_builtin_kind AS ENUM ('filesystem', 'commandline', 'browser', 'cua', 'pty');
+CREATE TYPE runtime_exposures_builtin_kind AS ENUM ('filesystem', 'commandline', 'browser', 'cua');
 CREATE TYPE runtime_exposures_runtime_status AS ENUM (
   'discovered', 'healthy', 'degraded', 'failed', 'quarantined', 'offline'
 );
@@ -238,7 +238,7 @@ CREATE TYPE runtime_session_services_status AS ENUM ('open', 'closed');
 -- root for the whole runtime (details inherit liveness via sd_fk_live_*_id).
 CREATE TYPE runtimes_kind   AS ENUM ('device', 'sandbox');
 CREATE TYPE sandboxes_mode  AS ENUM ('resident', 'bare');
-CREATE TYPE sandboxes_state AS ENUM ('provisioning', 'active', 'committing', 'closing', 'closed', 'failed');
+CREATE TYPE sandboxes_state AS ENUM ('provisioning', 'active', 'closing', 'closed', 'failed');
 
 -- ============ Users ============
 -- Account/identity model is provided by Better Auth (better-auth@1.6.13). The
@@ -3778,6 +3778,12 @@ CREATE TABLE sandboxes (
   capability_descriptor JSONB NOT NULL DEFAULT '{}',
   stash_manifest_id UUID,
   data_plane_cert_fingerprint TEXT,
+  -- R4 #6: off-box data-plane credentials, AES-256-GCM envelope (nonce‖ct‖tag,
+  -- base64; AAD bound to sandboxId(‖workspaceId)). Nullable, no CHECK: NULL for
+  -- host-side/resident adapters and any adapter whose meta.credentialed=false.
+  -- The decrypt-at-repo-exit wiring lands in a later phase; Phase 0 adds the
+  -- column + generated type only.
+  data_plane_credentials_encrypted TEXT,
   -- Runtime platform facts for the capability projection's bundle/OS-guard logic.
   -- local adapter: the API host's process.platform/process.arch; docker: 'linux' +
   -- the container's declared arch; off-box (E2B/Cube): provider-declared. R3.P2d:
@@ -3798,6 +3804,15 @@ CREATE TABLE sandboxes (
   UNIQUE (id, workspace_id)
 );
 CREATE INDEX idx_sandboxes_reconcile ON sandboxes(adapter, state) WHERE state NOT IN ('closed', 'failed');
+-- R4 #4 (F3-corrected): at most ONE live (provisioning|active) sandbox per session.
+-- The predicate is IN ('provisioning','active') — NOT NOT-IN('closed','failed') —
+-- so a single 'closing' straggler (the R3.4-shield / pull-failure transient) can
+-- coexist with a fresh provision without wedging re-provision. Wrong-sandbox kill
+-- is prevented by the explicit-runtimeId teardown (the closing reaper tears down
+-- the specific runtimes.id it found), and a genuinely-stuck 'closing' row is
+-- force-'failed' by the closing reaper after a bounded grace.
+CREATE UNIQUE INDEX uq_sandboxes_live_session ON sandboxes(session_id)
+  WHERE session_id IS NOT NULL AND state IN ('provisioning', 'active');
 -- R3.P2b: TTL-reap sweep index — sandboxes stuck in 'provisioning' past deadline_at.
 CREATE INDEX idx_sandboxes_reap ON sandboxes(state, deadline_at) WHERE state = 'provisioning';
 
@@ -4744,10 +4759,15 @@ DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION validate_runtime_detail_consistency();
 
--- remote_agent_daemon kind guard: after the substrate re-key there is no devices
--- FK on runtime_services, so a runtime-scoped constraint trigger enforces that a
--- remote_agent_daemon service only attaches to a device-kind runtime. Deferred so
--- the runtimes row may be created within the same tx as the service.
+-- runtime kind <-> service_kind guard: after the substrate re-key there is no
+-- devices FK on runtime_services, so a runtime-scoped constraint trigger enforces
+-- the kind<->service matrix. Deferred so the runtimes row may be created within
+-- the same tx as the service. R4 #8 HOLE-2 fix: the guard now covers BOTH
+-- directions of the sandbox/device split — remote_agent_daemon requires a
+-- device-kind runtime, and bare_dataplane requires a sandbox-kind runtime (a
+-- device runtime holding a bare_dataplane service used to commit). device_runtime
+-- stays legal on both device and sandbox runtimes. INSERT/UPDATE-only ⇒ NEW is
+-- always present (safe to reference NEW.service_kind/NEW.runtime_id).
 CREATE OR REPLACE FUNCTION validate_runtime_service_kind_guard()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -4760,6 +4780,14 @@ BEGIN
     IF v_runtime_kind IS DISTINCT FROM 'device' THEN
       RAISE EXCEPTION
         'runtime_services.service_kind=remote_agent_daemon requires runtimes.kind=device (runtime % kind=%)',
+        NEW.runtime_id, v_runtime_kind
+        USING ERRCODE = '23514', CONSTRAINT = 'runtime_services_daemon_kind_chk';
+    END IF;
+  ELSIF NEW.service_kind = 'bare_dataplane' THEN
+    SELECT kind INTO v_runtime_kind FROM runtimes WHERE id = NEW.runtime_id;
+    IF v_runtime_kind IS DISTINCT FROM 'sandbox' THEN
+      RAISE EXCEPTION
+        'runtime_services.service_kind=bare_dataplane requires runtimes.kind=sandbox (runtime % kind=%)',
         NEW.runtime_id, v_runtime_kind
         USING ERRCODE = '23514', CONSTRAINT = 'runtime_services_daemon_kind_chk';
     END IF;
@@ -4788,12 +4816,17 @@ EXECUTE FUNCTION validate_runtime_service_kind_guard();
 -- EXACTLY-ONE requirement applies ONLY to state='active': provisioning has not
 -- minted the service yet, and terminal (closed/failed/closing) states may have
 -- detached it during teardown.
-CREATE OR REPLACE FUNCTION validate_sandbox_mode_service_kind()
-RETURNS TRIGGER
+-- R4 #8 (F9) helper: the per-runtime assertion body, extracted VERBATIM so both
+-- endpoints of an UPDATE-move can be re-validated. Resolves the FINAL committed
+-- runtime kind + sandbox mode/state + ALL of the runtime's services by runtime_id
+-- (snapshot-independent, R3.8). Exempt: non-sandbox / soft-deleted runtimes and
+-- an absent sandboxes row. v_wrong>0 always rejects; the EXACTLY-ONE requirement
+-- applies ONLY to state='active'.
+CREATE OR REPLACE FUNCTION assert_sandbox_mode_service_kind(p_runtime_id UUID)
+RETURNS VOID
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_runtime_id UUID;
   v_kind runtimes_kind;
   v_mode sandboxes_mode;
   v_state sandboxes_state;
@@ -4801,17 +4834,12 @@ DECLARE
   v_ok INT;
   v_wrong INT;
 BEGIN
-  IF TG_TABLE_NAME = 'runtime_services' THEN
-    v_runtime_id := COALESCE(NEW.runtime_id, OLD.runtime_id);
-  ELSE
-    v_runtime_id := COALESCE(NEW.id, OLD.id);
-  END IF;
-  IF v_runtime_id IS NULL THEN RETURN NULL; END IF;
+  IF p_runtime_id IS NULL THEN RETURN; END IF;
 
-  SELECT kind INTO v_kind FROM runtimes WHERE id = v_runtime_id AND deleted_at IS NULL;
-  IF v_kind IS DISTINCT FROM 'sandbox' THEN RETURN NULL; END IF;
-  SELECT mode, state INTO v_mode, v_state FROM sandboxes WHERE id = v_runtime_id;
-  IF v_mode IS NULL THEN RETURN NULL; END IF;
+  SELECT kind INTO v_kind FROM runtimes WHERE id = p_runtime_id AND deleted_at IS NULL;
+  IF v_kind IS DISTINCT FROM 'sandbox' THEN RETURN; END IF;
+  SELECT mode, state INTO v_mode, v_state FROM sandboxes WHERE id = p_runtime_id;
+  IF v_mode IS NULL THEN RETURN; END IF;
 
   v_required := CASE v_mode WHEN 'resident' THEN 'device_runtime'::runtime_services_service_kind
                             ELSE 'bare_dataplane'::runtime_services_service_kind END;
@@ -4819,22 +4847,44 @@ BEGIN
   SELECT COUNT(*) FILTER (WHERE service_kind = v_required),
          COUNT(*) FILTER (WHERE service_kind IS DISTINCT FROM v_required)
     INTO v_ok, v_wrong
-    FROM runtime_services WHERE runtime_id = v_runtime_id;
+    FROM runtime_services WHERE runtime_id = p_runtime_id;
 
   IF v_wrong > 0 THEN
     RAISE EXCEPTION
       'sandbox % (mode=%) has % runtime_services of the wrong service_kind (required %)',
-      v_runtime_id, v_mode, v_wrong, v_required
+      p_runtime_id, v_mode, v_wrong, v_required
       USING ERRCODE = '23514', CONSTRAINT = 'sandbox_mode_service_kind_chk';
   END IF;
 
   IF v_state = 'active' AND v_ok <> 1 THEN
     RAISE EXCEPTION
       'active sandbox % (mode=%) must have exactly one % service (has %)',
-      v_runtime_id, v_mode, v_required, v_ok
+      p_runtime_id, v_mode, v_required, v_ok
       USING ERRCODE = '23514', CONSTRAINT = 'sandbox_mode_service_kind_chk';
   END IF;
+END;
+$$;
 
+-- R4 #8 (F9) HOLE-1 fix: an UPDATE that moves a service A->B must re-validate the
+-- SOURCE runtime A too (it may be left illegal: active + 0 services). The old body
+-- resolved a single runtime via COALESCE(NEW,OLD) so a move validated only B. Now,
+-- for a runtime_services move, we assert BOTH endpoints. The TG_TABLE_NAME guard
+-- MUST stay: this function ALSO backs the sandboxes trigger (which has no
+-- runtime_id column — referencing NEW.runtime_id there raises "record new has no
+-- field runtime_id"). The DELETE arm still re-checks OLD via the COALESCE.
+CREATE OR REPLACE FUNCTION validate_sandbox_mode_service_kind()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_TABLE_NAME = 'runtime_services' THEN
+    PERFORM assert_sandbox_mode_service_kind(COALESCE(NEW.runtime_id, OLD.runtime_id));
+    IF TG_OP = 'UPDATE' AND NEW.runtime_id IS DISTINCT FROM OLD.runtime_id THEN
+      PERFORM assert_sandbox_mode_service_kind(OLD.runtime_id);
+    END IF;
+  ELSE
+    PERFORM assert_sandbox_mode_service_kind(COALESCE(NEW.id, OLD.id));
+  END IF;
   RETURN NULL;
 END;
 $$;

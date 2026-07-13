@@ -48,7 +48,7 @@ export interface RuntimeCapabilityToolRow {
   runtimeToolRevisionId: string
   catalogRevisionId: string
   transport: "builtin" | "stdio" | "http" | "sse" | "custom"
-  builtinKind: "filesystem" | "commandline" | "browser" | "cua" | "pty" | null
+  builtinKind: "filesystem" | "commandline" | "browser" | "cua" | null
   visibleToolName: string
   visibleDescription: string
   inputSchema: unknown

@@ -7,7 +7,6 @@ import {
   filesystemPolicyAllows as sharedFilesystemPolicyAllows,
   commandlinePolicyAllows as sharedCommandlinePolicyAllows,
   cuaPolicyAllows as sharedCuaPolicyAllows,
-  ptyPolicyAllows as sharedPtyPolicyAllows,
   browserPolicyAllows as sharedBrowserPolicyAllows,
   SUBJECT_KIND,
   workspaceRef,
@@ -372,21 +371,6 @@ export class ProgramOnlyGrantNotAllowedError extends Error {
   }
 }
 
-// R3.P2e-pty: pty is published through the builtin_kind enum + the
-// capability/policy/projector/matcher layers, but it is UNROUTABLE end-to-end —
-// normalizeGrantSpecForInsert drops its payload (a persisted pty grant reads
-// back corrupt and denies) and toRuntimeAuthorizationGrantWireSpec throws on it.
-// Owner decision (interim, NO DDL — pty stays in the enum pending a routing
-// decision): keep pty reserved/inert but FAIL LOUD at grant creation instead of
-// silently persisting a corrupt grant. Callers map this to HTTP 400.
-export class PtyCapabilityNotSupportedError extends Error {
-  readonly code = "pty_not_supported" as const
-  constructor() {
-    super("pty capability is not yet routable end-to-end")
-    this.name = "PtyCapabilityNotSupportedError"
-  }
-}
-
 export async function createRuntimeAuthorizationGrant(
   params: CreateRuntimeAuthorizationGrantParams,
   executor?: Executor
@@ -403,11 +387,6 @@ export async function createRuntimeAuthorizationGrant(
   const parsedPolicy = GrantPolicySchema.parse(
     params.policy
   ) as SharedRuntimeAuthorizationGrantSpec
-  // R3.P2e-pty: reject a pty grant BEFORE any normalization/persistence — see
-  // PtyCapabilityNotSupportedError above.
-  if (parsedPolicy.capability === "pty") {
-    throw new PtyCapabilityNotSupportedError()
-  }
   if (parsedPolicy.browser) {
     parsedPolicy.browser = normalizeBrowserGrantPolicy(parsedPolicy.browser)
   }
@@ -783,26 +762,6 @@ function grantSpecCoversAction(
         : browserPolicyMatches(grant, requestedAction)
     case "commandline":
       return commandlinePolicyMatches(grant, requestedAction, opts)
-    case "pty":
-      // pty (P4a S8): cwd/isolation-ONLY match — the pty policy carries no
-      // command/argv/byte matcher, so a `pty.open` action is covered iff its cwd
-      // resolves within the sandbox mount points (and the grant's optional
-      // narrower workingDirectory cap). `pty.write`/resize/signal/stream/close
-      // reference the open session id and are NEVER re-matched. The
-      // capability-equality guard above already prevents a commandline/sandbox
-      // grant from reaching this case, so pty bytes can never be gated by (and
-      // thus widen) a command-text grant — the fail-open class this closes.
-      return Boolean(
-        grant.pty &&
-        requestedAction.pty &&
-        sharedPtyPolicyAllows(
-          { workingDirectory: grant.pty.workingDirectory },
-          {
-            cwd: requestedAction.pty.workingDirectory,
-            platform: opts.platform,
-          }
-        )
-      )
     default:
       return false
   }
@@ -891,17 +850,6 @@ function subjectTierOf(subjectKind: string): number {
 export function toRuntimeAuthorizationGrantWireSpec(
   record: RuntimeAuthorizationGrantRecord
 ): import("@synapse/device-protocol").RuntimeAuthorizationGrantWireSpec {
-  // pty is a bare-plane-only, TEST-ONLY capability in P4a (F-D): there is no
-  // production pty exposure, no device-runtime pty builtin, and the device
-  // wire-envelope grant schema (RuntimeAuthorizationGrantSpecSchema) has no pty
-  // branch — a pty grant is never dispatched over the wire. Guard here so a pty
-  // record can never be silently serialized into an envelope, and so the
-  // capability union narrows to the 4 wire-valid kinds below.
-  if (record.capability === "pty") {
-    throw new Error(
-      "pty grants are not wire-serializable in P4a (bare-plane test-only capability)"
-    )
-  }
   return {
     capability: record.capability,
     filesystem: record.filesystem

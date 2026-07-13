@@ -45,7 +45,6 @@ function descriptor(
       mkdir: true,
       move: true,
       remove: true,
-      pty: false,
       maxReadBytes: 1024 * 1024,
       maxWriteBytes: 1024 * 1024,
       maxConcurrentExec: 2,

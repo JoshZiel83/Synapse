@@ -162,8 +162,8 @@ const LOCAL_BARE_CAPS = {
 } as const
 
 /** Host-probe the local:bare descriptor at create(): isolation (bwrap) + search
- *  (ripgrep). NEVER pty (F-D). isolation:null ⇒ no commandline exposure/grant and
- *  the plane's exec fail-closes (three fail-closed layers). */
+ *  (ripgrep). isolation:null ⇒ no commandline exposure/grant and the plane's exec
+ *  fail-closes (three fail-closed layers). */
 export function buildLocalBareDescriptor(overrides?: {
   isolation?: SandboxCapabilityDescriptor["isolation"]
   search?: boolean
@@ -187,7 +187,6 @@ export function buildLocalBareDescriptor(overrides?: {
       mkdir: true,
       move: true,
       remove: true,
-      pty: false,
       maxReadBytes: LOCAL_BARE_CAPS.maxReadBytes,
       maxWriteBytes: LOCAL_BARE_CAPS.maxWriteBytes,
       maxConcurrentExec: LOCAL_BARE_CAPS.maxConcurrentExec,
@@ -410,7 +409,7 @@ export function dockerBareOptionsFromEnv(): DockerBareRunOptions {
 
 /** docker:bare descriptor. isolation:'container' — the hardened container IS the
  *  jail (exec runs in-container via `docker exec`); confinedFs:'native' — fs ops
- *  are HOST-SIDE realpath-confined. NEVER pty (F-D). */
+ *  are HOST-SIDE realpath-confined. */
 export function buildDockerBareDescriptor(overrides?: {
   search?: boolean
   egress?: "none" | "named"
@@ -431,7 +430,6 @@ export function buildDockerBareDescriptor(overrides?: {
       mkdir: true,
       move: true,
       remove: true,
-      pty: false,
       maxReadBytes: DOCKER_BARE_CAPS.maxReadBytes,
       maxWriteBytes: DOCKER_BARE_CAPS.maxWriteBytes,
       maxConcurrentExec: DOCKER_BARE_CAPS.maxConcurrentExec,

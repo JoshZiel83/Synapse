@@ -227,7 +227,7 @@ export type RuntimeEventsLevel = "debug" | "error" | "info" | "warn";
 
 export type RuntimeEventsSource = "conversation" | "device" | "provider" | "system" | "tool";
 
-export type RuntimeExposuresBuiltinKind = "browser" | "commandline" | "cua" | "filesystem" | "pty";
+export type RuntimeExposuresBuiltinKind = "browser" | "commandline" | "cua" | "filesystem";
 
 export type RuntimeExposuresRuntimeStatus = "degraded" | "discovered" | "failed" | "healthy" | "offline" | "quarantined";
 
@@ -263,7 +263,7 @@ export type RuntimeToolsStatus = "active" | "hidden" | "removed";
 
 export type SandboxesMode = "bare" | "resident";
 
-export type SandboxesState = "active" | "closed" | "closing" | "committing" | "failed" | "provisioning";
+export type SandboxesState = "active" | "closed" | "closing" | "failed" | "provisioning";
 
 export type SessionInterruptsType = "remote_control_terminated";
 
@@ -2369,6 +2369,7 @@ export interface Sandboxes {
   capabilityDescriptor: Generated<Json>;
   createdAt: Generated<Date>;
   dataPlaneCertFingerprint: string | null;
+  dataPlaneCredentialsEncrypted: string | null;
   deadlineAt: Date | null;
   errorMessage: string | null;
   hostPid: number | null;
@@ -2391,6 +2392,7 @@ export interface SandboxesLive {
   capabilityDescriptor: Json | null;
   createdAt: Date | null;
   dataPlaneCertFingerprint: string | null;
+  dataPlaneCredentialsEncrypted: string | null;
   deadlineAt: Date | null;
   errorMessage: string | null;
   hostPid: number | null;

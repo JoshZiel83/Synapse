@@ -156,7 +156,7 @@ const EXEC_FILE_TOOL: RuntimeCatalogTool = {
  * (§4.3 / F-D). Exported as the SINGLE source of truth so the static catalog and
  * the device builtin's describeExposures() cannot drift — the golden-drift test
  * asserts equivalence. Linux bare adapters expose bash + exec_file (no
- * powershell). pty is NOT here (no device-runtime pty builtin exists in P4a).
+ * powershell).
  */
 export const COMMANDLINE_CORE_TOOL_DEFS: readonly RuntimeCatalogTool[] = [
   BASH_TOOL,

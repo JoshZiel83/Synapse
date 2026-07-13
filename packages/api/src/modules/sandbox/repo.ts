@@ -610,13 +610,7 @@ export interface SandboxRow {
   sessionId: string | null
   mode: "resident" | "bare"
   adapter: string
-  state:
-    | "provisioning"
-    | "active"
-    | "committing"
-    | "closing"
-    | "closed"
-    | "failed"
+  state: "provisioning" | "active" | "closing" | "closed" | "failed"
   resourceId: string | null
   hostPid: number | null
   /**
@@ -629,6 +623,9 @@ export interface SandboxRow {
   pairingSessionId: string | null
 }
 
+// R4 #6: data_plane_credentials_encrypted is SELECTed so the sandbox read surface
+// carries the AES-256-GCM envelope. Decrypt-at-repo-exit (surfacing it on
+// SandboxRow) is a LATER phase — Phase 0 only lands the column + generated type.
 const SANDBOX_ROW_COLUMNS = [
   "id",
   "workspaceId",
@@ -640,6 +637,7 @@ const SANDBOX_ROW_COLUMNS = [
   "hostPid",
   "hostPidIdentity",
   "pairingSessionId",
+  "dataPlaneCredentialsEncrypted",
 ] as const
 
 const SANDBOX_ROW_COLUMNS_PREFIXED = [
@@ -653,6 +651,7 @@ const SANDBOX_ROW_COLUMNS_PREFIXED = [
   "sb.hostPid",
   "sb.hostPidIdentity",
   "sb.pairingSessionId",
+  "sb.dataPlaneCredentialsEncrypted",
 ] as const
 
 function toSandboxRow(row: Record<string, unknown>): SandboxRow {

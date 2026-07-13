@@ -30,7 +30,6 @@ import { appRoute } from "../../infrastructure/http/route.js"
 import {
   createRuntimeAuthorizationGrant,
   ProgramOnlyGrantNotAllowedError,
-  PtyCapabilityNotSupportedError,
 } from "./service.js"
 import { findRuntimeCapabilityGrantTarget } from "./repo.js"
 
@@ -189,13 +188,6 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           reply.status(400).send({
             code: "program_only_not_in_available_clis",
             program: err.program,
-            message: err.message,
-          })
-          return
-        }
-        if (err instanceof PtyCapabilityNotSupportedError) {
-          reply.status(400).send({
-            code: err.code,
             message: err.message,
           })
           return

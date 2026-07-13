@@ -64,8 +64,6 @@ export interface SandboxCapabilityDescriptor {
     mkdir: boolean
     move: boolean
     remove: boolean
-    /** pty is machinery-only in P4a — NEVER true in the production catalog (F-D). */
-    pty: boolean
     /** Whole-file read cap (bytes). */
     maxReadBytes: number
     /** Oversized-write reject-before-hash cap (bytes). */
@@ -113,7 +111,6 @@ export const SandboxCapabilityDescriptorSchema = z.object({
     mkdir: z.boolean(),
     move: z.boolean(),
     remove: z.boolean(),
-    pty: z.boolean(),
     maxReadBytes: z.number().int().nonnegative(),
     maxWriteBytes: z.number().int().nonnegative(),
     maxConcurrentExec: z.number().int().nonnegative(),
@@ -184,7 +181,6 @@ export function buildCubesandboxBareDescriptor(): SandboxCapabilityDescriptor {
       mkdir: true,
       move: true,
       remove: true,
-      pty: false,
       maxReadBytes: CUBESANDBOX_BARE_CAPS.maxReadBytes,
       maxWriteBytes: CUBESANDBOX_BARE_CAPS.maxWriteBytes,
       maxConcurrentExec: CUBESANDBOX_BARE_CAPS.maxConcurrentExec,

@@ -134,7 +134,7 @@ function envelopeFor(args: {
   } as unknown as OperationEnvelope
 }
 
-test("B1/B2: mintBareSandboxRuntimeTx mints mode=bare + bare_dataplane (NO keypair) and persists the descriptor-gated api-authored catalog (no pty)", async () => {
+test("B1/B2: mintBareSandboxRuntimeTx mints mode=bare + bare_dataplane (NO keypair) and persists the descriptor-gated api-authored catalog", async () => {
   await withTestDb(async (db) => {
     const { workspaceId, sessionId } = await seedSession(db)
     const runtimeId = randomUUID()
@@ -184,7 +184,7 @@ test("B1/B2: mintBareSandboxRuntimeTx mints mode=bare + bare_dataplane (NO keypa
       .execute()
     assert.equal(keys.length, 0, "bare sandbox mints NO service keypair")
 
-    // B2: catalog persisted; descriptor-gated (filesystem + commandline; NO pty).
+    // B2: catalog persisted; descriptor-gated (filesystem + commandline).
     const exps = await db
       .selectFrom("runtimeExposures")
       .select(["builtinKind", "runtimeStatus"])
@@ -192,7 +192,6 @@ test("B1/B2: mintBareSandboxRuntimeTx mints mode=bare + bare_dataplane (NO keypa
       .execute()
     const kinds = exps.map((e) => e.builtinKind).sort()
     assert.deepEqual(kinds, ["commandline", "filesystem"])
-    assert.ok(!kinds.includes("pty" as never), "NO pty exposure (F-D)")
     assert.ok(exps.every((e) => e.runtimeStatus === "healthy"))
 
     // assignedIds surfaced for the fork's target-id check.

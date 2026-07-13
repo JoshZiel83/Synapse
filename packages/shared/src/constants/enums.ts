@@ -1113,14 +1113,6 @@ export const RUNTIME_AUTHORIZATION_CAPABILITIES = [
   "cua",
   "browser",
   "commandline",
-  // pty (interactive terminal) is a DISTINCT capability family (§5 / P4a S8):
-  // `pty.open` is gated on cwd/isolation ONLY (ptyPolicyAllows) and a
-  // commandline/sandbox grant can NEVER cover it (the capability-equality guard
-  // short-circuits first). Grant `policy` is JSONB with no DB enum/CHECK, so
-  // this is a TS+zod-only addition (ZERO DDL). P4a keeps pty machinery TEST-ONLY
-  // — no device-runtime pty builtin exists yet, so the production api-authored
-  // catalog never exposes it (F-D).
-  "pty",
 ] as const
 export const RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES = [
   "read",

@@ -9,9 +9,7 @@
 //   - `commandline` ONLY when `descriptor.isolation != null` (bwrap present).
 //     When bwrap is absent the exposure is omitted → no commandline grant is
 //     minted → the plane's `exec` also fail-closes. Three fail-closed layers.
-//   - `pty` — NEVER exposed in P4a (F-D): no device-runtime pty builtin exists,
-//     so a pty exposure would be unbacked/unauthorizable. pty machinery is proven
-//     only via a TEST-ONLY fixture (S8), never this production catalog.
+//     (pty was removed entirely in R4 — no capability, no exposure, no builtin.)
 //
 // The projection surfaces any healthy/degraded exposure, so an unbacked exposure
 // would be a visible, unauthorizable dead tool — the descriptor gate is exactly
@@ -179,7 +177,7 @@ export const BARE_COMMANDLINE_EXPOSURE_KEY = "builtin/commandline"
 /**
  * Build the descriptor-gated exposure set the bare adapter hands to
  * persistCatalogSync. `filesystem` always; `commandline` iff bwrap isolation is
- * available; NEVER pty. runtimeStatus is set by persistCatalogSync ('healthy').
+ * available. runtimeStatus is set by persistCatalogSync ('healthy').
  */
 export function buildBareCoreCatalog(
   descriptor: SandboxCapabilityDescriptor
@@ -232,6 +230,5 @@ export function buildBareCoreCatalog(
       tools: COMMANDLINE_CORE_TOOL_DEFS.map(applyBareDescription),
     })
   }
-  // NO pty exposure in P4a (F-D).
   return exposures
 }

@@ -15,7 +15,6 @@ export {
   commandlinePolicyAllows,
   cuaPolicyAllows,
   browserPolicyAllows,
-  ptyPolicyAllows,
   normalizePathPrefix,
   normalizeCommandText,
   hasCompoundShellOperators,
@@ -33,7 +32,6 @@ export type {
   NormalizedCommandlinePolicy,
   CuaPolicyShape,
   BrowserPolicyShape,
-  PtyPolicyShape,
 } from "./access/policies/matchers.js"
 export {
   BUNDLE_ELIGIBLE_PROGRAMS,
