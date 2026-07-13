@@ -8,9 +8,9 @@
 // (machine-enforced by adapter-registry-fail-closed.test.ts): every BARE adapter
 // is host-side (capabilities.confinedFs==='native') — that is what makes the
 // current host-dir materialize/commit-scan + host-side endpoint fork valid. The
-// first OFF-BOX (e2b/cube, confinedFs:'unsupported') adapter will TRIP that guard,
-// forcing the adapter.rebuildDataPlane + off-box working-set seam to be built and
-// VALIDATED alongside it in P4b (it cannot be validated today without an account).
+// first OFF-BOX adapter (cubesandbox:bare, confinedFs:'unsupported') TRIPS that
+// guard, which is why the adapter.rebuildDataPlane + off-box working-set seam are
+// built + VALIDATED alongside it (R4). e2b remains a residual/unregistered example.
 //
 // F-A (preserved): a docker adapter's teardown/liveness/reconnect NEVER forces
 // the provision config to evaluate. `create()` (provision) is backed by
@@ -253,7 +253,8 @@ function metaFor(
 
 /** Build the docker backend options from the validated config.sandbox namespace.
  *  (Relocated from service.ts so the registry can build the LAZY provision backend
- *  without a value cycle; service.ts re-exports it for compatibility.) */
+ *  without a value cycle. Consumed HERE only — the docker:resident factory below;
+ *  service.ts no longer imports it.) */
 export function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
   const dk = config.sandbox.docker
   const tunnel: "frp" = "frp"
@@ -986,7 +987,7 @@ let warnedNullResolve = false
  * provision resolver (resolveSandboxAdapter) and the persisted-row resolver
  * (adapterForRow) consume it, so the 4-key adapter set is declared ONCE and the
  * fail-closed default falls out of a single lookup — there is no second switch
- * to drift. e2b/cube (residual) stay UNregistered in P4a; a miss is the
+ * to drift. cubesandbox:bare IS registered (R4); e2b (residual) stays UNregistered; a miss is the
  * fail-closed case both consumers key off of.
  */
 interface AdapterFactoryDeps {
@@ -1042,7 +1043,7 @@ export function resolveSandboxAdapter(
   const key = `${provider}:${mode}`
   const factory = ADAPTER_FACTORIES[key]
   if (factory) return factory(deps)
-  // e2b/cube (residual) are NOT registered in P4a.
+  // e2b (residual) is NOT registered; cubesandbox:bare IS (R4). An unknown tag denies.
   if (provider !== "none" && !warnedNullResolve) {
     warnedNullResolve = true
     log.warn(

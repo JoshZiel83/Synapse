@@ -309,12 +309,34 @@ export async function consumeCloudBootstrapTx(args: {
       // capability_descriptor come from the pairing context (set at
       // createCloudDevicePairing). assert_runtime_detail_consistency (DEFERRED)
       // is satisfied: exactly one sandboxes detail for this runtime. ──
-      const adapter = (context["adapter"] as string | null) ?? "docker"
-      const mode = (context["mode"] as string | null) ?? "resident"
-      const sandboxSessionId = (context["session_id"] as string | null) ?? null
+      // (R4 #10.3) FAIL-CLOSED on a corrupt sandbox pairing context. The docker
+      // sandbox backend ALWAYS writes a non-empty adapter + a valid mode
+      // (docker-sandbox-backend.ts create() → createCloudDevicePairing). A missing
+      // or invalid one means the pairing was authored wrong — mint NOTHING rather
+      // than SILENTLY defaulting to a docker/resident identity that may not match
+      // the real substrate (the old `?? "docker"/"resident"` masked the corruption).
+      // NOTE: session_id null + capability_descriptor {} ARE legitimate — a docker
+      // cloud sandbox is api-authored and its descriptor lives in the catalog.
+      const rawAdapter = context["adapter"]
+      const rawMode = context["mode"]
+      if (
+        typeof rawAdapter !== "string" ||
+        rawAdapter.length === 0 ||
+        (rawMode !== "resident" && rawMode !== "bare")
+      ) {
+        return { outcome: "corrupt" }
+      }
+      const adapter = rawAdapter
+      const mode = rawMode
+      const sandboxSessionId =
+        typeof context["session_id"] === "string"
+          ? (context["session_id"] as string)
+          : null
+      const rawDescriptor = context["capability_descriptor"]
       const capabilityDescriptor =
-        (context["capability_descriptor"] as Record<string, unknown> | null) ??
-        {}
+        rawDescriptor && typeof rawDescriptor === "object"
+          ? (rawDescriptor as Record<string, unknown>)
+          : {}
       await trx
         .insertInto("runtimes")
         .values({

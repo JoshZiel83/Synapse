@@ -23,7 +23,7 @@ CREATE TYPE file_parse_output_kind AS ENUM ('text', 'structured_json', 'derived_
 CREATE TYPE file_snapshot_reason AS ENUM ('session_commit', 'manual', 'import', 'gc_root');
 CREATE TYPE file_permission AS ENUM ('read', 'write', 'admin');
 CREATE TYPE file_access_grants_status AS ENUM ('active', 'revoked', 'superseded');
-CREATE TYPE file_mount_status AS ENUM ('provisioning', 'active', 'committing', 'closed', 'failed');
+CREATE TYPE file_mount_status AS ENUM ('provisioning', 'active', 'closed', 'failed');
 -- NOTE: content_blobs.backend is plain TEXT (no per-backend CHECK) — the backend
 -- set is deployment config, validated at the app write boundary (see the table
 -- def + content-storage-multi-backend-plan §7). key = f(sha), so no per-blob locator.

@@ -9,8 +9,8 @@ import { adapterForRow, listRegisteredAdapterKeys } from "./adapter-registry.js"
 import { SANDBOX_ADAPTER_KEYS } from "./adapter-metadata.js"
 
 test("P8(B): adapterForRow throws (fail-closed) on an unknown persisted adapter key", () => {
-  // e2b / cube are residual and NOT registered in P4a — a persisted row carrying
-  // one must fail-closed, never downgrade to local resident.
+  // e2b is residual and NOT registered (cubesandbox:bare IS, R4) — a persisted row
+  // carrying an unknown tag must fail-closed, never downgrade to local resident.
   assert.throws(
     () => adapterForRow("e2b", "bare"),
     /unknown persisted adapter key 'e2b:bare'/

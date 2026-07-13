@@ -518,7 +518,7 @@ async function hasFileSpaceGrantReach(
     .selectFrom("fileMounts as m")
     .select(["m.baseSnapshotId", "m.resultSnapshotId"])
     .where("m.fileSpaceId", "in", spaceIds)
-    .where("m.status", "in", ["provisioning", "active", "committing"])
+    .where("m.status", "in", ["provisioning", "active"])
     .execute()
   for (const m of mountSnaps) {
     if (m.baseSnapshotId) snapshotIds.add(m.baseSnapshotId)

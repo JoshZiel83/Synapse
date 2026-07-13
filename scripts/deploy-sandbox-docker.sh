@@ -171,6 +171,33 @@ API_STARTED=1
 docker compose -f docker-compose.yml -f docker-compose.sandbox-docker.yml \
   --profile production up -d api
 
+# (R4 #10.7) HEALTH-GATE the API before declaring success. `up -d` returns when the
+# container is CREATED, not READY, so the old unconditional SUCCESS=1 masked a
+# crash-looping / mis-configured api (and disarmed the rollback trap). Poll
+# GET /api/v1/health from INSIDE the container (node is present; curl may not be)
+# until it reports status:"healthy" (db+schema+redis all up), or roll back on timeout.
+log "waiting for the API to report healthy (GET /api/v1/health)..."
+API_HEALTH_DEADLINE=$(( $(date +%s) + 120 ))
+until docker compose -f docker-compose.yml -f docker-compose.sandbox-docker.yml \
+  --profile production exec -T api node -e '
+    const http = require("http");
+    const port = process.env.PORT || "3001";
+    http.get("http://127.0.0.1:" + port + "/api/v1/health", (r) => {
+      let b = "";
+      r.on("data", (c) => (b += c));
+      r.on("end", () => {
+        try { process.exit(JSON.parse(b).status === "healthy" ? 0 : 1); }
+        catch { process.exit(1); }
+      });
+    }).on("error", () => process.exit(1));
+  ' >/dev/null 2>&1; do
+  if [ "$(date +%s)" -ge "$API_HEALTH_DEADLINE" ]; then
+    die "API did not report healthy within 120s (GET /api/v1/health) — rolling back. Inspect: docker compose logs api"
+  fi
+  sleep 3
+done
+log "API healthy."
+
 SUCCESS=1
 log "done. Verify the docker backend is dispatchable:"
 log "  docker compose exec api docker image inspect synapse-device-runtime:latest >/dev/null && echo image-ok"

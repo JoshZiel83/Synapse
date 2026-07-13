@@ -70,7 +70,6 @@ import {
 import {
   resolveSandboxAdapter,
   adapterForRow,
-  dockerBackendOptionsFromEnv,
   type SandboxAdapter,
 } from "./adapter-registry.js"
 import {

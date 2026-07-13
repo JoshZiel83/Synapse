@@ -65,7 +65,7 @@ export interface FileMountRow {
   baseSnapshotId: string | null
   resultSnapshotId: string | null
   refreshPolicy: "per_turn" | "on_teardown"
-  status: "provisioning" | "active" | "committing" | "closed" | "failed"
+  status: "provisioning" | "active" | "closed" | "failed"
   materializedDir: string | null
   errorMessage: string | null
 }

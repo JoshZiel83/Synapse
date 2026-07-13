@@ -142,7 +142,7 @@ export async function listReconcileCandidateSessionIds(
   // with a live container is not reaped before its commit completes.
   const rows = await sql<{ sessionId: string | null }>`
     SELECT session_id FROM file_mounts
-      WHERE status IN ('provisioning', 'active', 'committing')
+      WHERE status IN ('provisioning', 'active')
     UNION
     SELECT s.session_id FROM sandboxes s
       JOIN runtimes_live r ON r.id = s.id

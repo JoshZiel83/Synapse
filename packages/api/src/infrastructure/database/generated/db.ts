@@ -111,7 +111,7 @@ export type FileAccessGrantsStatus = "active" | "revoked" | "superseded";
 
 export type FileContentKind = "audio" | "document" | "image" | "video";
 
-export type FileMountStatus = "active" | "closed" | "committing" | "failed" | "provisioning";
+export type FileMountStatus = "active" | "closed" | "failed" | "provisioning";
 
 export type FileOriginFamily = "actor_output" | "external_import" | "model_output" | "package_import" | "platform_asset" | "system_generated" | "tool_output" | "user_upload";
 
