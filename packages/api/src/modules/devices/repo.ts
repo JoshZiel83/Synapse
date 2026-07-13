@@ -336,6 +336,15 @@ export async function consumeCloudBootstrapTx(args: {
           hostPid: null,
           pairingSessionId: session.id as string,
           capabilityDescriptor: sql`${JSON.stringify(capabilityDescriptor)}::jsonb`,
+          // P1.6: the cloud-bootstrapping host self-reports its OS facts (same
+          // source the device branch above uses). Unlike the local/bare mint
+          // sites — which run ON the API host and use process.platform/arch — a
+          // cloud sandbox's real platform is the REMOTE host's, so it must come
+          // from the bootstrap args, not the API process. Without this the
+          // projection's COALESCE degrades to linux/x64 and an arm64 cloud
+          // sandbox gets x64-only bundled toolchains it can't run.
+          platform: args.device.platform,
+          arch: args.device.arch,
         } as never)
         .execute()
     }
