@@ -18,6 +18,9 @@ import type { Executor } from "./repo.js"
 import * as repo from "./repo.js"
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
 import { config } from "../../config/index.js"
+import { createLogger } from "../../infrastructure/logger/index.js"
+
+const log = createLogger("sandbox.service")
 import { deleteRuntime } from "../devices/service.js"
 import { getRuntimeEndpointRegistry } from "../devices/tunnel-registry.js"
 import {
@@ -1816,6 +1819,25 @@ export interface TeardownSandboxOptions {
 }
 
 /**
+ * P1.5: a bare data-plane dispatch reported `resource_gone` (the sandbox
+ * container/process vanished out from under us mid-turn). Flip the sandbox to
+ * 'failed' so it stops being treated as live: the next turn reprovisions, and the
+ * reconcile reaper won't keep retrying a resource that no longer exists. The live
+ * dirs are left in place for the existing teardown/commit-failure preservation
+ * path. Best-effort — the dispatch has already failed and returned its error.
+ */
+export async function markSandboxResourceGone(
+  runtimeId: string
+): Promise<void> {
+  await repo.updateSandboxRow(runtimeId, { state: "failed" }).catch((err) => {
+    log.warn(
+      { runtimeId, err },
+      "markSandboxResourceGone: failed to flip sandbox state to 'failed'"
+    )
+  })
+}
+
+/**
  * Teardown: commit all dirty spaces, stop the daemon, then — only if the commit
  * succeeded — delete the live dirs and close the mounts. If the commit FAILS,
  * the live dirs are PRESERVED and the mounts are marked 'failed' (not deleted),
@@ -1857,9 +1879,14 @@ export async function teardownSandbox(
   // local one is SIGTERM'd — never guessed from the current config. Always — a
   // failed commit doesn't justify leaving the runtime alive.
   const liveHandle = liveSandboxHandles.get(sessionId)
+  let stillAlive = false
   if (liveHandle) {
     await liveHandle.kill().catch(() => {})
-    liveSandboxHandles.delete(sessionId)
+    // P1.5: RE-PROBE. If the kill did NOT actually stop the process, we must NOT
+    // delete the sole tracking record below — keep the handle so a retry can kill
+    // it again, and fall through to the state='closing' branch.
+    stillAlive = await liveHandle.isRunning().catch(() => false)
+    if (!stillAlive) liveSandboxHandles.delete(sessionId)
   } else {
     const ref = await buildSandboxRefFromSandboxRow(mounts)
     if (ref) {
@@ -1867,15 +1894,35 @@ export async function teardownSandbox(
         const backend = backendForKind(ref)
         const handle = await backend.connect(ref)
         await handle.kill()
+        stillAlive = await handle.isRunning().catch(() => false)
       } catch (err) {
         console.error(
           `[sandbox] teardown could not kill runtime for ${sessionId} via ${ref.adapter} adapter:`,
           err
         )
-        // Last-resort local fallback: signal the persisted pid directly.
-        if (ref.hostPid) killPid(ref.hostPid)
+        // Could not even connect/kill → treat as possibly-alive and leave it for
+        // the reaper rather than deleting its tracking. (Dropped the killPid(
+        // hostPid) fallback: signalling a persisted pid is a PID-reuse hazard.)
+        stillAlive = true
       }
     }
+  }
+
+  // P1.5: the runtime survived the kill. Do NOT delete its sole tracking record
+  // (that would strand a live container/process). Leave state='closing' (still
+  // reconcile-visible) + PRESERVE dirs/mounts/grants so reconcileSandboxes retries
+  // the whole teardown at the next startup.
+  if (stillAlive) {
+    if (runtimeId) {
+      await repo
+        .updateSandboxRow(runtimeId, { state: "closing" })
+        .catch(() => {})
+    }
+    log.warn(
+      { sessionId, runtimeId },
+      "teardown: runtime still alive after kill — left state='closing' for the reaper (tracking + live dirs preserved)"
+    )
+    return
   }
 
   if (commitOk) {

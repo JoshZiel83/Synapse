@@ -4,6 +4,10 @@ import "../infrastructure/env-bootstrap.js"
 import { z } from "zod"
 
 import { createLogger } from "../infrastructure/logger/index.js"
+import {
+  SANDBOX_ADAPTER_KEYS,
+  isRegisteredSandboxAdapterKey,
+} from "../modules/sandbox/adapter-keys.js"
 
 const log = createLogger("config")
 
@@ -1067,5 +1071,22 @@ if (config.sandbox.provider === "none") {
       "Set SANDBOX_PROVIDER=local (same-host device-runtime) or =docker " +
       "(DooD cloud-sandbox image) to enable it. NOTE: SYNAPSE_SANDBOX_ENABLED " +
       "was removed — a deploy that only set it now runs with the sandbox OFF."
+  )
+} else if (
+  !isRegisteredSandboxAdapterKey(
+    `${config.sandbox.provider}:${config.sandbox.mode}`
+  )
+) {
+  // P1.5: a REQUESTED sandbox whose ${provider}:${mode} has NO registered adapter
+  // (a typo, or e2b/cube which derive mode=bare but aren't registered yet) would
+  // otherwise degrade to a silent unsandboxed run. Warn LOUDLY at boot; per-turn
+  // provisioning then fails and surfaces the degraded-turn notice (owner chose
+  // run-unsandboxed over hard-fail, so this is a warning, not a boot reject).
+  log.warn(
+    `SANDBOX_PROVIDER/SANDBOX_MODE resolves to '${config.sandbox.provider}:${config.sandbox.mode}', ` +
+      `which has NO registered sandbox adapter (registered: ${SANDBOX_ADAPTER_KEYS.join(", ")}). ` +
+      "Sandboxes will FAIL to provision and actors will run WITHOUT isolation (with a degraded-turn " +
+      "notice). Fix SANDBOX_PROVIDER/SANDBOX_MODE, or set SANDBOX_PROVIDER=none to disable sandboxing " +
+      "intentionally."
   )
 }

@@ -41,6 +41,7 @@ import {
 } from "../mcp-plugins/tool-resolver.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { dispatchBareRuntimeTool } from "../sandbox/bare-dispatch.js"
+import { markSandboxResourceGone } from "../sandbox/service.js"
 import { sandboxUnauthorizedDeny } from "../sandbox/service.js"
 import { DEFAULT_SANDBOX_CWD } from "@synapse/device-runtime"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
@@ -873,6 +874,16 @@ function unionWithRuntime(
     // marked consumed and no second window for concurrent reuse exists.
     if (!result.ok) {
       const err = result.error
+      // P1.5: a bare dispatch reporting resource_gone means the sandbox
+      // container/process vanished mid-turn. Flip it to 'failed' so it stops
+      // being treated as live (the next turn reprovisions). Gated on the bare
+      // fork; best-effort.
+      if (
+        row.serviceKind === "bare_dataplane" &&
+        Boolean(err?.details?.["resource_gone"])
+      ) {
+        await markSandboxResourceGone(row.runtimeId)
+      }
       // v3.1 — drift-fix: preserve the runtime's structured synapse_error
       // so the chat UI can detect `details.scopeSource` / currentUrl etc.
       // and surface the "Manual grant required" widget for the active-page

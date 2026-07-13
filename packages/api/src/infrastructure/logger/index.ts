@@ -163,6 +163,10 @@ const SCOPE_TO_DOMAIN: Readonly<Record<string, DomainScope>> = {
     domain: "sandbox",
     component: "adapter-registry",
   },
+  "sandbox.service": {
+    domain: "sandbox",
+    component: "service",
+  },
   "seed-model-groups": { domain: "model-groups", component: "seed" },
   server: { domain: "server" },
   session: { domain: "session" },

@@ -972,6 +972,24 @@ export function startSessionThinkingWorker() {
               `[session-thinking] sandbox provision/refresh failed for ${sessionId}:`,
               sandboxErr
             )
+            // P1.5: a REQUESTED sandbox (SANDBOX_PROVIDER!=none) failed to
+            // provision. Owner policy = run the turn UNSANDBOXED but surface a
+            // VISIBLE degraded-turn notice (vs the previous total silence) so the
+            // actor + operator know isolation is off. sandboxEnabled gates it so
+            // provider=none never emits it. Reuses the prepended notice channel;
+            // provision throwing means the conflict-notice path above did not run.
+            if (sandboxEnabled) {
+              sandboxConflictNotice = {
+                kind: "system_notice",
+                noticeType: "generic",
+                scope: "private",
+                surface: "internal",
+                parts: textBlocks(
+                  "Sandbox unavailable — this turn is running WITHOUT filesystem/command isolation. Provisioning failed; retry once the sandbox backend is healthy."
+                ),
+                metadata: { sandboxDegraded: true },
+              }
+            }
           }
         }
 
