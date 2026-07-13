@@ -1,8 +1,16 @@
 // Sandbox ADAPTER registry (§4.1 / §4.7.2). Supersedes the P2 `selectSandboxBackend`
 // (which forked ONLY on provider and never on mode — so SANDBOX_MODE=bare was
 // inert). An adapter is keyed `${provider}:${mode}` and carries the metadata the
-// provision spine forks on (catalogSource, capabilities) plus
-// the lifecycle (create/connect) and, for Mode-B, the confined `dataPlane`.
+// provision spine forks on (catalogSource, capabilities) plus the lifecycle
+// (create/connect). The bare data plane is rebuilt lazily by bare-dispatch on a
+// registry miss (adapter-bound endpoint scheme, P1.3); it is NOT carried on the
+// adapter (the dead `dataPlane?()` method was removed in P1.2). P1.2 INVARIANT
+// (machine-enforced by adapter-registry-fail-closed.test.ts): every BARE adapter
+// is host-side (capabilities.confinedFs==='native') — that is what makes the
+// current host-dir materialize/commit-scan + host-side endpoint fork valid. The
+// first OFF-BOX (e2b/cube, confinedFs:'unsupported') adapter will TRIP that guard,
+// forcing the adapter.rebuildDataPlane + off-box working-set seam to be built and
+// VALIDATED alongside it in P4b (it cannot be validated today without an account).
 //
 // F-A (preserved): a docker adapter's teardown/liveness/reconnect NEVER forces
 // the provision config to evaluate. `create()` (provision) is backed by
@@ -68,8 +76,6 @@ export interface SandboxAdapter {
   readonly capabilities: SandboxCapabilityDescriptor | null
   create(spec: SandboxSpec): Promise<SandboxHandle>
   connect(ref: SandboxRef): Promise<SandboxHandle>
-  /** Mode-B only: the confined data plane bound to a live handle. */
-  dataPlane?(handle: SandboxHandle): SandboxDataPlane
 }
 
 /** Build the docker backend options from the validated config.sandbox namespace.
@@ -255,13 +261,6 @@ export function makeLocalBareAdapter(
       // the next dispatch (bare-dispatch registry miss); this handle only needs
       // to drain any LIVE plane on kill().
       return makeLocalBareRefHandle(ref)
-    },
-    dataPlane(handle: SandboxHandle): SandboxDataPlane {
-      const live = getLiveBareDataPlane(handle.runtimeLink.runtimeId)
-      if (live) return live
-      throw new SandboxBackendError(
-        `no live data plane for bare runtime ${handle.runtimeLink.runtimeId}`
-      )
     },
   }
 }
@@ -578,13 +577,6 @@ export function makeDockerBareAdapter(
       // Pure reconstruction (teardown/liveness). The plane rebuilds lazily on the
       // next dispatch (bare-dispatch registry miss forks on docker-exec:<cid>).
       return makeDockerBareRefHandle(ref, spawnImpl)
-    },
-    dataPlane(handle: SandboxHandle): SandboxDataPlane {
-      const live = getLiveBareDataPlane(handle.runtimeLink.runtimeId)
-      if (live) return live
-      throw new SandboxBackendError(
-        `no live data plane for bare runtime ${handle.runtimeLink.runtimeId}`
-      )
     },
   }
 }
