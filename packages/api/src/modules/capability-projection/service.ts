@@ -872,9 +872,10 @@ function unionWithRuntime(
     if (!result.ok) {
       const err = result.error
       // P1.5: a bare dispatch reporting resource_gone means the sandbox
-      // container/process vanished mid-turn. Flip it to 'failed' so it stops
-      // being treated as live (the next turn reprovisions). Gated on the bare
-      // fork; best-effort.
+      // container/process vanished mid-turn. markSandboxResourceGone flips it to
+      // 'closing' (the convergeable needs-teardown state) so a later teardown
+      // commits + closes its mounts and the next turn reprovisions cleanly. Gated
+      // on the bare fork; best-effort.
       if (
         row.serviceKind === "bare_dataplane" &&
         Boolean(err?.details?.["resource_gone"])
