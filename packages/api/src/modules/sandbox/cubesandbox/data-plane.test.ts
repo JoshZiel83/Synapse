@@ -13,6 +13,7 @@ import { Buffer } from "node:buffer"
 import { createHash } from "node:crypto"
 import { WHOLE_SCOPE, GrantPrefixDeniedError } from "@synapse/device-runtime"
 import { buildCubesandboxBareDescriptor } from "../model.js"
+import { PreconditionUncheckableError } from "../data-plane.js"
 import type { ConfinementCtx, ConfinementScope } from "../data-plane.js"
 import {
   createRemoteBareDataPlane,
@@ -210,16 +211,23 @@ test("back-translation: a bare/relative envd entry path falls back to dir+name (
 
 // ── (4) MakeDir 409 already_exists → {created:false} (NOT an error) ───────────
 
-test("mkdir: a fresh directory returns created:true", async () => {
+test("mkdir: a fresh directory (parent exists) returns created:true", async () => {
   const envd = new StubEnvd()
   const plane = makePlane(envd)
+  // recursive default false → the plane pre-stats the parent (#7); the default stub
+  // reports the parent as present, so the mkdir proceeds.
   const res = await plane.mkdir(
     "/conversation/new",
     {},
     writeCtx(["/conversation"])
   )
   assert.deepEqual(res, { created: true })
-  assert.equal(envd.calls[0]?.path, "/workspace/conversation/new")
+  assert.ok(
+    envd.calls.some(
+      (c) => c.method === "makeDir" && c.path === "/workspace/conversation/new"
+    ),
+    "makeDir lowered the path to the VM root"
+  )
 })
 
 test("mkdir: an EXISTING directory (409 already_exists) maps to created:false", async () => {
@@ -290,11 +298,12 @@ test("move: BOTH endpoints are confined under the SAME scope frame", async () =>
     (err: unknown) => err instanceof GrantPrefixDeniedError
   )
   assert.equal(envd.calls.length, 0)
-  // both in-scope → lowered on the wire.
+  // both in-scope → lowered on the wire. overwrite:true isolates the confinement
+  // assertion from the #7 overwrite gate (the default stub reports dest present).
   const res = await plane.move(
     "/conversation/a",
     "/conversation/b",
-    {},
+    { overwrite: true },
     writeCtx(["/conversation"])
   )
   assert.equal(
@@ -329,7 +338,7 @@ test("read: returns totalSize from stat and honors a maxBytes cap (truncated)", 
 
 // ── (M1) advisory sha pre-check is bounded by the read cap (no OOM on a huge file)
 
-test("M1: an oversize prior file (size > maxReadBytes) SKIPS the sha pre-check read", async () => {
+test("M1: an oversize prior file (size > maxReadBytes) FAILS CLOSED (precondition_uncheckable)", async () => {
   const envd = new StubEnvd()
   const big = descriptor.core.maxReadBytes + 1
   envd.statImpl = async (path) => ({
@@ -340,26 +349,30 @@ test("M1: an oversize prior file (size > maxReadBytes) SKIPS the sha pre-check r
     modifiedTime: "2026-07-13T00:00:00Z",
   })
   const plane = makePlane(envd)
-  const res = await plane.write(
-    "/conversation/big.bin",
-    new Uint8Array(4),
-    { expectedSha256: "deadbeef".repeat(8) },
-    writeCtx(["/conversation"])
+  // (#7 M1 revised) A caller supplied expected_sha256, but the prior file is too
+  // large to hash within the read cap → the precondition is UNVERIFIABLE. It must
+  // FAIL CLOSED (not silently proceed = a lost update).
+  await assert.rejects(
+    () =>
+      plane.write(
+        "/conversation/big.bin",
+        new Uint8Array(4),
+        { createParents: true, expectedSha256: "deadbeef".repeat(8) },
+        writeCtx(["/conversation"])
+      ),
+    (err: unknown) => err instanceof PreconditionUncheckableError
   )
-  // The whole-file hash read must NOT be performed (that is the memory-DoS the guard
-  // prevents — an agent could stage a multi-GB file to OOM the shared API process).
+  // Neither the OOM-risking whole-file read NOR the write happens.
   assert.equal(
     envd.calls.some((c) => c.method === "readFile"),
     false,
-    "readFile must NOT be called for an oversize prior file (advisory guard skipped)"
+    "readFile must NOT be called for an oversize prior file (no memory-DoS)"
   )
-  // The write still proceeds (advisory posture degrades gracefully — no StaleWrite).
   assert.equal(
     envd.calls.some((c) => c.method === "writeFile"),
-    true,
-    "the write proceeds without the un-affordable stale check"
+    false,
+    "fail-closed: the write is refused when the precondition is unverifiable"
   )
-  assert.equal(res.bytesWritten, 4)
 })
 
 test("M1: an in-cap prior file still runs the sha pre-check (readFile IS invoked)", async () => {

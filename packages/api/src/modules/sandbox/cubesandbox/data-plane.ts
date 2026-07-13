@@ -43,6 +43,7 @@ import {
   CapabilityUnsupportedError,
   PlaneCapError,
   PlaneDisposedError,
+  PreconditionUncheckableError,
   type ConfinementCtx,
   type ConfinementScope,
   type SandboxDataPlane,
@@ -147,6 +148,44 @@ export function vmToVfs(
 function joinVfs(canonicalDir: string, name: string): string {
   if (canonicalDir === "/") return `/${name}`
   return `${canonicalDir}/${name}`
+}
+
+/** Lexical parent of an in-VM absolute path ("/workspace/a/b" → "/workspace/a";
+ *  "/workspace/a" → "/workspace"). Used to pre-stat the immediate parent so the
+ *  create_parents/recursive booleans envd ignores are enforced off-box. */
+function vmDirname(vm: string): string {
+  const i = vm.lastIndexOf("/")
+  if (i <= 0) return "/"
+  return vm.slice(0, i)
+}
+
+/** Canonical VFS parent of a canonical path (for leak-free denial messages). */
+function canonicalDirname(canonical: string): string {
+  const i = canonical.lastIndexOf("/")
+  if (i <= 0) return "/"
+  return canonical.slice(0, i)
+}
+
+/** (#7) Deny an op whose immediate parent is absent — the off-box equivalent of the
+ *  host bare plane's ENOENT when create_parents/recursive is false (envd auto-creates
+ *  parents, so we must pre-stat). Throws a bare Error → runtime_constraint (host
+ *  parity). The message carries the canonical (VFS) parent, NEVER the raw vm path. */
+async function assertVmParentExists(
+  envd: RemoteEnvdTransport,
+  vm: string,
+  canonical: string
+): Promise<void> {
+  const parentVm = vmDirname(vm)
+  try {
+    await envd.stat(parentVm)
+  } catch (err) {
+    if (err instanceof CubeEnvdNotFoundError) {
+      throw new Error(
+        `parent directory does not exist: ${canonicalDirname(canonical)}`
+      )
+    }
+    throw err
+  }
 }
 
 /** Strip the in-VM root PREFIX from every occurrence in a message so an envd error
@@ -453,14 +492,21 @@ export function createRemoteBareDataPlane(
       ctx: ConfinementCtx
     ): Promise<{ sha256: string; bytesWritten: number; mtimeMs: number }> {
       assertWriteAccess(ctx)
-      // envd auto-creates parents, so create_parents is always honorable (mkdir cap
-      // is true for cube); mirror the host gate anyway for defense-in-depth.
+      // create_parents=true needs the mkdir capability; cube has it, but keep the
+      // defense-in-depth gate for a descriptor that toggles mkdir off.
       if (!caps.mkdir && writeOpts.createParents === true) {
         throw new CapabilityUnsupportedError(
           "create_parents requires the mkdir capability (unsupported by this sandbox)"
         )
       }
       const { canonical, vm } = lower(path, ctx, vmRoot)
+      // (#7) envd auto-creates missing parents; the host bare plane does NOT when
+      // create_parents=false (its rename fails ENOENT → runtime_constraint). Enforce
+      // the same off-box so the boolean is honored identically across adapters:
+      // pre-stat the immediate parent and deny a missing one.
+      if (writeOpts.createParents !== true) {
+        await assertVmParentExists(envd, vm, canonical)
+      }
       // Oversized-write reject BEFORE hashing/IO (per-op cap).
       if (bytes.length > caps.maxWriteBytes) {
         throw new PlaneCapError(
@@ -477,26 +523,27 @@ export function createRemoteBareDataPlane(
         let priorMtimeMs: number | undefined
         let priorSha: string | null = null
         let priorExists = false
-        // The sha pre-check is BEST-EFFORT (advisory posture): computing the prior
-        // file's hash means reading it WHOLE, so a file larger than the read cap is
-        // NOT pre-checked (M1) — we SKIP the un-affordable read (using st.size, which
-        // stat already carries) rather than hash a multi-GB agent-staged file and OOM
-        // the shared API process. The write then proceeds without the sha stale check;
-        // the advisory guard degrades gracefully. The mtime pre-check reads nothing
-        // beyond the stat below, so it stays affordable regardless of file size.
-        let shaPrecheckable = wantSha
         try {
           const st = await envd.stat(vm)
           priorExists = true
           priorMtimeMs = rfc3339ToEpochMs(st.modifiedTime)
           if (wantSha) {
+            // (#7 M1 — FAIL-CLOSED, was a silent skip) Verifying expected_sha256
+            // means hashing the WHOLE prior file. A file larger than the read cap
+            // cannot be hashed without OOM-ing the shared API process, so the check
+            // is UNVERIFIABLE — reject distinctly (precondition_uncheckable) rather
+            // than silently proceeding without the caller's precondition (a dropped
+            // precondition = a lost update). The mtime pre-check below needs no read
+            // beyond the stat and stays affordable, so a caller can retry with it.
             if ((st.size ?? 0) > caps.maxReadBytes) {
-              // Too large to hash within the read cap → skip the advisory sha check.
-              shaPrecheckable = false
-            } else {
-              const cur = await envd.readFile(vm)
-              priorSha = createHash("sha256").update(cur).digest("hex")
+              throw new PreconditionUncheckableError(
+                `expected_sha256 unverifiable for ${canonical}: prior file ` +
+                  `${st.size ?? 0} bytes exceeds read cap ${caps.maxReadBytes} ` +
+                  `(retry with expected_mtime_ms, which needs no read)`
+              )
             }
+            const cur = await envd.readFile(vm)
+            priorSha = createHash("sha256").update(cur).digest("hex")
           }
         } catch (err) {
           if (err instanceof CubeEnvdNotFoundError) {
@@ -513,7 +560,6 @@ export function createRemoteBareDataPlane(
         }
         if (
           wantSha &&
-          shaPrecheckable &&
           (!priorExists || priorSha !== writeOpts.expectedSha256)
         ) {
           throw new StaleWriteError("pre_open", canonical)
@@ -528,7 +574,7 @@ export function createRemoteBareDataPlane(
     },
     async mkdir(
       path: string,
-      _opts: { recursive?: boolean },
+      opts: { recursive?: boolean },
       ctx: ConfinementCtx
     ): Promise<{ created: boolean }> {
       if (!caps.mkdir) {
@@ -537,9 +583,15 @@ export function createRemoteBareDataPlane(
         )
       }
       assertWriteAccess(ctx)
-      const { vm } = lower(path, ctx, vmRoot)
-      // Cube MakeDir is recursive (auto-parents). An EXISTING dir → 409
-      // already_exists; that is NOT an error — map it to created:false.
+      const { canonical, vm } = lower(path, ctx, vmRoot)
+      // (#7) envd MakeDir is ALWAYS recursive (auto-parents). The host bare plane
+      // errors ENOENT for recursive=false with a missing parent; enforce the same
+      // off-box by pre-statting the immediate parent.
+      if (opts.recursive !== true) {
+        await assertVmParentExists(envd, vm, canonical)
+      }
+      // An EXISTING dir → 409 already_exists; NOT an error — created:false (host
+      // parity with the EEXIST → {created:false} swallow).
       try {
         await envd.makeDir(vm)
         return { created: true }
@@ -556,7 +608,7 @@ export function createRemoteBareDataPlane(
     async move(
       src: string,
       dest: string,
-      _opts: { overwrite?: boolean; expectedSourceSha256?: string | null },
+      opts: { overwrite?: boolean; expectedSourceSha256?: string | null },
       ctx: ConfinementCtx
     ): Promise<{ mtimeMs: number }> {
       if (!caps.move) {
@@ -566,9 +618,42 @@ export function createRemoteBareDataPlane(
       }
       assertWriteAccess(ctx)
       // SINGLE grant frame covering BOTH endpoints (F-C): confine src AND dest under
-      // the SAME ctx.scope. (Cube Move silently overwrites an existing destination.)
-      const { vm: vmSrc } = lower(src, ctx, vmRoot)
-      const { vm: vmDest } = lower(dest, ctx, vmRoot)
+      // the SAME ctx.scope.
+      const { canonical: canonicalSrc, vm: vmSrc } = lower(src, ctx, vmRoot)
+      const { canonical: canonicalDest, vm: vmDest } = lower(dest, ctx, vmRoot)
+      // (#7) envd Move SILENTLY overwrites the destination (data-loss). Enforce the
+      // SAME caller preconditions the host bare plane does (StaleWriteError → host
+      // parity), off-box, via pre-stat BEFORE the move.
+      // (a) expected_source_sha256: hash the source, reject a mismatch (pre_rename);
+      //     fail-closed (precondition_uncheckable) when the source is too large to hash.
+      if (opts.expectedSourceSha256 != null) {
+        const srcSt = await envd.stat(vmSrc) // CubeEnvdNotFoundError if src absent
+        if ((srcSt.size ?? 0) > caps.maxReadBytes) {
+          throw new PreconditionUncheckableError(
+            `expected_source_sha256 unverifiable for ${canonicalSrc}: source ` +
+              `${srcSt.size ?? 0} bytes exceeds read cap ${caps.maxReadBytes}`
+          )
+        }
+        const cur = await envd.readFile(vmSrc)
+        const actual = createHash("sha256").update(cur).digest("hex")
+        if (actual !== opts.expectedSourceSha256) {
+          throw new StaleWriteError("pre_rename", canonicalSrc)
+        }
+      }
+      // (b) overwrite=false: reject an EXISTING destination (pre_create), mirroring
+      //     the host's explicit lstat-then-StaleWriteError check.
+      if (opts.overwrite !== true) {
+        let destExists = true
+        try {
+          await envd.stat(vmDest)
+        } catch (err) {
+          if (err instanceof CubeEnvdNotFoundError) destExists = false
+          else throw err
+        }
+        if (destExists) {
+          throw new StaleWriteError("pre_create", canonicalDest)
+        }
+      }
       const entry = await envd.move(vmSrc, vmDest)
       // datetime-ok: envd omitted the moved entry's mtime; the move just occurred, so
       // ≈now is the honest advisory value for this REQUIRED field (not a value mask).
@@ -576,7 +661,7 @@ export function createRemoteBareDataPlane(
     },
     async remove(
       path: string,
-      _opts: { recursive?: boolean },
+      opts: { recursive?: boolean },
       ctx: ConfinementCtx
     ): Promise<{ removed: boolean }> {
       if (!caps.remove) {
@@ -585,7 +670,29 @@ export function createRemoteBareDataPlane(
         )
       }
       assertWriteAccess(ctx)
-      const { vm } = lower(path, ctx, vmRoot)
+      const { canonical, vm } = lower(path, ctx, vmRoot)
+      // (#7) envd Remove ALWAYS deletes the whole subtree, ignoring the flag
+      // (data-loss). The host bare plane errors ENOTEMPTY → runtime_constraint for a
+      // NON-EMPTY dir when recursive=false; enforce the same off-box: pre-stat, and
+      // when the target is a non-empty directory + recursive!=true, deny BEFORE the
+      // destructive call. A file or an empty dir proceeds. (Remove stays idempotent
+      // on an absent target — a missing path is not an error.)
+      if (opts.recursive !== true) {
+        let target: FileEntry | null = null
+        try {
+          target = await envd.stat(vm)
+        } catch (err) {
+          if (!(err instanceof CubeEnvdNotFoundError)) throw err
+        }
+        if (target && fileTypeToKind(target.type) === "directory") {
+          const children = await envd.listDir(vm)
+          if (children.length > 0) {
+            throw new Error(
+              `directory not empty (pass recursive to remove): ${canonical}`
+            )
+          }
+        }
+      }
       // Cube Remove is idempotent (no error if absent).
       await envd.remove(vm)
       return { removed: true }

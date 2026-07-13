@@ -988,11 +988,30 @@ class PlaneDisposedError extends Error {
   }
 }
 
+/**
+ * (R4 §3.5 / #7 M1 / F8) A caller-supplied stale-write precondition
+ * (expected_sha256 / expected_source_sha256) could NOT be evaluated: off-box, the
+ * prior/source file is larger than the read cap, so hashing it to verify the
+ * precondition is unaffordable (reading a multi-GB file to hash would OOM the
+ * shared API process). FAIL-CLOSED (runtime_constraint) rather than silently
+ * proceeding WITHOUT the precondition — a dropped precondition is a silent
+ * lost-update. The caller can retry with a smaller target or an expected_mtime_ms
+ * precondition (which the stat already carries, no read needed).
+ */
+class PreconditionUncheckableError extends Error {
+  readonly code = "runtime_constraint" as const
+  constructor(message: string) {
+    super(message)
+    this.name = "PreconditionUncheckableError"
+  }
+}
+
 export {
   PlaneCapError,
   PlaneExecUnconfinedError,
   CapabilityUnsupportedError,
   PlaneDisposedError,
+  PreconditionUncheckableError,
 }
 
 function buildInnerExecDescriptor(
@@ -1148,6 +1167,14 @@ function mapPlaneError(err: unknown): McpDispatchResult {
     return errResult("runtime_constraint", err.message, {
       stale_write: true,
       stale_write_phase: err.phase,
+    })
+  }
+  if (err instanceof PreconditionUncheckableError) {
+    // (#7 M1 / F8) The caller's optimistic-concurrency precondition could not be
+    // evaluated off-box (target too large to hash within the read cap). Fail
+    // closed so the write/move does NOT silently drop the precondition.
+    return errResult("runtime_constraint", err.message, {
+      precondition_uncheckable: true,
     })
   }
   if (err instanceof PlaneCapError) {
