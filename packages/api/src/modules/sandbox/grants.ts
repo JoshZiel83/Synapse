@@ -211,32 +211,50 @@ export async function revokeSandboxGrants(params: {
   runtimeId: string
   actorId: string
   conversationId: string
+  /**
+   * Optional DB executor for ALL reads/writes here, forwarded to the three
+   * helpers that already accept one. Defaults (inside each helper) to the global
+   * db, so prod teardown is unchanged. teardownSandbox threads its pinned executor
+   * through so the crash-recovery revoke runs on the same connection as the test
+   * fixtures/assertions (P1.7).
+   */
+  executor?: Executor
 }): Promise<void> {
+  const run = params.executor
   // Layer 1: resolve THIS runtime's capability ids, then targeted-revoke only
   // those bindings (leaving other capabilities the actor/conversation may hold).
-  const runtimeCapabilityIds = await selectRuntimeCapabilityIds({
-    workspaceId: params.workspaceId,
-    runtimeId: params.runtimeId,
-  })
-  if (runtimeCapabilityIds.length > 0) {
-    await revokeRuntimeCapabilitiesForTarget({
+  const runtimeCapabilityIds = await selectRuntimeCapabilityIds(
+    {
       workspaceId: params.workspaceId,
-      target: {
-        kind: "actor",
-        actorId: params.actorId,
-        conversationId: params.conversationId,
+      runtimeId: params.runtimeId,
+    },
+    run
+  )
+  if (runtimeCapabilityIds.length > 0) {
+    await revokeRuntimeCapabilitiesForTarget(
+      {
+        workspaceId: params.workspaceId,
+        target: {
+          kind: "actor",
+          actorId: params.actorId,
+          conversationId: params.conversationId,
+        },
+        runtimeCapabilityIds,
+        reason: "sandbox teardown",
       },
-      runtimeCapabilityIds,
-      reason: "sandbox teardown",
-    })
+      { db: run }
+    )
   }
 
   // Layer 2: revoke all active runtime grants for this runtime. The runtime is
   // about to be soft-deleted and its grant FK is ON DELETE CASCADE, so deletion
   // alone would remove them — but we revoke first for a clean audit trail and
   // so a teardown that stops short of deletion still leaves no live grants.
-  await revokeActiveRuntimeGrants({
-    workspaceId: params.workspaceId,
-    runtimeId: params.runtimeId,
-  })
+  await revokeActiveRuntimeGrants(
+    {
+      workspaceId: params.workspaceId,
+      runtimeId: params.runtimeId,
+    },
+    run
+  )
 }

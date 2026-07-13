@@ -1,7 +1,7 @@
 // Sandbox ADAPTER registry (§4.1 / §4.7.2). Supersedes the P2 `selectSandboxBackend`
 // (which forked ONLY on provider and never on mode — so SANDBOX_MODE=bare was
 // inert). An adapter is keyed `${provider}:${mode}` and carries the metadata the
-// provision spine forks on (catalogSource, transportDefault, capabilities) plus
+// provision spine forks on (catalogSource, capabilities) plus
 // the lifecycle (create/connect) and, for Mode-B, the confined `dataPlane`.
 //
 // F-A (preserved): a docker adapter's teardown/liveness/reconnect NEVER forces
@@ -64,7 +64,6 @@ export interface SandboxAdapter {
   /** Written to sandboxes.adapter (== provider); the sole persisted adapter tag (P3). */
   readonly kind: SandboxBackendKind
   readonly catalogSource: "control_plane" | "api_authored"
-  readonly transportDefault: "direct" | "indirect"
   /** Frozen descriptor for a bare adapter; null for a resident adapter. */
   readonly capabilities: SandboxCapabilityDescriptor | null
   create(spec: SandboxSpec): Promise<SandboxHandle>
@@ -107,7 +106,6 @@ function makeLocalResidentAdapter(deps?: {
     mode: "resident",
     kind: "local",
     catalogSource: "control_plane",
-    transportDefault: "direct",
     capabilities: null,
     create: (spec) => backend.create(spec),
     connect: (ref) => backend.connect(ref),
@@ -129,7 +127,6 @@ function makeDockerResidentAdapter(deps?: {
     mode: "resident",
     kind: "docker",
     catalogSource: "control_plane",
-    transportDefault: "indirect",
     capabilities: null,
     create: (spec) =>
       createDockerSandboxBackend(dockerBackendOptionsFromEnv()).create(spec),
@@ -200,7 +197,6 @@ export function makeLocalBareAdapter(
     mode: "bare",
     kind: "local",
     catalogSource: "api_authored",
-    transportDefault: "direct",
     capabilities: descriptor,
     async create(spec: SandboxSpec): Promise<SandboxHandle> {
       const runtimeId = randomUUID()
@@ -454,7 +450,6 @@ export function makeDockerBareAdapter(
     mode: "bare",
     kind: "docker",
     catalogSource: "api_authored",
-    transportDefault: "direct",
     capabilities: descriptor,
     async create(spec: SandboxSpec): Promise<SandboxHandle> {
       // uid-PARITY create-time probe (defense-in-depth over the boot superRefine):

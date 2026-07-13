@@ -425,12 +425,17 @@ export async function reconcileSandboxes(
         liveSessionIds.add(sessionId)
         continue
       }
-      console.warn(
-        `[sandbox] reconcile: tearing down stale session ${sessionId} (allActive=${allActive})`
+      log.warn(
+        { sessionId, allActive },
+        "reconcile: tearing down stale session"
       )
-      await teardownSandbox(sessionId)
+      // Thread the RAW injected executor: in prod deps.executor is undefined so
+      // teardown falls through to its own defaults (behaviour-preserving); in the
+      // reaper test it is the pinned trx so teardown's WRITE path runs on the same
+      // connection the fixtures + assertions use.
+      await teardownSandbox(sessionId, { executor: deps.executor })
     } catch (err) {
-      console.error(`[sandbox] reconcile failed for ${sessionId}:`, err)
+      log.error({ sessionId, err }, "reconcile failed")
     }
   }
 
@@ -444,12 +449,13 @@ export async function reconcileSandboxes(
     try {
       const { removed } = await reap(liveSessionIds)
       if (removed.length > 0) {
-        console.warn(
-          `[sandbox] reconcile: reaped ${removed.length} label-only docker orphan(s): ${removed.join(", ")}`
+        log.warn(
+          { removed },
+          "reconcile: reaped label-only docker orphan(s)"
         )
       }
     } catch (err) {
-      console.error("[sandbox] reconcile: docker orphan reap failed:", err)
+      log.error({ err }, "reconcile: docker orphan reap failed")
     }
   }
 }
@@ -1816,6 +1822,16 @@ async function commitOneMount(
 
 export interface TeardownSandboxOptions {
   hostProvider?: HostProvider
+  /**
+   * Inject the DB executor used for ALL reads AND writes on the teardown/crash-
+   * recovery path. Defaults to the top-level db (repo.defaultDbh()) so prod
+   * turn-end / provision-recover / reconcile behaviour is unchanged. The
+   * reconcile reaper threads its pinned executor through here so the loopback
+   * reaper test can drive the REAL commit → kill → close-mounts → revoke-grants →
+   * soft-delete spine against a single rolled-back transaction (P1.7). Without
+   * this seam teardown re-acquires the global db and the reaper test fake-greens.
+   */
+  executor?: Executor
 }
 
 /**
@@ -1847,10 +1863,17 @@ export async function markSandboxResourceGone(
  */
 export async function teardownSandbox(
   sessionId: string,
-  _options: TeardownSandboxOptions = {}
+  options: TeardownSandboxOptions = {}
 ): Promise<void> {
-  const ctx = await loadSessionContext(sessionId)
-  const mounts = await getActiveMountsForSession(repo.defaultDbh(), sessionId)
+  // ALL reads AND writes on the teardown path run on `run`: the injected
+  // executor (crash-recovery WRITE path / reaper test) or the top-level db in
+  // prod. Threading it through the reads too (loadSessionContext,
+  // getActiveMountsForSession, the commit's loadCtx) is load-bearing — a test on
+  // a single rolled-back connection can only see its own uncommitted session +
+  // mounts, and without it the grant/runtime terminal block below is skipped.
+  const run = options.executor ?? repo.defaultDbh()
+  const ctx = await loadSessionContext(sessionId, run)
+  const mounts = await getActiveMountsForSession(run, sessionId)
   if (mounts.length === 0) return
 
   // ① commit ALL dirty spaces (incl /actor-conversation, and any /conversation
@@ -1859,15 +1882,26 @@ export async function teardownSandbox(
   let commitOk = true
   let commitError: unknown = null
   try {
-    await commitSpaces(sessionId, [
-      "conversation",
-      "actor",
-      "actor-conversation",
-    ])
+    // Only override commitSpaces' deps when a real executor is injected — so the
+    // commit's reads/writes run on the SAME pinned connection (no nested BEGIN:
+    // runInTx just calls fn(run)). In prod (no executor) commitSpaces keeps its
+    // default deps (real repo.runInTx transaction), preserving turn-end behaviour.
+    const commitOverride: Partial<CommitDeps> | undefined = options.executor
+      ? {
+          dbh: run,
+          loadCtx: (sid) => loadSessionContext(sid, run),
+          runInTx: (fn) => fn(run),
+        }
+      : undefined
+    await commitSpaces(
+      sessionId,
+      ["conversation", "actor", "actor-conversation"],
+      commitOverride
+    )
   } catch (err) {
     commitOk = false
     commitError = err
-    console.error(`[sandbox] teardown commit failed for ${sessionId}:`, err)
+    log.error({ sessionId, err }, "teardown commit failed")
   }
 
   const runtimeId = runtimeIdFromMounts(mounts) || null
@@ -1888,7 +1922,7 @@ export async function teardownSandbox(
     stillAlive = await liveHandle.isRunning().catch(() => false)
     if (!stillAlive) liveSandboxHandles.delete(sessionId)
   } else {
-    const ref = await buildSandboxRefFromSandboxRow(mounts)
+    const ref = await buildSandboxRefFromSandboxRow(mounts, run)
     if (ref) {
       try {
         const backend = backendForKind(ref)
@@ -1896,9 +1930,9 @@ export async function teardownSandbox(
         await handle.kill()
         stillAlive = await handle.isRunning().catch(() => false)
       } catch (err) {
-        console.error(
-          `[sandbox] teardown could not kill runtime for ${sessionId} via ${ref.adapter} adapter:`,
-          err
+        log.error(
+          { sessionId, adapter: ref.adapter, err },
+          "teardown could not kill runtime via adapter"
         )
         // Could not even connect/kill → treat as possibly-alive and leave it for
         // the reaper rather than deleting its tracking. (Dropped the killPid(
@@ -1915,7 +1949,7 @@ export async function teardownSandbox(
   if (stillAlive) {
     if (runtimeId) {
       await repo
-        .updateSandboxRow(runtimeId, { state: "closing" })
+        .updateSandboxRow(runtimeId, { state: "closing" }, run)
         .catch(() => {})
     }
     log.warn(
@@ -1935,7 +1969,7 @@ export async function teardownSandbox(
 
     // ④ close mounts.
     for (const mount of mounts) {
-      await updateFileMount(repo.defaultDbh(), mount.id, {
+      await updateFileMount(run, mount.id, {
         status: "closed",
         closedAt: true,
       }).catch(() => {})
@@ -1947,13 +1981,14 @@ export async function teardownSandbox(
     const message =
       commitError instanceof Error ? commitError.message : String(commitError)
     for (const mount of mounts) {
-      await updateFileMount(repo.defaultDbh(), mount.id, {
+      await updateFileMount(run, mount.id, {
         status: "failed",
         errorMessage: `teardown commit failed (live dir preserved at ${mount.materializedDir}): ${message}`,
       }).catch(() => {})
     }
-    console.error(
-      `[sandbox] teardown for ${sessionId}: commit failed — preserved live dirs under ${sandboxRootFor(sessionId)} for recovery`
+    log.error(
+      { sessionId, sandboxRoot: sandboxRootFor(sessionId) },
+      "teardown commit failed — preserved live dirs for recovery"
     )
   }
 
@@ -1966,17 +2001,17 @@ export async function teardownSandbox(
       runtimeId,
       actorId: ctx.actorId,
       conversationId: ctx.conversationId,
-    }).catch((err) =>
-      console.error(`[sandbox] revoke grants failed for ${sessionId}:`, err)
-    )
+      executor: run,
+    }).catch((err) => log.error({ sessionId, err }, "revoke grants failed"))
     await repo
-      .updateSandboxRow(runtimeId, { state: commitOk ? "closed" : "failed" })
-      .catch(() => {})
-    await deleteRuntime(ctx.workspaceId, runtimeId).catch((err) =>
-      console.error(
-        `[sandbox] soft-delete runtime failed for ${sessionId}:`,
-        err
+      .updateSandboxRow(
+        runtimeId,
+        { state: commitOk ? "closed" : "failed" },
+        run
       )
+      .catch(() => {})
+    await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
+      log.error({ sessionId, err }, "soft-delete runtime failed")
     )
   }
 }

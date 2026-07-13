@@ -15,6 +15,13 @@ import {
 
 const BASE = { NODE_ENV: "test" as const }
 
+// docker:bare fs ops are host-side, so the superRefine requires the container uid
+// to equal the API process uid. Match the test runner's own uid so the Mode-B
+// accept case is CI-uid-agnostic (root vs unprivileged).
+const RUNNER_UID = String(
+  typeof process.getuid === "function" ? process.getuid() : 0
+)
+
 function parse(bag: Record<string, string>) {
   return envSchema.safeParse({ ...BASE, ...bag })
 }
@@ -107,6 +114,42 @@ test("SANDBOX_PROVIDER=docker matching custom edge host + vhost ⇒ accepted", (
     SYNAPSE_TUNNEL_VHOST_HOST: "edge.example.com",
   })
   assert.ok(parsed.success, "matching edge + vhost accepted")
+})
+
+test("SANDBOX_PROVIDER=docker + SANDBOX_MODE=bare with STORAGE_VOLUME + BARE_IMAGE but no IMAGE/NETWORK/FRP ⇒ accepted (Mode-B / docker:bare)", () => {
+  const parsed = parse({
+    SANDBOX_PROVIDER: "docker",
+    SANDBOX_MODE: "bare",
+    SANDBOX_DOCKER_STORAGE_VOLUME: "vol",
+    SANDBOX_DOCKER_BARE_IMAGE: "debian:bookworm-slim",
+    // Match the runner uid so the host-side uid-parity gate passes everywhere.
+    SANDBOX_DOCKER_RUN_AS_UID: RUNNER_UID,
+  })
+  assert.ok(
+    parsed.success,
+    `docker:bare should parse with only STORAGE_VOLUME + BARE_IMAGE (IMAGE/NETWORK/FRP are resident-only); issues: ${
+      parsed.success ? "" : JSON.stringify(parsed.error.issues)
+    }`
+  )
+  assert.equal(
+    resolveSandboxMode({ SANDBOX_PROVIDER: "docker", SANDBOX_MODE: "bare" }),
+    "bare"
+  )
+})
+
+test("SANDBOX_PROVIDER=docker + SANDBOX_MODE=resident without IMAGE ⇒ reject (IMAGE still required in resident mode)", () => {
+  const parsed = parse({
+    SANDBOX_PROVIDER: "docker",
+    SANDBOX_MODE: "resident",
+    SANDBOX_DOCKER_NETWORK: "net",
+    SANDBOX_DOCKER_STORAGE_VOLUME: "vol",
+    FRP_SHARED_TOKEN: "frp-tok",
+  })
+  assert.ok(!parsed.success, "resident docker without IMAGE must fail boot")
+  const paths = parsed.success
+    ? []
+    : parsed.error.issues.map((i) => i.path.join("."))
+  assert.ok(paths.includes("SANDBOX_DOCKER_IMAGE"))
 })
 
 test("SANDBOX_DOCKER_RUN_AS_UID permits 0 (root, today's default)", () => {

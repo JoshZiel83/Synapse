@@ -18,7 +18,9 @@ import { EventEmitter } from "node:events"
 import { randomUUID } from "node:crypto"
 import { sql } from "kysely"
 import type { Kysely } from "kysely"
+import { SUBJECT_KIND } from "@synapse/shared"
 import { withTestDb } from "../../test/helpers/db.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
   getSandboxById,
   getLiveSandboxBySession,
@@ -191,6 +193,81 @@ async function insertActiveMount(
     sandboxId: patch.sandboxId ?? null,
   })
   return mount
+}
+
+/**
+ * Seed a LIVE (status='active') runtime-authorization grant on a sandbox runtime:
+ * a device_runtime service + a healthy filesystem exposure + its capability +
+ * the grant. Returns the grant id. teardown's revokeSandboxGrants must flip this
+ * to 'revoked' — the assertion that catches an un-threaded revoke executor.
+ */
+async function insertActiveSandboxGrant(
+  db: Kysely<any>,
+  seed: { workspaceId: string },
+  runtimeId: string
+): Promise<string> {
+  const service = await db
+    .insertInto("runtimeServices")
+    .values({
+      runtimeId,
+      serviceKind: "device_runtime",
+      status: "online",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const exposure = await db
+    .insertInto("runtimeExposures")
+    .values({
+      runtimeId,
+      workspaceId: seed.workspaceId,
+      serviceId: service.id,
+      stableKey: "synapse.builtin.filesystem.v1",
+      displayName: "filesystem",
+      transport: "builtin",
+      builtinKind: "filesystem",
+      runtimeStatus: "healthy",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  // Workspace subject: unscoped 'workspace' is in the grant validate-trigger
+  // whitelist and access_subject_workspace_id() matches the grant workspace.
+  const subjectId = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.WORKSPACE,
+    workspaceId: seed.workspaceId,
+  })
+  const capabilityRoot = await db
+    .insertInto("workspaceResources")
+    .values({
+      workspaceId: seed.workspaceId,
+      kind: "runtime_capability",
+      displayName: "filesystem",
+      createdBySubjectId: subjectId,
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  await db
+    .insertInto("runtimeCapabilities")
+    .values({
+      id: capabilityRoot.id,
+      workspaceId: seed.workspaceId,
+      exposureId: exposure.id,
+    } as any)
+    .execute()
+  const grant = await db
+    .insertInto("runtimeAuthorizationGrants")
+    .values({
+      workspaceId: seed.workspaceId,
+      runtimeId,
+      runtimeCapabilityId: capabilityRoot.id,
+      runtimeExposureId: exposure.id,
+      subjectId,
+      retention: "until_revoked",
+      status: "active",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return grant.id as string
 }
 
 // ── (b) RECOVERY: a 'failed' sandbox still resolves a ref (state-agnostic) ────
@@ -380,6 +457,65 @@ test("(d) a pre-bootstrap docker orphan (live mount, NO sandboxes row) is reaped
     assert.ok(
       docker.calls.some((c) => c[0] === "rm" && c.includes("cid-orphan")),
       "pre-bootstrap orphan container is reaped despite the flip-to-local"
+    )
+  })
+})
+
+// ── (e) STALE-TEARDOWN: reconcile drives the WRITE path on the injected trx ────
+//
+// P1.7: the whole point of the executor seam. A stale LOCAL sandbox (state
+// 'active', a live mount + a live grant, but a DEAD runtime — host_pid NULL) is
+// reconciled: reconcile threads its pinned trx into teardownSandbox, whose commit
+// → kill → close-mounts → revoke-grants → close-sandbox → soft-delete spine must
+// all run + PERSIST on that SAME connection. Asserting on `db` proves it: without
+// threading loadSessionContext(run)/revokeSandboxGrants(executor)/deleteRuntime(run)
+// the ctx-gated terminal block re-acquires the global db, sees no session, and
+// SKIPS — leaving the grant active / sandbox 'active' / runtime un-deleted (the
+// fake-green this fix closes). adapter='local' + host_pid NULL makes the kill
+// re-probe report NOT-running WITHOUT any docker CLI, so teardown reaches the
+// terminal soft-delete rather than parking at state='closing'.
+
+test("(e) stale-teardown: reconcile tears down a stale local sandbox (WRITE path persisted on the injected trx)", async () => {
+  await withTestDb(async (db) => {
+    const seed = await seedSession(db)
+    const runtimeId = await insertSandboxRuntime(db, {
+      workspaceId: seed.workspaceId,
+      sessionId: seed.sessionId,
+      adapter: "local",
+      state: "active",
+    })
+    // Active mount, materialized_dir NULL (nothing to commit ⇒ commitOk stays true).
+    const mount = await insertActiveMount(db, seed, { sandboxId: runtimeId })
+    // A live sandbox grant teardown must revoke.
+    await insertActiveSandboxGrant(db, seed, runtimeId)
+
+    // No live in-process handle (fresh process) + a dead local runtime ⇒
+    // isSandboxRuntimeAlive=false ⇒ reconcile tears it down on the SAME executor.
+    await reconcileSandboxes({ executor: db as any })
+
+    const mountRow = await sql<{ status: string }>`
+      SELECT status FROM file_mounts WHERE id = ${mount.id}`.execute(db)
+    assert.equal(mountRow.rows[0]?.status, "closed", "mount was closed")
+
+    const activeGrants = await sql<{ id: string }>`
+      SELECT id FROM runtime_authorization_grants
+      WHERE runtime_id = ${runtimeId} AND status = 'active'`.execute(db)
+    assert.equal(
+      activeGrants.rows.length,
+      0,
+      "sandbox grants were revoked (no active grant left)"
+    )
+
+    const sb = await getSandboxById(runtimeId, db)
+    assert.equal(sb!.state, "closed", "sandbox row flipped to 'closed'")
+
+    const rt = await sql<{ deletedAt: Date | null }>`
+      SELECT deleted_at AS "deletedAt" FROM runtimes WHERE id = ${runtimeId}`.execute(
+      db
+    )
+    assert.ok(
+      rt.rows[0]?.deletedAt != null,
+      "runtime was soft-deleted (deleted_at set)"
     )
   })
 })

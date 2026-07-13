@@ -302,10 +302,6 @@ export const envSchema = z
     // gate, so they are NOT renamed here.
     SANDBOX_PROVIDER: z.string().optional(),
     SANDBOX_MODE: withDefault(z.enum(["resident", "bare", "auto"]), "auto"),
-    SANDBOX_TRANSPORT: withDefault(
-      z.enum(["direct", "indirect", "auto"]),
-      "auto"
-    ),
     SANDBOX_LOCAL_CLI_PATH: withDefault(z.string(), ""),
     SANDBOX_SERVER_ORIGIN: withDefault(z.string(), ""),
     SANDBOX_DOCKER_IMAGE: withDefault(z.string(), ""),
@@ -530,22 +526,10 @@ export const envSchema = z
     const sandboxProvider = resolveSandboxProviderName(env)
     const sandboxMode = resolveSandboxMode(env)
     if (sandboxProvider === "docker") {
-      if (!env.SANDBOX_DOCKER_IMAGE?.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["SANDBOX_DOCKER_IMAGE"],
-          message:
-            "SANDBOX_DOCKER_IMAGE is required when SANDBOX_PROVIDER=docker",
-        })
-      }
-      if (!env.SANDBOX_DOCKER_NETWORK?.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["SANDBOX_DOCKER_NETWORK"],
-          message:
-            "SANDBOX_DOCKER_NETWORK is required when SANDBOX_PROVIDER=docker",
-        })
-      }
+      // STORAGE_VOLUME holds the materialized sandbox roots and is required by
+      // BOTH modes: resident mounts it into the cloud-sandbox image; bare mounts
+      // its volume-subpath dirs into the hardened container. IMAGE / NETWORK are
+      // resident-only (moved into the resident branch below).
       if (!env.SANDBOX_DOCKER_STORAGE_VOLUME?.trim()) {
         ctx.addIssue({
           code: "custom",
@@ -554,9 +538,27 @@ export const envSchema = z
             "SANDBOX_DOCKER_STORAGE_VOLUME is required when SANDBOX_PROVIDER=docker",
         })
       }
-      // A docker resident sandbox rides the frp tunnel (no co-located loopback),
-      // so it additionally requires FRP_SHARED_TOKEN + edge↔vhost consistency.
+      // A docker resident sandbox runs the cloud-sandbox IMAGE on its egress
+      // NETWORK and rides the frp tunnel (no co-located loopback), so it requires
+      // IMAGE + NETWORK + FRP_SHARED_TOKEN + edge↔vhost consistency. (docker:bare
+      // needs none of these — it runs a stock hardened base with `--network none`.)
       if (sandboxMode === "resident") {
+        if (!env.SANDBOX_DOCKER_IMAGE?.trim()) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["SANDBOX_DOCKER_IMAGE"],
+            message:
+              "SANDBOX_DOCKER_IMAGE is required when SANDBOX_PROVIDER=docker + SANDBOX_MODE=resident",
+          })
+        }
+        if (!env.SANDBOX_DOCKER_NETWORK?.trim()) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["SANDBOX_DOCKER_NETWORK"],
+            message:
+              "SANDBOX_DOCKER_NETWORK is required when SANDBOX_PROVIDER=docker + SANDBOX_MODE=resident",
+          })
+        }
         if (!env.FRP_SHARED_TOKEN?.trim()) {
           ctx.addIssue({
             code: "custom",
@@ -598,6 +600,18 @@ export const envSchema = z
       // docker:bare (Mode-B, P4a S10). frp is gated on mode==='resident' (above),
       // so a docker bare sandbox boots WITHOUT frp (no tunnel). Two extra gates:
       if (sandboxMode === "bare") {
+        // (0) BARE_IMAGE. docker:bare runs a STOCK hardened base image as a
+        // keepalive `sleep infinity` container; it must be a non-empty image ref.
+        // (withDefault seeds debian:bookworm-slim, so this only fires on a
+        // whitespace-only override that would `docker run` an empty image.)
+        if (!env.SANDBOX_DOCKER_BARE_IMAGE?.trim()) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["SANDBOX_DOCKER_BARE_IMAGE"],
+            message:
+              "SANDBOX_DOCKER_BARE_IMAGE is required (non-empty) when SANDBOX_PROVIDER=docker + SANDBOX_MODE=bare",
+          })
+        }
         // (1) uid-PARITY. docker:bare does host-side fs ops through the SAME
         // ExtendedLocalBackend as local:bare (the bytes are host-local under
         // STORAGE_DIR); the container runs `--user <runAsUid>` and writes to the
@@ -787,7 +801,6 @@ export const config = {
     // the shared transport facts are read under their EXISTING keys.
     provider: resolveSandboxProviderName(env),
     mode: resolveSandboxMode(env),
-    transport: env.SANDBOX_TRANSPORT,
     // Origin the LOCAL sandbox device-runtime dials back to (loopback for a
     // containerized local deploy); falls back to app.baseUrl when unset.
     serverOrigin:

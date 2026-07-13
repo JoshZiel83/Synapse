@@ -1749,7 +1749,8 @@ export async function findDeviceDetail(
 export async function softDeleteRuntime(
   workspaceId: string,
   runtimeId: string,
-  opts?: { requireKind?: "device" | "sandbox" }
+  opts?: { requireKind?: "device" | "sandbox" },
+  run: Executor = db
 ): Promise<number> {
   // runtimes.deleted_at is the SOLE runtime soft-delete root (devices/sandboxes
   // shed their own deleted_at). Flip the supertype row; the detail stays for
@@ -1757,7 +1758,9 @@ export async function softDeleteRuntime(
   // scopes the flip: the /devices/:id endpoint passes 'device' so a sandbox
   // runtime id never matches (0 rows → the caller's 404), preventing a
   // manage_devices holder from terminating an Actor sandbox via the device API.
-  let q = db
+  // `run` defaults to the global db (prod); the sandbox teardown/crash-recovery
+  // path threads its pinned executor so the flip lands on the same connection.
+  let q = run
     .updateTable("runtimes")
     .set({ deletedAt: new Date() })
     .where("workspaceId", "=", workspaceId)

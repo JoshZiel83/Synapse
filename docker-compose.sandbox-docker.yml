@@ -7,17 +7,27 @@
 # unconditionally would hand every production API container root on the host even
 # when sandboxes are disabled or using the default `local` backend.
 #
-# Layer this file ONLY when you run SANDBOX_PROVIDER=docker:
+# Layer this file whenever you run SANDBOX_PROVIDER=docker — for BOTH modes:
 #
+#   # Mode A (resident): the device-runtime image, reached over the frp tunnel.
 #   docker compose \
 #     -f docker-compose.yml \
 #     -f docker-compose.sandbox-docker.yml \
 #     --profile production up -d api tunnel-edge
 #
+#   # Mode B (bare, SANDBOX_MODE=bare): a stock hardened base image
+#   # (SANDBOX_DOCKER_BARE_IMAGE, default debian:bookworm-slim) the API
+#   # `docker run`s + `docker exec`s directly — NO tunnel-edge.
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.sandbox-docker.yml \
+#     --profile production up -d api
+#
 # Compose appends the volume below to the api service's existing volumes. The
-# backend only ever `docker run`s the pinned SANDBOX_DOCKER_IMAGE with a fixed
-# argument allowlist; for multi-tenant hosts, front the socket with a
-# docker-socket-proxy and point the API at it instead of the raw socket.
+# backend only ever `docker run`s the pinned SANDBOX_DOCKER_IMAGE (resident) or
+# SANDBOX_DOCKER_BARE_IMAGE (bare) with a fixed argument allowlist; for
+# multi-tenant hosts, front the socket with a docker-socket-proxy and point the
+# API at it instead of the raw socket.
 
 services:
   api:

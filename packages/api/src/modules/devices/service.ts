@@ -33,6 +33,7 @@ import {
   softDeleteRuntime,
 } from "./repo.js"
 import type { RuntimeCatalogExposure } from "@synapse/device-protocol"
+import type { Executor } from "../../infrastructure/database/kysely.js"
 import { config } from "../../config/index.js"
 import {
   buildDeviceInstallCommands,
@@ -169,9 +170,12 @@ export async function deleteDevice(
  */
 export async function deleteRuntime(
   workspaceId: string,
-  runtimeId: string
+  runtimeId: string,
+  run?: Executor
 ): Promise<void> {
-  const updated = await softDeleteRuntime(workspaceId, runtimeId)
+  // `run` (optional) threads the sandbox teardown/crash-recovery executor into
+  // the soft-delete flip; undefined preserves prod (global db) behaviour.
+  const updated = await softDeleteRuntime(workspaceId, runtimeId, undefined, run)
   if (updated === 0) {
     throw new DeviceModuleError({
       statusCode: 404,

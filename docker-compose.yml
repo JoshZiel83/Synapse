@@ -189,6 +189,15 @@ services:
       # STORAGE_DIR=/app/storage/files under /app/storage → files/sandboxes/<id>).
       # Only override if you remount the volume elsewhere.
       SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT: ${SANDBOX_DOCKER_STORAGE_VOLUME_MOUNT:-/app/storage}
+      # Mode-B (bare) only: docker:bare runs a STOCK hardened base container the
+      # API `docker exec`s into (no in-sandbox device-runtime / frp). These knobs
+      # are inert under the default resident mode. PURE_NETWORK/RUN_AS_UID default
+      # empty (=> `--network none` + root-in-container uid parity resolved at boot).
+      SANDBOX_DOCKER_BARE_IMAGE: ${SANDBOX_DOCKER_BARE_IMAGE:-debian:bookworm-slim}
+      SANDBOX_DOCKER_PURE_NETWORK: ${SANDBOX_DOCKER_PURE_NETWORK:-}
+      SANDBOX_DOCKER_RUN_AS_UID: ${SANDBOX_DOCKER_RUN_AS_UID:-}
+      SANDBOX_DOCKER_PIDS_LIMIT: ${SANDBOX_DOCKER_PIDS_LIMIT:-}
+      SANDBOX_DOCKER_MEMORY: ${SANDBOX_DOCKER_MEMORY:-1g}
       # Internal address the sandbox container dials back to (NOT the public
       # APP_BASE_URL — the sandbox is on an internal-only network).
       SANDBOX_SERVER_ORIGIN: ${SANDBOX_SERVER_ORIGIN:-http://api:3001}
