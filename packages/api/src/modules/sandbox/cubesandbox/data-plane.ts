@@ -187,15 +187,16 @@ function fileTypeToKind(
   }
 }
 
-/** Parse an envd RFC-3339 modifiedTime into epoch-ms. Routes through the canonical
- *  fail-loud parser (never a bare Date.parse); an absent/unparseable value becomes
- *  'absent' (undefined) — NEVER a fabricated now (datetime discipline). */
-export function parseMtimeMs(
-  modifiedTime: string | undefined
+/** Parse an external RFC-3339 timestamp (envd modifiedTime, control-plane
+ *  startedAt, …) into epoch-ms. Routes through the canonical fail-loud parser
+ *  (never a bare Date.parse); an absent/unparseable value becomes 'absent'
+ *  (undefined) — NEVER a fabricated now (datetime discipline). */
+export function rfc3339ToEpochMs(
+  value: string | undefined
 ): number | undefined {
-  if (!modifiedTime) return undefined
+  if (!value) return undefined
   try {
-    const ms = new Date(fromExternalRfc3339(modifiedTime)).getTime()
+    const ms = new Date(fromExternalRfc3339(value)).getTime()
     return Number.isFinite(ms) ? ms : undefined
   } catch {
     return undefined
@@ -351,7 +352,7 @@ export function createRemoteBareDataPlane(
     try {
       const st = await envd.stat(vm)
       // datetime-ok: envd omitted a parseable mtime; the write just occurred, so ≈now.
-      return parseMtimeMs(st.modifiedTime) ?? Date.now()
+      return rfc3339ToEpochMs(st.modifiedTime) ?? Date.now()
     } catch {
       // datetime-ok: stat failed post-write; the write just occurred, so ≈now.
       return Date.now()
@@ -368,7 +369,7 @@ export function createRemoteBareDataPlane(
           exists: true,
           kind: fileTypeToKind(e.type),
           size: e.size,
-          mtimeMs: parseMtimeMs(e.modifiedTime),
+          mtimeMs: rfc3339ToEpochMs(e.modifiedTime),
           isSymlink: e.type === "symlink",
         }
       } catch (err) {
@@ -487,7 +488,7 @@ export function createRemoteBareDataPlane(
         try {
           const st = await envd.stat(vm)
           priorExists = true
-          priorMtimeMs = parseMtimeMs(st.modifiedTime)
+          priorMtimeMs = rfc3339ToEpochMs(st.modifiedTime)
           if (wantSha) {
             if ((st.size ?? 0) > caps.maxReadBytes) {
               // Too large to hash within the read cap → skip the advisory sha check.
@@ -571,7 +572,7 @@ export function createRemoteBareDataPlane(
       const entry = await envd.move(vmSrc, vmDest)
       // datetime-ok: envd omitted the moved entry's mtime; the move just occurred, so
       // ≈now is the honest advisory value for this REQUIRED field (not a value mask).
-      return { mtimeMs: parseMtimeMs(entry.modifiedTime) ?? Date.now() }
+      return { mtimeMs: rfc3339ToEpochMs(entry.modifiedTime) ?? Date.now() }
     },
     async remove(
       path: string,

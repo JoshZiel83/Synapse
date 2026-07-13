@@ -32,7 +32,7 @@ import {
   type WorkingSetTransport,
 } from "../working-set-bridge.js"
 import {
-  parseMtimeMs,
+  rfc3339ToEpochMs,
   trimTrailingSlash,
   vfsToVm,
   vmToVfs,
@@ -84,7 +84,7 @@ export function makeEnvdWorkingSetTransport(opts: {
       // under the VM root is skipped rather than leaked as a raw key.
       const relpath = vmToVfs(e.path, vmRoot, "")
       if (!relpath || !relpath.startsWith("/")) continue
-      const ms = parseMtimeMs(e.modifiedTime)
+      const ms = rfc3339ToEpochMs(e.modifiedTime)
       out.push({
         relpath,
         size: e.size ?? 0,

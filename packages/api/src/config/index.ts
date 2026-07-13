@@ -349,6 +349,17 @@ const envObjectSchema = z.object({
     (v) => (v === "" || v == null ? undefined : v),
     z.coerce.number().int().min(1).default(49983)
   ),
+  // The provider-side auto-destroy deadline (seconds) stamped on every VM at
+  // create. It is a HARD wall-clock timer (verified: a VM with timeout=20 dies
+  // ~20s later with zero activity), so the keepalive maintenance tick refreshes
+  // every NON-terminal off-box VM well inside this window — an ACTIVE session's
+  // VM never self-destructs, while an ABANDONED VM (no keepalive owner: crashed
+  // API, orphaned create) dies within one TTL as the paid-resource backstop.
+  // MUST stay comfortably above the maintenance interval (60s). Default 1800s.
+  SANDBOX_CUBESANDBOX_SANDBOX_TTL_SECONDS: z.preprocess(
+    (v) => (v === "" || v == null ? undefined : v),
+    z.coerce.number().int().min(120).default(1800)
+  ),
   // Optional management-plane API key (unused on the unauthenticated dev
   // deployment; sent as X-API-Key + Authorization: Bearer when set).
   SANDBOX_CUBESANDBOX_API_KEY: withDefault(z.string(), ""),
@@ -773,6 +784,7 @@ export const config = {
       template: env.SANDBOX_CUBESANDBOX_TEMPLATE.trim(),
       vmRoot: env.SANDBOX_CUBESANDBOX_VM_ROOT.trim() || "/workspace",
       envdPort: env.SANDBOX_CUBESANDBOX_ENVD_PORT,
+      sandboxTtlSeconds: env.SANDBOX_CUBESANDBOX_SANDBOX_TTL_SECONDS,
       apiKey: env.SANDBOX_CUBESANDBOX_API_KEY.trim(),
     },
   },

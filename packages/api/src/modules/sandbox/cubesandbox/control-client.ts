@@ -18,6 +18,7 @@ import {
   type CreateSandboxResult,
   type HealthStatus,
   type SandboxInfo,
+  type SandboxListEntry,
   type SandboxState,
 } from "./types.js"
 
@@ -258,6 +259,48 @@ export class CubeControlClient {
     if (status < 200 || status >= 300) {
       await this.fail("set sandbox timeout failed", status, text)
     }
+  }
+
+  /**
+   * GET /v2/sandbox — enumerate every live/paused sandbox WITH its metadata +
+   * `startedAt`. The off-box orphan sweep uses this to find VMs tagged as ours
+   * whose resource id is no longer tracked in the DB.
+   *
+   * The dev deployment does NOT honor `?metadata=` query filters (every variant
+   * returns the full list — verified live), so this deliberately fetches ALL and
+   * leaves provenance filtering to the caller. Throws on a non-2xx (the sweep
+   * treats a list failure as "reap nothing this cycle" — fail-safe, not
+   * fail-destructive).
+   */
+  async list(): Promise<SandboxListEntry[]> {
+    const { status, text } = await this.request("GET", "/v2/sandboxes")
+    if (status < 200 || status >= 300) {
+      await this.fail("list sandboxes failed", status, text)
+    }
+    const raw: unknown = text ? JSON.parse(text) : []
+    if (!Array.isArray(raw)) {
+      throw new CubeControlError(
+        "list sandboxes: malformed response body",
+        status
+      )
+    }
+    const out: SandboxListEntry[] = []
+    for (const item of raw) {
+      if (!isRecord(item) || typeof item.sandboxID !== "string") {
+        continue
+      }
+      const metadata = isRecord(item.metadata)
+        ? (item.metadata as Record<string, string>)
+        : undefined
+      out.push({
+        sandboxID: item.sandboxID,
+        state: (asString(item.state) ?? "running") as SandboxState,
+        startedAt: asString(item.startedAt),
+        templateID: asString(item.templateID),
+        metadata,
+      })
+    }
+    return out
   }
 
   /** GET /health — CubeAPI liveness + running sandbox count. */

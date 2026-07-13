@@ -79,6 +79,8 @@ import {
   reconcileSandboxes,
   reapStuckProvisioningSandboxes,
   retryStuckClosingSandboxes,
+  reapOffBoxSandboxOrphans,
+  keepAliveOffBoxSandboxes,
 } from "./modules/sandbox/index.js"
 import { reapDockerSandboxOrphans } from "./modules/sandbox/docker-sandbox-backend.js"
 import {
@@ -441,6 +443,39 @@ async function main() {
         )
     }, 60_000)
     stuckClosingRetry.unref?.()
+    // (R4 §1.7) Off-box provider maintenance: keepalive THEN orphan sweep. Both
+    // no-op unless the configured provider is off-box (cube). Keepalive first —
+    // push every in-use VM's hard auto-destroy deadline forward so a live session
+    // never self-destructs; then sweep provider VMs tagged as ours but no longer
+    // tracked by a live DB row. Boot reconcile ran the first sweep; this closes the
+    // boot-only gap on a long-uptime process. Unref'd so it never holds the process.
+    const offBoxMaintenance = setInterval(() => {
+      void keepAliveOffBoxSandboxes()
+        .then((k) => {
+          if (k.failed > 0) {
+            log.warn(
+              { refreshed: k.refreshed, failed: k.failed },
+              "[sandbox] off-box keepalive: some deadline refreshes failed"
+            )
+          }
+        })
+        .catch((err) =>
+          log.error({ err }, "[sandbox] off-box keepalive failed")
+        )
+      void reapOffBoxSandboxOrphans()
+        .then((r) => {
+          if (r.reaped > 0) {
+            log.warn(
+              { reaped: r.reaped, scanned: r.scanned },
+              "[sandbox] reaped off-box provider orphan(s)"
+            )
+          }
+        })
+        .catch((err) =>
+          log.error({ err }, "[sandbox] off-box orphan sweep failed")
+        )
+    }, 60_000)
+    offBoxMaintenance.unref?.()
   } else {
     // SANDBOX_PROVIDER=none (P2, owner decision): `none` is a PROVISIONING
     // selector, NOT a teardown switch. We do NOT provision, reconcile, tear down,

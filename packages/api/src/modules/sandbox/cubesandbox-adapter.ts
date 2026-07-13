@@ -44,6 +44,7 @@ import { createCubeEnvdWorkingSetBridge } from "./cubesandbox/working-set.js"
 import { sandboxAdapterMetadata } from "./adapter-metadata.js"
 import type {
   AdapterReadyOptions,
+  OrphanResource,
   ReadinessReport,
   SandboxAdapter,
   SandboxReconnectOptions,
@@ -58,10 +59,14 @@ import { repersistBareSandboxCredentials } from "./repo.js"
 import {
   CubeControlClient,
   CubeEnvdClient,
+  SYNAPSE_RUNTIME_ID_KEY,
+  SYNAPSE_SESSION_ID_KEY,
+  SYNAPSE_WORKSPACE_ID_KEY,
   type SandboxInfo as CubeSandboxInfo,
 } from "./cubesandbox/index.js"
 import {
   createRemoteBareDataPlane,
+  rfc3339ToEpochMs,
   type RemoteEnvdTransport,
 } from "./cubesandbox/data-plane.js"
 
@@ -75,6 +80,9 @@ export interface CubesandboxBareOptions {
   template: string
   vmRoot: string
   envdPort: number
+  /** Provider-side auto-destroy deadline (seconds) stamped at create; refreshed
+   *  by the keepalive maintenance tick so an active session's VM never expires. */
+  sandboxTtlSeconds: number
   apiKey?: string
 }
 
@@ -88,6 +96,7 @@ export function cubesandboxBareOptionsFromEnv(): CubesandboxBareOptions {
     template: c.template,
     vmRoot: c.vmRoot,
     envdPort: c.envdPort,
+    sandboxTtlSeconds: c.sandboxTtlSeconds,
     apiKey: c.apiKey || undefined,
   }
 }
@@ -264,8 +273,25 @@ export function makeCubesandboxBareAdapter(
       // NO host-mount-dir check (off-box has no host volume — the working set is
       // pushed later by the spine). ① stand up the VM via the control plane.
       const control = controlFactory(runOpts)
+      // (R4 §1.7 / #3) Generate the runtime identity BEFORE standing up the VM so
+      // it can be stamped as provider metadata. A crash between create() and mint()
+      // then still leaves a VM TAGGED with its intended runtimeId + workspace +
+      // session — the orphan sweep matches the tag against the (absent) DB row and
+      // reaps it, and the create TTL is the paid-resource backstop if the sweep
+      // never runs. `timeoutSeconds` is a HARD deadline (verified), refreshed by
+      // the keepalive maintenance tick while the session stays non-terminal.
+      const runtimeId = randomUUID()
+      const serviceId = randomUUID()
       const created = await control
-        .create({ templateID: runOpts.template })
+        .create({
+          templateID: runOpts.template,
+          timeoutSeconds: runOpts.sandboxTtlSeconds,
+          metadata: {
+            [SYNAPSE_RUNTIME_ID_KEY]: runtimeId,
+            [SYNAPSE_WORKSPACE_ID_KEY]: spec.workspaceId,
+            [SYNAPSE_SESSION_ID_KEY]: spec.sessionId,
+          },
+        })
         .catch((err) => {
           throw new SandboxBackendError(
             `cubesandbox create failed: ${errMessage(err)}`
@@ -287,8 +313,6 @@ export function makeCubesandboxBareAdapter(
       })
       let envdOwnedByPlane = false
       try {
-        const runtimeId = randomUUID()
-        const serviceId = randomUUID()
         // R3.2 target-confusion binding: the endpoint carries the AUTHORITATIVE
         // sandbox id (== sandboxes.resource_id), never sliced back out of the
         // free-string endpoint on dispatch.
@@ -545,11 +569,52 @@ export function makeCubesandboxBareAdapter(
       }
       return { plane, credentials }
     },
-    // R4 Phase 1d: the control-plane list-by-metadata sweep lands in a later
-    // sub-phase; inert for now (the create() TTL is the paid-resource safety net).
-    listOrphans: async () => [],
+    // (R4 §1.7 / #3) Enumerate cube VMs that are OURS (provenance-tagged) but no
+    // longer tracked by a live DB row → the reconciler DELETEs them. The dev
+    // deployment ignores metadata query filters, so we list ALL and filter here.
+    listOrphans: async ({ activeResourceIds, minAgeMs }) => {
+      const graceMs = minAgeMs ?? ORPHAN_MIN_AGE_FALLBACK_MS
+      const nowMs = Date.now()
+      const entries = await controlFactory(runOpts).list()
+      const orphans: OrphanResource[] = []
+      for (const e of entries) {
+        // Provenance: only ever reap a VM WE created (tagged with our runtimeId
+        // key). A foreign tenant's sandbox on a shared deployment is untouchable.
+        if (!e.metadata?.[SYNAPSE_RUNTIME_ID_KEY]) continue
+        // Tracked by a non-terminal DB row (provisioning/active/closing) → in use.
+        if (activeResourceIds.has(e.sandboxID)) continue
+        // Age grace: never reap a VM younger than a provision cycle — its mint may
+        // simply not have committed yet (the create→mint race). Unknown/unparseable
+        // start time is treated as too-young (fail-safe: let the TTL reap it).
+        const startedMs = rfc3339ToEpochMs(e.startedAt)
+        if (startedMs === undefined || nowMs - startedMs < graceMs) continue
+        orphans.push({ resourceId: e.sandboxID })
+      }
+      return orphans
+    },
+    // Destroy one untracked VM (idempotent: kill() treats a 404 as success). A
+    // failure (e.g. a stuck paused VM 500s) throws so the sweep logs + retries.
+    destroyResource: async (resourceId: string) => {
+      await controlFactory(runOpts).kill(resourceId)
+    },
+    // Push a non-terminal VM's hard auto-destroy deadline forward (keepalive) so an
+    // active session's VM never self-destructs mid-session between maintenance ticks.
+    refreshResourceDeadline: async (resourceId: string) => {
+      await controlFactory(runOpts).setTimeout(
+        resourceId,
+        runOpts.sandboxTtlSeconds
+      )
+    },
   }
 }
+
+/**
+ * (R4 §1.7) Fallback age grace when the reconciler doesn't pass an explicit
+ * `minAgeMs`. A VM younger than this is NEVER swept (its mint may be in flight) —
+ * the create TTL is the backstop for a genuinely-leaked young VM. The service's
+ * sweep passes its own configured grace; this is only the direct-call default.
+ */
+const ORPHAN_MIN_AGE_FALLBACK_MS = 600_000
 
 function makeCubesandboxBareHandle(args: {
   sessionId: string

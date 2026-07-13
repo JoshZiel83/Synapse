@@ -26,6 +26,21 @@ export const DEFAULT_ENVD_USER = "root"
 /** Default per-request timeout for control-plane + unary data-plane calls. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 
+// ── Provenance metadata (orphan sweep) ───────────────────────────────────────
+// Every Synapse-created cube VM is stamped with these metadata keys at create().
+// The presence of SYNAPSE_RUNTIME_ID_KEY is the ownership marker the orphan sweep
+// filters on, so it NEVER reaps a VM another tenant/tool created on the same
+// deployment. camelCase — verified to round-trip through the control plane's
+// `metadata` map (dotted keys collide with cube's own `cube.*` namespace).
+
+/** Metadata key: the intended runtimes.id (stamped BEFORE mint, so a crash in the
+ *  create→mint window still leaves a VM identifiable as ours). */
+export const SYNAPSE_RUNTIME_ID_KEY = "synapseRuntimeId"
+/** Metadata key: the owning workspace id. */
+export const SYNAPSE_WORKSPACE_ID_KEY = "synapseWorkspaceId"
+/** Metadata key: the owning session id. */
+export const SYNAPSE_SESSION_ID_KEY = "synapseSessionId"
+
 // ── Control plane ────────────────────────────────────────────────────────────
 
 /** Configuration for {@link CubeControlClient}. */
@@ -96,6 +111,24 @@ export interface SandboxInfo {
 export interface HealthStatus {
   readonly status: string
   readonly sandboxes: number
+}
+
+/**
+ * One entry of {@link CubeControlClient.list} (GET /v2/sandboxes). Carries the
+ * per-VM `metadata` (so the sweep can match the Synapse provenance tag) and
+ * `startedAt` (so the sweep can apply an age grace and never reap a VM younger
+ * than a provision cycle). NOTE: the dev deployment IGNORES metadata query
+ * filters (verified live), so callers list ALL and filter client-side.
+ */
+export interface SandboxListEntry {
+  readonly sandboxID: string
+  readonly state: SandboxState
+  // datetime-ok: raw provider RFC-3339 wire value; parsed via the canonical
+  // rfc3339ToEpochMs adapter at the orphan-sweep boundary, never used as a
+  // canonical instant directly (so it stays a bare unbranded string here).
+  readonly startedAt?: string
+  readonly templateID?: string
+  readonly metadata?: Record<string, string>
 }
 
 // ── Data plane (envd) ────────────────────────────────────────────────────────

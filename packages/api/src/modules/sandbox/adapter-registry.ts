@@ -208,14 +208,26 @@ export interface SandboxAdapter {
 
   /**
    * (2f) orphan enumeration + destroy-retry so the reconciler can DELETE
-   * untracked provider resources. R4 Phase 1d: inert ([]) — docker keeps its
-   * existing label-reaper path in the spine; the provider sweep generalizes here
-   * later.
+   * untracked provider resources. off-box (cube) lists provider VMs tagged as
+   * ours whose resource id is not in `activeResourceIds` (the live/non-terminal
+   * DB set) and older than `minAgeMs` (the create→mint race grace). resident/host
+   * adapters leave it undefined (docker keeps its label-reaper in the spine).
    */
   listOrphans?(opts: {
     activeResourceIds: ReadonlySet<string>
+    /** Never report a resource younger than this (its mint may be in flight). */
+    minAgeMs?: number
   }): Promise<OrphanResource[]>
   destroyResource?(resourceId: string): Promise<void>
+
+  /**
+   * (2f keepalive) Push a non-terminal provider resource's auto-destroy deadline
+   * forward. off-box VMs self-destruct on a HARD provider TTL (the paid-resource
+   * leak backstop); the maintenance tick calls this for every non-terminal
+   * off-box sandbox so an ACTIVE session's VM never expires mid-session. Adapters
+   * whose resources don't self-destruct (resident/host) leave it undefined.
+   */
+  refreshResourceDeadline?(resourceId: string): Promise<void>
 }
 
 /**

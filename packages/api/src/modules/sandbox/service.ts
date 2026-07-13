@@ -519,6 +519,21 @@ export async function reconcileSandboxes(
       log.error({ err }, "reconcile: docker orphan reap failed")
     }
   }
+
+  // (R4 §1.7 / #3) Off-box provider orphan sweep — DELETE cube VMs tagged as ours
+  // but no longer tracked by a live DB row (crash-between-create-and-mint leaks +
+  // post-teardown stragglers the docker/DB sweeps can't see). No-op unless the
+  // configured provider is off-box. Self-contained fault handling; wrapped anyway.
+  try {
+    const { reaped } = await reapOffBoxSandboxOrphans({
+      executor: deps.executor,
+    })
+    if (reaped > 0) {
+      log.warn({ reaped }, "reconcile: reaped off-box provider orphan(s)")
+    }
+  } catch (err) {
+    log.error({ err }, "reconcile: off-box orphan sweep failed")
+  }
 }
 
 const loadSessionContext = repo.loadSessionContext
@@ -647,6 +662,144 @@ export async function retryStuckClosingSandboxes(
     }
   }
   return { scanned: stuck.length, retried }
+}
+
+/**
+ * (R4 §1.7) Age grace for the off-box orphan sweep: a provider VM younger than
+ * this is NEVER reaped — its mint may simply not have committed yet (the
+ * create→mint race), and a genuinely-leaked young VM is caught by the create TTL.
+ * Sized comfortably above a full provision cycle (create + working-set push +
+ * active flip). The keepalive keeps in-use VMs out of the candidate set entirely.
+ */
+const OFFBOX_ORPHAN_MIN_AGE_MS = 600_000
+
+/** Resolve the CURRENTLY-configured adapter when it is off-box, else null. Shared
+ *  by the off-box sweep + keepalive so both target the same provider. Injectable. */
+function configuredOffBoxAdapter(
+  injected?: SandboxAdapter | null
+): SandboxAdapter | null {
+  const adapter =
+    injected !== undefined
+      ? injected
+      : resolveSandboxAdapter(config.sandbox.provider, config.sandbox.mode)
+  return adapter && adapter.meta.offBox ? adapter : null
+}
+
+export interface OffBoxOrphanSweepResult {
+  scanned: number
+  reaped: number
+}
+
+/**
+ * (R4 §1.7 / #3) Off-box provider orphan sweep — the provider analogue of the
+ * docker label reaper. For the configured off-box adapter, DELETE provider VMs
+ * tagged as ours (provenance) whose resource id is NOT in the live/non-terminal
+ * DB set and older than the grace: crash-between-create-and-mint leaks, plus any
+ * post-teardown straggler whose row already went terminal. Best-effort and
+ * per-orphan fault-tolerant; a listing failure reaps NOTHING (fail-safe, never
+ * fail-destructive). No-op for host/resident/none providers (no self-managed
+ * provider resources) and when the adapter lacks the orphan seams.
+ */
+export async function reapOffBoxSandboxOrphans(
+  deps: {
+    executor?: Executor
+    adapter?: SandboxAdapter | null
+    minAgeMs?: number
+    /** Override the live/non-terminal resource-id reader (defaults to the repo). */
+    listActiveResourceIds?: (
+      adapter: string,
+      run: Executor
+    ) => Promise<string[]>
+  } = {}
+): Promise<OffBoxOrphanSweepResult> {
+  const adapter = configuredOffBoxAdapter(deps.adapter)
+  if (!adapter?.listOrphans || !adapter.destroyResource) {
+    return { scanned: 0, reaped: 0 }
+  }
+  const run = deps.executor ?? repo.defaultDbh()
+  const minAgeMs = deps.minAgeMs ?? OFFBOX_ORPHAN_MIN_AGE_MS
+  const listActive =
+    deps.listActiveResourceIds ?? repo.listNonTerminalSandboxResourceIds
+  let scanned = 0
+  let reaped = 0
+  try {
+    const activeResourceIds = new Set(await listActive(adapter.meta.tag, run))
+    const orphans = await adapter.listOrphans({ activeResourceIds, minAgeMs })
+    scanned = orphans.length
+    for (const orphan of orphans) {
+      try {
+        await adapter.destroyResource(orphan.resourceId)
+        reaped += 1
+        log.warn(
+          { adapter: adapter.key, resourceId: orphan.resourceId },
+          "off-box orphan sweep: destroyed untracked provider VM"
+        )
+      } catch (err) {
+        log.error(
+          { adapter: adapter.key, resourceId: orphan.resourceId, err },
+          "off-box orphan destroy failed (will retry next sweep)"
+        )
+      }
+    }
+  } catch (err) {
+    log.error({ adapter: adapter.key, err }, "off-box orphan sweep failed")
+  }
+  return { scanned, reaped }
+}
+
+export interface OffBoxKeepAliveResult {
+  refreshed: number
+  failed: number
+}
+
+/**
+ * (R4 §1.7 keepalive) Push the hard provider auto-destroy deadline forward for
+ * every IN-USE (provisioning/active) off-box VM, so a live session's VM never
+ * self-destructs mid-session between maintenance ticks. This is what makes a
+ * finite create TTL safe: an active session is continuously refreshed while an
+ * ABANDONED VM (no keepalive owner — crashed API, orphaned create) expires within
+ * one TTL as the paid-resource backstop. Best-effort per VM.
+ */
+export async function keepAliveOffBoxSandboxes(
+  deps: {
+    executor?: Executor
+    adapter?: SandboxAdapter | null
+    /** Override the in-use resource-id reader (defaults to the repo). */
+    listInUseResourceIds?: (adapter: string, run: Executor) => Promise<string[]>
+  } = {}
+): Promise<OffBoxKeepAliveResult> {
+  const adapter = configuredOffBoxAdapter(deps.adapter)
+  if (!adapter?.refreshResourceDeadline) {
+    return { refreshed: 0, failed: 0 }
+  }
+  const run = deps.executor ?? repo.defaultDbh()
+  const listInUse =
+    deps.listInUseResourceIds ?? repo.listKeepAliveSandboxResourceIds
+  let resourceIds: string[]
+  try {
+    resourceIds = await listInUse(adapter.meta.tag, run)
+  } catch (err) {
+    log.error(
+      { adapter: adapter.key, err },
+      "off-box keepalive: candidate query failed"
+    )
+    return { refreshed: 0, failed: 0 }
+  }
+  let refreshed = 0
+  let failed = 0
+  for (const resourceId of resourceIds) {
+    try {
+      await adapter.refreshResourceDeadline(resourceId)
+      refreshed += 1
+    } catch (err) {
+      failed += 1
+      log.warn(
+        { adapter: adapter.key, resourceId, err },
+        "off-box keepalive: deadline refresh failed"
+      )
+    }
+  }
+  return { refreshed, failed }
 }
 
 /** Per-session sandbox root: <STORAGE_DIR>/sandboxes/<sessionId>. */

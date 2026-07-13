@@ -832,6 +832,49 @@ export async function listReapableClosingSandboxSessions(
 }
 
 /**
+ * (R4 §1.7 orphan sweep) Provider resource ids of the LIVE, non-terminal
+ * sandboxes for an adapter — the "still ours, do NOT reap" set the provider VM
+ * listing is diffed against. Non-terminal = provisioning/active/closing (a
+ * 'closing' VM may still be pulled by teardown/recovery). A soft-deleted runtime
+ * or a closed/failed row is intentionally ABSENT so its leaked VM gets reaped.
+ * Empty resource_id (a host/resident row) is excluded.
+ */
+export async function listNonTerminalSandboxResourceIds(
+  adapter: string,
+  run: Executor = db
+): Promise<string[]> {
+  const rows = await sql<{ resourceId: string }>`
+    SELECT sb.resource_id AS "resourceId"
+      FROM sandboxes sb
+      JOIN runtimes_live r ON r.id = sb.id
+      WHERE sb.adapter = ${adapter}
+        AND sb.resource_id <> ''
+        AND sb.state IN ('provisioning', 'active', 'closing')`.execute(run)
+  return rows.rows.map((x) => x.resourceId)
+}
+
+/**
+ * (R4 §1.7 keepalive) Provider resource ids of the LIVE sandboxes whose session
+ * is IN USE (provisioning/active) for an adapter — the VMs whose hard provider
+ * auto-destroy deadline the maintenance tick must push forward so an active
+ * session never self-destructs. 'closing' is excluded on purpose (teardown / the
+ * closing reaper own it, and the TTL is its intended backstop).
+ */
+export async function listKeepAliveSandboxResourceIds(
+  adapter: string,
+  run: Executor = db
+): Promise<string[]> {
+  const rows = await sql<{ resourceId: string }>`
+    SELECT sb.resource_id AS "resourceId"
+      FROM sandboxes sb
+      JOIN runtimes_live r ON r.id = sb.id
+      WHERE sb.adapter = ${adapter}
+        AND sb.resource_id <> ''
+        AND sb.state IN ('provisioning', 'active')`.execute(run)
+  return rows.rows.map((x) => x.resourceId)
+}
+
+/**
  * CONTROL-PATH resolver primary: load a sandboxes row by id with NO state filter
  * (rows are never hard-deleted; resource_id/host_pid/adapter survive
  * 'failed'/'closing'/'closed'). Used by teardown/recovery/liveness so a runtime
