@@ -286,7 +286,12 @@ export const ConsumePairingInputSchema = z.object({
   pairing_code: z.string().min(1),
   device_pubkey: z.string(),
   service_pubkey: z.string(),
-  service_kind: z.enum(RUNTIME_SERVICE_KINDS).default("device_runtime"),
+  // R3.P2e-pairing: only device_runtime is pairable through /pairing-sessions
+  // (consumeLocalPairingTx always writes 'device_runtime'; the api service-level
+  // reject added in R2 stays as defense-in-depth). The WIRE contract used to
+  // advertise EVERY service_kind, which was a lie — narrow it to the single
+  // legal literal so a non-device_runtime consume fails at parse time.
+  service_kind: z.literal("device_runtime").default("device_runtime"),
   client_version: z.string().optional(),
   title: z.string().optional(),
   device_type: z.enum(DEVICE_TYPES).optional(),
@@ -313,8 +318,12 @@ export const CloudBootstrapInputSchema = z.object({
   device_pubkey: z.string().min(1),
   service_pubkey: z.string().min(1),
   client_version: z.string().optional(),
-  platform: z.string().optional(),
-  arch: z.string().optional(),
+  // R3.P2d-wire: sandboxes.platform/arch are now NOT NULL (fail-closed, no
+  // back-compat). The cloud bootstrap client always sends process.platform /
+  // process.arch, so REQUIRE them on the wire — the old `?? "linux"` / `?? "x64"`
+  // handler fallback is removed and a missing platform/arch now fails at parse.
+  platform: z.string().min(1),
+  arch: z.string().min(1),
 })
 export type CloudBootstrapInput = z.infer<typeof CloudBootstrapInputSchema>
 

@@ -372,6 +372,21 @@ export class ProgramOnlyGrantNotAllowedError extends Error {
   }
 }
 
+// R3.P2e-pty: pty is published through the builtin_kind enum + the
+// capability/policy/projector/matcher layers, but it is UNROUTABLE end-to-end —
+// normalizeGrantSpecForInsert drops its payload (a persisted pty grant reads
+// back corrupt and denies) and toRuntimeAuthorizationGrantWireSpec throws on it.
+// Owner decision (interim, NO DDL — pty stays in the enum pending a routing
+// decision): keep pty reserved/inert but FAIL LOUD at grant creation instead of
+// silently persisting a corrupt grant. Callers map this to HTTP 400.
+export class PtyCapabilityNotSupportedError extends Error {
+  readonly code = "pty_not_supported" as const
+  constructor() {
+    super("pty capability is not yet routable end-to-end")
+    this.name = "PtyCapabilityNotSupportedError"
+  }
+}
+
 export async function createRuntimeAuthorizationGrant(
   params: CreateRuntimeAuthorizationGrantParams,
   executor?: Executor
@@ -388,6 +403,11 @@ export async function createRuntimeAuthorizationGrant(
   const parsedPolicy = GrantPolicySchema.parse(
     params.policy
   ) as SharedRuntimeAuthorizationGrantSpec
+  // R3.P2e-pty: reject a pty grant BEFORE any normalization/persistence — see
+  // PtyCapabilityNotSupportedError above.
+  if (parsedPolicy.capability === "pty") {
+    throw new PtyCapabilityNotSupportedError()
+  }
   if (parsedPolicy.browser) {
     parsedPolicy.browser = normalizeBrowserGrantPolicy(parsedPolicy.browser)
   }

@@ -59,6 +59,33 @@ test("ConsumePairingInputSchema rejects an unknown device_type", () => {
   )
 })
 
+test("ConsumePairingInputSchema accepts an explicit service_kind=device_runtime", () => {
+  const parsed = ConsumePairingInputSchema.parse({
+    pairing_code: "abc123",
+    device_pubkey: "dpk",
+    service_pubkey: "spk",
+    service_kind: "device_runtime",
+  })
+  assert.equal(parsed.service_kind, "device_runtime")
+})
+
+test("ConsumePairingInputSchema rejects a non-device_runtime service_kind at parse", () => {
+  // R3.P2e-pairing: only device_runtime is pairable; the WIRE contract now
+  // rejects every other kind (the api service-level reject stays as defense).
+  for (const service_kind of ["bare_dataplane", "remote_agent_daemon"]) {
+    assert.throws(
+      () =>
+        ConsumePairingInputSchema.parse({
+          pairing_code: "abc123",
+          device_pubkey: "dpk",
+          service_pubkey: "spk",
+          service_kind,
+        }),
+      `service_kind=${service_kind} must not parse`
+    )
+  }
+})
+
 test("ConsumePairingResultSchema validates the handshake result", () => {
   const parsed = ConsumePairingResultSchema.parse({
     device_id: DEVICE_ID,
@@ -87,6 +114,31 @@ test("CloudBootstrapInputSchema requires the credential triple", () => {
       device_pubkey: "dpk",
       service_pubkey: "spk",
     })
+  )
+})
+
+test("CloudBootstrapInputSchema requires platform + arch (fail-closed, no default)", () => {
+  // R3.P2d-wire: sandboxes.platform/arch are NOT NULL; the wire no longer
+  // defaults them. A body missing platform/arch (or with empty strings) fails.
+  assert.throws(
+    () =>
+      CloudBootstrapInputSchema.parse({
+        bootstrap_token: "tok",
+        device_pubkey: "dpk",
+        service_pubkey: "spk",
+      }),
+    "missing platform/arch must not parse"
+  )
+  assert.throws(
+    () =>
+      CloudBootstrapInputSchema.parse({
+        bootstrap_token: "tok",
+        device_pubkey: "dpk",
+        service_pubkey: "spk",
+        platform: "",
+        arch: "",
+      }),
+    "empty platform/arch must not parse"
   )
 })
 

@@ -94,8 +94,11 @@ export interface ConsumeBootstrapInput {
   devicePubkey: string
   servicePubkey: string
   clientVersion?: string
-  platform?: string
-  arch?: string
+  // R3.P2d-wire: required (sandboxes.platform/arch are NOT NULL). The wire schema
+  // CloudBootstrapInputSchema now requires these, so the controller always threads
+  // real OS facts here — no linux/x64 fallback.
+  platform: string
+  arch: string
 }
 
 // Wire result of the sandbox bootstrap handshake. The snake_case shape is the
@@ -127,8 +130,10 @@ export async function consumeCloudBootstrap(
   const result = await consumeCloudBootstrapTx({
     tokenHash,
     device: {
-      platform: input.platform ?? "linux",
-      arch: input.arch ?? "x64",
+      // R3.P2d-wire: fail-closed — platform/arch are required on the wire; the
+      // old `?? "linux"` / `?? "x64"` fallback is gone.
+      platform: input.platform,
+      arch: input.arch,
       publicKey: input.devicePubkey,
       publicKeyFingerprint: pubkeyFingerprint,
     },
