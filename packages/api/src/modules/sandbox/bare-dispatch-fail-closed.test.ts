@@ -26,6 +26,8 @@ import {
   dispatchBareRuntimeTool,
   registerBareDataPlane,
   getLiveBareDataPlane,
+  markBareDataPlaneClosing,
+  clearBareDataPlaneClosing,
   __clearBareDataPlanes,
 } from "./bare-dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
@@ -252,7 +254,10 @@ test("P1.3(a): a corrupt capability_descriptor fails the bare dispatch CLOSED (n
     const runtimeId = randomUUID()
     const serviceId = randomUUID()
     const good = buildLocalBareDescriptor({ isolation: "bwrap" })
-    const corrupt = { ...good, core: { ...good.core, maxWriteBytes: "corrupt" } }
+    const corrupt = {
+      ...good,
+      core: { ...good.core, maxWriteBytes: "corrupt" },
+    }
     const minted = await mintBareSandboxRuntimeTx({
       runtimeId,
       workspaceId,
@@ -325,8 +330,171 @@ test("P1.3(c): a docker-exec: endpoint on a LOCAL adapter is a mismatch → runt
     })
     assert.equal(res.ok, false, "wrong-adapter endpoint must NOT dispatch")
     assert.equal(res.error?.code, "runtime_constraint")
-    assert.match(res.error?.message ?? "", /does not match adapter|rebuild refused/)
+    assert.match(
+      res.error?.message ?? "",
+      /does not match adapter|rebuild refused/
+    )
     assert.equal(getLiveBareDataPlane(r.runtimeId), undefined)
+    __clearBareDataPlanes()
+  })
+})
+
+// R3.2 (target-confusion, SECURITY): a docker:bare row whose data_plane_endpoint
+// carries a DIFFERENT container id than the authoritative sandboxes.resource_id is
+// row corruption — the rebuild must DENY (never build a docker-exec plane at the
+// attacker-chosen container). The endpoint is only a scheme discriminant now.
+test("R3.2: a docker-exec endpoint whose cid ≠ resource_id denies (wrong-container)", async () => {
+  await withTestDb(async (db) => {
+    __clearBareDataPlanes()
+    const { workspaceId, sessionId } = await seedSession(db)
+    const runtimeId = randomUUID()
+    const serviceId = randomUUID()
+    const descriptor = buildLocalBareDescriptor({ isolation: "bwrap" })
+    const minted = await mintBareSandboxRuntimeTx({
+      runtimeId,
+      workspaceId,
+      sessionId,
+      serviceId,
+      adapter: "docker",
+      dataPlaneEndpoint: `docker-exec:${randomUUID()}`,
+      capabilityDescriptor: descriptor as unknown as Record<string, unknown>,
+      exposures: buildBareCoreCatalog(descriptor),
+      executor: db,
+    })
+    // Authoritative resource id = the REAL container.
+    await db
+      .updateTable("sandboxes")
+      .set({ state: "active", resourceId: "cid-real" } as any)
+      .where("id", "=", runtimeId)
+      .execute()
+    // Attacker rewrites the free-string endpoint to a DIFFERENT container.
+    await db
+      .updateTable("runtimeServices")
+      .set({ dataPlaneEndpoint: "docker-exec:cid-ATTACKER" } as any)
+      .where("id", "=", serviceId)
+      .execute()
+    const fsIds = minted.assignedIds["builtin/filesystem"]!
+    const fsRead = fsIds.tools["fs_read"]!
+    const res = await dispatchBareRuntimeTool({
+      runtimeId,
+      runtimeServiceId: serviceId,
+      envelope: envelopeFor({
+        exposureId: fsIds.runtime_exposure_id,
+        toolId: fsRead.runtime_tool_id,
+        toolRevisionId: fsRead.runtime_tool_revision_id,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      args: { path: "/conversation/hello.txt" },
+      builtinKind: "filesystem",
+      toolName: "fs_read",
+      grant: fsReadGrant(),
+      run: db,
+      sandboxProvider: "docker",
+    })
+    assert.equal(
+      res.ok,
+      false,
+      "endpoint↔resource_id mismatch must NOT dispatch"
+    )
+    assert.equal(res.error?.code, "runtime_constraint")
+    assert.match(
+      res.error?.message ?? "",
+      /does not match adapter|identity|rebuild refused/
+    )
+    assert.equal(
+      getLiveBareDataPlane(runtimeId),
+      undefined,
+      "no plane built at an attacker-chosen container id"
+    )
+    __clearBareDataPlanes()
+  })
+})
+
+// R3.P2a (verifier resident-parity, SECURITY): a filesystem-context envelope whose
+// toolName does NOT equal the tool's current_name must DENY. The old verifier was
+// existence-only and would have accepted any name for a bound exposure/tool.
+test("R3.P2a: toolName ≠ runtime_tools.current_name denies (bash on an fs_read target)", async () => {
+  await withTestDb(async (db) => {
+    __clearBareDataPlanes()
+    const r = await seedActiveBareRuntime(db, `inprocess:${randomUUID()}`)
+    const root = await makePlaneRoot()
+    // Register a live plane so a passing verifier WOULD dispatch — proving the
+    // rejection is strictly the toolName/parity check, not a plane miss.
+    registerBareDataPlane(
+      r.runtimeId,
+      createLocalBareDataPlane({
+        sandboxRoot: root,
+        descriptor: buildLocalBareDescriptor({ isolation: "bwrap" }),
+      })
+    )
+    const res = await dispatchBareRuntimeTool({
+      runtimeId: r.runtimeId,
+      runtimeServiceId: r.serviceId,
+      envelope: envelopeFor({
+        exposureId: r.exposureId,
+        toolId: r.toolId, // the REAL fs_read tool id
+        toolRevisionId: r.toolRevisionId,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      args: { path: "/conversation/hello.txt" },
+      builtinKind: "filesystem",
+      // The dispatched visible name LIES — it is NOT the tool's current_name.
+      toolName: "bash",
+      grant: fsReadGrant(),
+      run: db,
+      sandboxProvider: "local",
+    })
+    assert.equal(
+      res.ok,
+      false,
+      "a name that isn't the tool's current_name denies"
+    )
+    assert.equal(res.error?.code, "permission_denied")
+    __clearBareDataPlanes()
+  })
+})
+
+// R3.7 (teardown close-gate): while a runtime's bare teardown is in flight (its id
+// is in the in-process closing tombstone), a NEW dispatch — even a registry HIT —
+// must be REFUSED so it can't run against a plane about to be disposed.
+test("R3.7: a dispatch racing a mid-teardown runtime is refused (closing tombstone), then allowed after clear", async () => {
+  await withTestDb(async (db) => {
+    __clearBareDataPlanes()
+    const r = await seedActiveBareRuntime(db, `inprocess:${randomUUID()}`)
+    const root = await makePlaneRoot()
+    registerBareDataPlane(
+      r.runtimeId,
+      createLocalBareDataPlane({
+        sandboxRoot: root,
+        descriptor: buildLocalBareDescriptor({ isolation: "bwrap" }),
+      })
+    )
+    const base = {
+      runtimeId: r.runtimeId,
+      runtimeServiceId: r.serviceId,
+      envelope: envelopeFor({
+        exposureId: r.exposureId,
+        toolId: r.toolId,
+        toolRevisionId: r.toolRevisionId,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      args: { path: "/conversation/hello.txt" },
+      builtinKind: "filesystem" as const,
+      toolName: "fs_read",
+      grant: fsReadGrant(),
+      run: db,
+      sandboxProvider: "local",
+    }
+    // Teardown in flight → deny even the HIT.
+    markBareDataPlaneClosing(r.runtimeId)
+    const denied = await dispatchBareRuntimeTool(base)
+    assert.equal(denied.ok, false, "mid-teardown dispatch refused")
+    assert.equal(denied.error?.code, "runtime_constraint")
+    assert.match(denied.error?.message ?? "", /torn down/)
+    // Teardown finished (tombstone cleared) → the live plane dispatches again.
+    clearBareDataPlaneClosing(r.runtimeId)
+    const ok = await dispatchBareRuntimeTool(base)
+    assert.equal(ok.ok, true, "after teardown clears, dispatch resumes")
     __clearBareDataPlanes()
   })
 })
@@ -375,6 +543,119 @@ test("P2(B): a bare sandbox dispatch is refused when SANDBOX_PROVIDER=none (and 
       sandboxProvider: "local",
     })
     assert.equal(ok.ok, true, "a non-none provider is not blanket-gated")
+    __clearBareDataPlanes()
+  })
+})
+
+// R3.P2a parity axes (regression) — verifyBareDispatchTarget binds more than the
+// visible name: the envelope revision, the tool status, and the grant capability
+// family must ALL re-derive to the CURRENT catalog row. Each test registers a LIVE
+// plane so a passing verifier WOULD dispatch — proving the denial is strictly the
+// parity check, not a plane miss.
+function cmdGrant(): RuntimeAuthorizationGrantRecord {
+  return {
+    capability: "commandline",
+    commandline: { executor: "sandbox" },
+  } as unknown as RuntimeAuthorizationGrantRecord
+}
+
+async function registerLivePlaneFor(runtimeId: string): Promise<void> {
+  const root = await makePlaneRoot()
+  registerBareDataPlane(
+    runtimeId,
+    createLocalBareDataPlane({
+      sandboxRoot: root,
+      descriptor: buildLocalBareDescriptor({ isolation: "bwrap" }),
+    })
+  )
+}
+
+test("R3.P2a: a STALE tool revision (≠ runtime_tools.latest_revision_id) denies", async () => {
+  await withTestDb(async (db) => {
+    __clearBareDataPlanes()
+    const r = await seedActiveBareRuntime(db, `inprocess:${randomUUID()}`)
+    await registerLivePlaneFor(r.runtimeId)
+    const res = await dispatchBareRuntimeTool({
+      runtimeId: r.runtimeId,
+      runtimeServiceId: r.serviceId,
+      envelope: envelopeFor({
+        exposureId: r.exposureId,
+        toolId: r.toolId,
+        // A revision that is NOT the tool's latest → strict revision parity denies.
+        toolRevisionId: randomUUID(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      args: { path: "/conversation/hello.txt" },
+      builtinKind: "filesystem",
+      toolName: "fs_read",
+      grant: fsReadGrant(),
+      run: db,
+      sandboxProvider: "local",
+    })
+    assert.equal(res.ok, false, "a stale revision denies")
+    assert.equal(res.error?.code, "permission_denied")
+    __clearBareDataPlanes()
+  })
+})
+
+test("R3.P2a: a tool whose status is NOT 'active' (removed/disabled) denies", async () => {
+  await withTestDb(async (db) => {
+    __clearBareDataPlanes()
+    const r = await seedActiveBareRuntime(db, `inprocess:${randomUUID()}`)
+    await registerLivePlaneFor(r.runtimeId)
+    // Flip the tool out of 'active' — a removed/disabled tool must never dispatch.
+    await db
+      .updateTable("runtimeTools")
+      .set({ status: "removed" } as any)
+      .where("id", "=", r.toolId)
+      .execute()
+    const res = await dispatchBareRuntimeTool({
+      runtimeId: r.runtimeId,
+      runtimeServiceId: r.serviceId,
+      envelope: envelopeFor({
+        exposureId: r.exposureId,
+        toolId: r.toolId,
+        toolRevisionId: r.toolRevisionId,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      args: { path: "/conversation/hello.txt" },
+      builtinKind: "filesystem",
+      toolName: "fs_read",
+      grant: fsReadGrant(),
+      run: db,
+      sandboxProvider: "local",
+    })
+    assert.equal(res.ok, false, "a non-active tool denies")
+    assert.equal(res.error?.code, "permission_denied")
+    __clearBareDataPlanes()
+  })
+})
+
+test("R3.P2a: a CROSS-FAMILY grant (capability ≠ exposure.builtin_kind) denies", async () => {
+  await withTestDb(async (db) => {
+    __clearBareDataPlanes()
+    const r = await seedActiveBareRuntime(db, `inprocess:${randomUUID()}`)
+    await registerLivePlaneFor(r.runtimeId)
+    const res = await dispatchBareRuntimeTool({
+      runtimeId: r.runtimeId,
+      runtimeServiceId: r.serviceId,
+      envelope: envelopeFor({
+        exposureId: r.exposureId,
+        toolId: r.toolId,
+        toolRevisionId: r.toolRevisionId,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      args: { path: "/conversation/hello.txt" },
+      // The claimed grant family is commandline, but the exposure is filesystem —
+      // capabilityFamily (from grant.capability) ≠ builtin_kind → deny.
+      builtinKind: "filesystem",
+      toolName: "fs_read",
+      grant: cmdGrant(),
+      run: db,
+      sandboxProvider: "local",
+    })
+    assert.equal(res.ok, false, "a cross-family grant denies")
+    assert.equal(res.error?.code, "permission_denied")
     __clearBareDataPlanes()
   })
 })

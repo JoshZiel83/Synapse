@@ -23,8 +23,8 @@ import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
   getSandboxById,
-  getLiveSandboxBySession,
   listReconcileCandidateSessionIds,
+  listReapableClosingSandboxSessions,
   hasDockerMountHistory,
 } from "./repo.js"
 import { insertFileMount, updateFileMount } from "./repo-space.js"
@@ -290,13 +290,6 @@ test("(b) recovery: a 'failed' sandbox row resolves a ref (state-agnostic) ⇒ i
       "getSandboxById resolves a 'failed' sandbox (no state filter)"
     )
     assert.equal(byId!.state, "failed")
-    // …while the state-filtered reuse lookup does NOT.
-    const live = await getLiveSandboxBySession(seed.sessionId, db)
-    assert.equal(
-      live,
-      null,
-      "getLiveSandboxBySession excludes a 'failed' sandbox"
-    )
 
     // The still-running runtime is detected ALIVE via the state-agnostic resolver
     // (stub ONLY the docker inspect seam → container running).
@@ -315,8 +308,8 @@ test("(b) recovery: a 'failed' sandbox row resolves a ref (state-agnostic) ⇒ i
     })
     assert.equal(
       alive,
-      true,
-      "a failed sandbox with a live container reports ALIVE"
+      "alive",
+      "a failed sandbox with a live container reports ALIVE (R3.4 tristate)"
     )
     assert.ok(
       docker.calls.some((c) => c[0] === "inspect" && c.includes("cid-fail")),
@@ -413,6 +406,56 @@ test("(c) reaper-survival: healthy docker sessions survive reconcile+reap", asyn
       !docker.calls.some((c) => c[0] === "rm"),
       "no container was rm'd — both healthy sessions survived"
     )
+  })
+})
+
+// ── R3.4: an UNKNOWN liveness (docker daemon error) SHIELDS, never reaps ──────
+
+test("R3.4 unknown-shields: a docker sandbox whose inspect ERRORS is shielded (not torn down / not reaped)", async () => {
+  await withTestDb(async (db) => {
+    const a = await seedSession(db)
+    const runtimeA = await insertSandboxRuntime(db, {
+      workspaceId: a.workspaceId,
+      sessionId: a.sessionId,
+      adapter: "docker",
+      state: "active",
+      resourceId: "cid-unknown",
+    })
+    await insertActiveMount(db, a, { sandboxId: runtimeA })
+    // inspect returns a daemon/transport ERROR (NOT "no such container") ⇒ the
+    // R3.4 probe returns 'unknown'. reconcile must SHIELD (add to liveSessionIds)
+    // rather than tear it down — a transient docker error must never reap a
+    // possibly-live sandbox.
+    const docker = fakeDocker((args) => {
+      if (args[0] === "inspect")
+        return {
+          code: 1,
+          stderr:
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
+        }
+      if (args[0] === "ps") return { stdout: `cid-unknown ${a.sessionId}\n` }
+      return { stdout: "" }
+    })
+    const captured: { live?: Set<string> } = {}
+    await reconcileSandboxes({
+      executor: db as any,
+      dockerSpawnImpl: docker.spawnImpl,
+      reap: (live) => {
+        captured.live = live
+        return reapDockerSandboxOrphans(live, { spawnImpl: docker.spawnImpl })
+      },
+    })
+    assert.ok(
+      captured.live?.has(a.sessionId),
+      "an 'unknown'-liveness sandbox is SHIELDED (in the reaper live set)"
+    )
+    assert.ok(
+      !docker.calls.some((c) => c[0] === "rm"),
+      "no container rm'd — an unknown-liveness sandbox is not reaped"
+    )
+    // Its sandbox row was NOT torn down (state preserved, not closed/failed).
+    const sb = await getSandboxById(runtimeA, db)
+    assert.equal(sb!.state, "active", "state preserved on unknown liveness")
   })
 })
 
@@ -552,5 +595,75 @@ test("(f) loopback: a device-less local sandbox is accepted by hasLiveLocalSandb
       executor: db as any,
     })
     assert.deepEqual(result, { ok: true, reach: "direct" })
+  })
+})
+
+test("F3: listReapableClosingSandboxSessions gates on state + session + deleted_at + grace", async () => {
+  await withTestDb(async (db) => {
+    // Each session-bearing sandbox needs a real sessions row (fk_sandboxes_session).
+    const s1 = await seedSession(db)
+    const s2 = await seedSession(db)
+    const s3 = await seedSession(db)
+    // SELECTED: closing + real session + runtime not soft-deleted. withTestDb runs in
+    // ONE transaction, so NOW() is the constant transaction_timestamp and a
+    // just-inserted updated_at would EQUAL it (not `< NOW()`). Insert this row with an
+    // updated_at in the past (INSERT, since the touch trigger overrides an UPDATE) so
+    // it is genuinely past-grace. In prod each reaper pass is its own txn, so a
+    // sandbox that entered 'closing' in a prior txn is naturally `< NOW()`.
+    const s1RuntimeId = randomUUID()
+    await db
+      .insertInto("runtimes")
+      .values({ id: s1RuntimeId, workspaceId: s1.workspaceId, kind: "sandbox" })
+      .execute()
+    await sql`
+      INSERT INTO sandboxes (id, workspace_id, session_id, mode, adapter, state, platform, arch, updated_at)
+      VALUES (${s1RuntimeId}, ${s1.workspaceId}, ${s1.sessionId}, 'resident', 'local', 'closing'::sandboxes_state, 'linux', 'x64', NOW() - INTERVAL '1 hour')`.execute(
+      db
+    )
+    // Excluded: terminal state.
+    await insertSandboxRuntime(db, {
+      workspaceId: s2.workspaceId,
+      sessionId: s2.sessionId,
+      adapter: "local",
+      state: "closed",
+    })
+    // Excluded: null session (teardown is keyed by session).
+    await insertSandboxRuntime(db, {
+      workspaceId: s1.workspaceId,
+      sessionId: null,
+      adapter: "local",
+      state: "closing",
+    })
+    // Excluded: runtime already soft-deleted (converged).
+    const deletedRt = await insertSandboxRuntime(db, {
+      workspaceId: s3.workspaceId,
+      sessionId: s3.sessionId,
+      adapter: "local",
+      state: "closing",
+    })
+    await db
+      .updateTable("runtimes")
+      .set({ deletedAt: new Date() } as any)
+      .where("id", "=", deletedRt)
+      .execute()
+
+    // grace=0 → a just-closed row (updated_at < the query's NOW()) is past grace, so
+    // ONLY the closing + session + non-deleted row is selected.
+    const picked = (await listReapableClosingSandboxSessions(0, db)).map(
+      (r) => r.sessionId
+    )
+    assert.deepEqual(
+      picked,
+      [s1.sessionId],
+      "only the stuck closing+session+non-deleted row is reapable"
+    )
+
+    // A huge grace excludes freshly-closing rows → the grace gate is load-bearing.
+    const none = await listReapableClosingSandboxSessions(1_000_000_000, db)
+    assert.equal(
+      none.length,
+      0,
+      "grace gate excludes rows closed within the window"
+    )
   })
 })

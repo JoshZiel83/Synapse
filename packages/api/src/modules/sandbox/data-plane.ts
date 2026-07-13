@@ -319,6 +319,16 @@ interface ConfinedHostFs {
     SandboxDataPlane,
     "stat" | "list" | "read" | "write" | "mkdir" | "move" | "remove" | "search"
   >
+  // R3.3 (disposed-guard). Teardown's dispose() flips this so a fs op that
+  // passed the bare-dispatch close-gate BEFORE teardown began — and is still
+  // running when dispose() fires — fails CLOSED (a clean runtime_constraint)
+  // instead of touching a sandbox dir mid-removal (raw ENOENT / partial write).
+  markDisposed: () => void
+  isDisposed: () => boolean
+  // R3.7 (drain). Resolve once no fs op is in flight (or after timeoutMs). dispose()
+  // awaits this BEFORE teardown commits, so a mid-rename write lands on disk and is
+  // captured by the snapshot rather than lost.
+  awaitFsIdle: (timeoutMs: number) => Promise<void>
 }
 
 function buildConfinedHostFs(opts: {
@@ -337,11 +347,56 @@ function buildConfinedHostFs(opts: {
   }
   const caps = opts.descriptor.core
 
+  // R3.3 (disposed-guard) + R3.7 (drain). `disposed` fails NEW ops closed the
+  // instant teardown disposes the plane; `fsInflight` counts in-flight fs ops so
+  // dispose() can AWAIT them to natural completion before teardown commits — a
+  // mid-rename write must land on disk BEFORE the snapshot, else an acknowledged
+  // write is silently lost (the precise R3.7 lost-write class). Both are consulted
+  // through `guardedFsOp`, which does the disposed-check and the increment in ONE
+  // synchronous span (no await between), so an op lands strictly BEFORE markDisposed
+  // (counted → drained) or AFTER (rejected) — never in the gap between them.
+  let disposed = false
+  let fsInflight = 0
+  let fsIdleResolvers: Array<() => void> = []
+  function noteFsSettled(): void {
+    if (fsInflight === 0 && fsIdleResolvers.length > 0) {
+      const resolvers = fsIdleResolvers
+      fsIdleResolvers = []
+      for (const r of resolvers) r()
+    }
+  }
+  function awaitFsIdle(timeoutMs: number): Promise<void> {
+    if (fsInflight === 0) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      let settled = false
+      const done = (): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve()
+      }
+      const timer = setTimeout(done, timeoutMs)
+      fsIdleResolvers.push(done)
+    })
+  }
+  function guardedFsOp<T>(fn: () => Promise<T>): Promise<T> {
+    if (disposed) {
+      return Promise.reject(
+        new PlaneDisposedError("sandbox data plane has been torn down")
+      )
+    }
+    fsInflight += 1
+    return fn().finally(() => {
+      fsInflight -= 1
+      noteFsSettled()
+    })
+  }
+
   function withScope<T>(ctx: ConfinementCtx, fn: () => Promise<T>): Promise<T> {
     return backend.withGrantPrefixes(ctx.scope, fn)
   }
 
-  const fs: ConfinedHostFs["fs"] = {
+  const rawFs: ConfinedHostFs["fs"] = {
     async stat(path, ctx) {
       await ensureStarted()
       const canonical = canonicalVfsPath(path)
@@ -372,6 +427,17 @@ function buildConfinedHostFs(opts: {
       })
     },
     async read(path, readOpts, ctx) {
+      // Capability gate (Layer 2): !rangeRead forbids a supplied byte window
+      // (start_byte/end_byte). max_bytes is a RESPONSE-SIZE cap, NOT a range
+      // feature, so it is NOT gated here. Fail-closed at the TOP of the op.
+      if (
+        !caps.rangeRead &&
+        (readOpts.startByte !== undefined || readOpts.endByte !== undefined)
+      ) {
+        throw new CapabilityUnsupportedError(
+          "range read (start_byte/end_byte) is not supported by this sandbox"
+        )
+      }
       await ensureStarted()
       const canonical = canonicalVfsPath(path)
       // Whole-file read cap (per-op cap): bound the returned window to
@@ -395,6 +461,13 @@ function buildConfinedHostFs(opts: {
     },
     async write(path, bytes, writeOpts, ctx) {
       assertWriteAccess(ctx)
+      // Capability gate (Layer 2): !mkdir also forbids an implicit parent-dir
+      // create (create_parents is a mkdir). Fail-closed at the TOP of the op.
+      if (!caps.mkdir && writeOpts.createParents === true) {
+        throw new CapabilityUnsupportedError(
+          "create_parents requires the mkdir capability (unsupported by this sandbox)"
+        )
+      }
       await ensureStarted()
       const canonical = canonicalVfsPath(path)
       // Oversized-write reject BEFORE hashing/IO (per-op cap).
@@ -463,6 +536,12 @@ function buildConfinedHostFs(opts: {
       )
     },
     async mkdir(path, mkdirOpts, ctx) {
+      // Capability gate (Layer 2): !mkdir fail-closes at the TOP of the op.
+      if (!caps.mkdir) {
+        throw new CapabilityUnsupportedError(
+          "mkdir is not supported by this sandbox"
+        )
+      }
       assertWriteAccess(ctx)
       await ensureStarted()
       const canonical = canonicalVfsPath(path)
@@ -471,6 +550,12 @@ function buildConfinedHostFs(opts: {
       )
     },
     async move(src, dest, moveOpts, ctx) {
+      // Capability gate (Layer 2): !move fail-closes at the TOP of the op.
+      if (!caps.move) {
+        throw new CapabilityUnsupportedError(
+          "move is not supported by this sandbox"
+        )
+      }
       assertWriteAccess(ctx)
       await ensureStarted()
       const s = canonicalVfsPath(src)
@@ -484,6 +569,12 @@ function buildConfinedHostFs(opts: {
       )
     },
     async remove(path, removeOpts, ctx) {
+      // Capability gate (Layer 2): !remove fail-closes at the TOP of the op.
+      if (!caps.remove) {
+        throw new CapabilityUnsupportedError(
+          "remove is not supported by this sandbox"
+        )
+      }
       assertWriteAccess(ctx)
       await ensureStarted()
       const canonical = canonicalVfsPath(path)
@@ -492,6 +583,13 @@ function buildConfinedHostFs(opts: {
       )
     },
     async search(input, ctx) {
+      // Capability gate (Layer 2): !search fail-closes at the TOP of the op (the
+      // one toggle actually false in prod when the plane has no ripgrep).
+      if (!caps.search) {
+        throw new CapabilityUnsupportedError(
+          "search is not supported by this sandbox"
+        )
+      }
       await ensureStarted()
       // Search pushdown: explicit prefix roots. A scoped grant searches only its
       // prefixes; WHOLE_SCOPE fans out over the mount roots. (An empty scope can
@@ -514,8 +612,42 @@ function buildConfinedHostFs(opts: {
       return { hits: out.hits, truncated: out.truncated }
     },
   }
-  return { backend, ensureStarted, fs }
+
+  // Every fs op flows through guardedFsOp: disposed-check (fail NEW ops closed) +
+  // in-flight accounting (so dispose() can drain) in one synchronous span.
+  const fs: ConfinedHostFs["fs"] = {
+    stat: (path, ctx) => guardedFsOp(() => rawFs.stat(path, ctx)),
+    list: (path, ctx) => guardedFsOp(() => rawFs.list(path, ctx)),
+    read: (path, readOpts, ctx) =>
+      guardedFsOp(() => rawFs.read(path, readOpts, ctx)),
+    write: (path, bytes, writeOpts, ctx) =>
+      guardedFsOp(() => rawFs.write(path, bytes, writeOpts, ctx)),
+    mkdir: (path, mkdirOpts, ctx) =>
+      guardedFsOp(() => rawFs.mkdir(path, mkdirOpts, ctx)),
+    move: (src, dest, moveOpts, ctx) =>
+      guardedFsOp(() => rawFs.move(src, dest, moveOpts, ctx)),
+    remove: (path, removeOpts, ctx) =>
+      guardedFsOp(() => rawFs.remove(path, removeOpts, ctx)),
+    search: (input, ctx) => guardedFsOp(() => rawFs.search(input, ctx)),
+  }
+  return {
+    backend,
+    ensureStarted,
+    fs,
+    markDisposed: () => {
+      disposed = true
+    },
+    isDisposed: () => disposed,
+    awaitFsIdle,
+  }
 }
+
+// R3.7 (drain budget). Upper bound teardown waits for in-flight fs ops + aborted
+// exec children to settle before committing. Host-side fs ops are sub-second; an
+// aborted bwrap child dies on SIGTERM well within this. If a pathological op
+// exceeds it, teardown proceeds anyway (no worse than the pre-drain behavior) —
+// the OS / next-boot reconcile / docker label reaper are the backstops.
+const PLANE_DRAIN_TIMEOUT_MS = 5_000
 
 /**
  * In-process reference data plane for local:bare (§4.7.2). fs via
@@ -528,16 +660,53 @@ function buildConfinedHostFs(opts: {
 export function createLocalBareDataPlane(
   opts: LocalBareDataPlaneOptions
 ): SandboxDataPlane {
-  const { ensureStarted, fs } = buildConfinedHostFs(opts)
+  const { ensureStarted, fs, markDisposed, isDisposed, awaitFsIdle } =
+    buildConfinedHostFs(opts)
   const caps = opts.descriptor.core
   const execControllers = new Set<AbortController>()
   let running = 0
+  // R3.7 (exec drain). Resolvers fired when the last exec child settles, so
+  // dispose() can await aborted children to actually EXIT before teardown commits
+  // (an aborted-but-still-flushing child would otherwise tear a snapshotted file).
+  let execIdleResolvers: Array<() => void> = []
+  function noteExecSettled(): void {
+    if (running === 0 && execIdleResolvers.length > 0) {
+      const resolvers = execIdleResolvers
+      execIdleResolvers = []
+      for (const r of resolvers) r()
+    }
+  }
+  function awaitExecIdle(timeoutMs: number): Promise<void> {
+    if (running === 0) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      let settled = false
+      const done = (): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve()
+      }
+      const timer = setTimeout(done, timeoutMs)
+      execIdleResolvers.push(done)
+    })
+  }
 
   return {
     descriptor: opts.descriptor,
     ...fs,
     async exec(payload, _ctx) {
-      await ensureStarted()
+      // R3.7 (drain — the SAME one-synchronous-span rule as guardedFsOp): the
+      // disposed-check + concurrency reservation + controller registration run with
+      // NO await between them and BEFORE ensureStarted's async I/O. So an exec op is
+      // either counted+registered (→ dispose() aborts it AND awaitExecIdle drains it)
+      // or rejected — never able to slip past the disposed-check, park in a pending
+      // ensureStarted() while dispose() samples running===0/empty controllers, then
+      // resume and spawn an unaborted, uncounted child that races the commit snapshot.
+      // The bwrap/isolation gate is synchronous and also fail-closes before the
+      // reservation (a rejected op never reserves).
+      if (isDisposed()) {
+        throw new PlaneDisposedError("sandbox data plane has been torn down")
+      }
       // bwrap MANDATORY (fail-closed): NEVER run a command unconfined on the API
       // host. isolation:null means no commandline exposure/grant was minted, but
       // we defend in depth here regardless of the claim path.
@@ -556,6 +725,7 @@ export function createLocalBareDataPlane(
       const controller = new AbortController()
       execControllers.add(controller)
       try {
+        await ensureStarted()
         const inner = buildInnerExecDescriptor(payload)
         const confined = wrapDescriptorWithBwrap(inner, {
           sandboxRoot: opts.sandboxRoot,
@@ -594,11 +764,18 @@ export function createLocalBareDataPlane(
       } finally {
         execControllers.delete(controller)
         running -= 1
+        noteExecSettled()
       }
     },
     async dispose() {
-      // Scoped dispose (S4): abort ONLY the children this plane spawned. Never a
-      // module global, never a sibling runtime's process group.
+      // R3.3 + R3.7 (drain, in order):
+      // (1) flip the disposed-guard FIRST so NO new fs/exec op can start.
+      markDisposed()
+      // (2) DRAIN in-flight fs ops to natural completion — a mid-rename write must
+      //     land on disk BEFORE teardown's commit snapshots the dir, else the
+      //     acknowledged write is lost. (Bounded by the drain timeout.)
+      await awaitFsIdle(PLANE_DRAIN_TIMEOUT_MS)
+      // (3) abort THIS plane's own exec children (S4 — never a sibling runtime)…
       for (const c of execControllers) {
         try {
           c.abort()
@@ -606,6 +783,9 @@ export function createLocalBareDataPlane(
           /* best-effort */
         }
       }
+      // (4) …then AWAIT them to actually exit, so no aborted-but-flushing child
+      //     tears a file the commit is about to snapshot.
+      await awaitExecIdle(PLANE_DRAIN_TIMEOUT_MS)
       execControllers.clear()
     },
   }
@@ -640,7 +820,7 @@ export interface DockerBareDataPlaneOptions {
 export function createDockerBareDataPlane(
   opts: DockerBareDataPlaneOptions
 ): SandboxDataPlane {
-  const { fs } = buildConfinedHostFs({
+  const { fs, markDisposed, isDisposed, awaitFsIdle } = buildConfinedHostFs({
     sandboxRoot: opts.sandboxRoot,
     descriptor: opts.descriptor,
     ripgrepPath: opts.ripgrepPath,
@@ -653,6 +833,9 @@ export function createDockerBareDataPlane(
     descriptor: opts.descriptor,
     ...fs,
     async exec(payload, _ctx) {
+      if (isDisposed()) {
+        throw new PlaneDisposedError("sandbox data plane has been torn down")
+      }
       // Exec concurrency cap (per-op cap).
       if (running >= caps.maxConcurrentExec) {
         throw new PlaneCapError(
@@ -705,11 +888,14 @@ export function createDockerBareDataPlane(
       }
     },
     async dispose() {
-      // A docker:bare plane owns no host-side long-lived children: every
-      // `docker exec` runs to completion or is SIGKILLed by runDockerCapture's
-      // backstop, and any still-running in-container process dies when the
-      // container is torn down (the adapter's kill() → docker stop+rm). So there
-      // is nothing plane-scoped to abort here — teardown is container-scoped.
+      // R3.3 + R3.7: flip the disposed-guard so no NEW host-side fs op starts, then
+      // DRAIN in-flight host-side fs ops before the adapter's kill() commits/rm's —
+      // docker:bare fs is HOST-SIDE (same buildConfinedHostFs), so `docker stop`
+      // does NOT stop it; only this drain does. In-container exec is drained
+      // separately by the adapter kill()'s `docker stop -t 5` (and runDockerCapture's
+      // T+10s backstop), so there is nothing exec-scoped to await here.
+      markDisposed()
+      await awaitFsIdle(PLANE_DRAIN_TIMEOUT_MS)
     },
   }
 }
@@ -730,7 +916,44 @@ class PlaneExecUnconfinedError extends Error {
   }
 }
 
-export { PlaneCapError, PlaneExecUnconfinedError }
+/**
+ * Raised when a plane op is invoked but the sandbox's capability descriptor has
+ * that op/feature toggled OFF (core.mkdir/move/remove/search false, or a byte-window
+ * read under !core.rangeRead, or create_parents under !core.mkdir). A MISSING
+ * capability — SAME taxonomy as PlaneExecUnconfinedError (runtime_constraint), NOT
+ * invalid_request. Enforced fail-closed at the TOP of each affected plane op so a
+ * direct/internal caller can't bypass the catalog-level omission (Layer 2 of 2 —
+ * the catalog omits/strips the tool in core-catalog.ts bareFilesystemTools).
+ */
+class CapabilityUnsupportedError extends Error {
+  readonly code = "runtime_constraint" as const
+  constructor(message: string) {
+    super(message)
+    this.name = "CapabilityUnsupportedError"
+  }
+}
+
+/**
+ * R3.3 (disposed-guard). Raised when a plane op runs AFTER teardown disposed the
+ * plane — a slow fs op that passed the bare-dispatch close-gate before teardown
+ * began and is still executing when dispose() fires. Fail CLOSED with
+ * runtime_constraint (same taxonomy as the bare-dispatch close-gate denial),
+ * NEVER let the op touch a sandbox dir mid-removal.
+ */
+class PlaneDisposedError extends Error {
+  readonly code = "runtime_constraint" as const
+  constructor(message: string) {
+    super(message)
+    this.name = "PlaneDisposedError"
+  }
+}
+
+export {
+  PlaneCapError,
+  PlaneExecUnconfinedError,
+  CapabilityUnsupportedError,
+  PlaneDisposedError,
+}
 
 function buildInnerExecDescriptor(
   payload: SandboxExecPayload
@@ -841,6 +1064,26 @@ function parseExpectedSha256(x: unknown): string | null {
   return x
 }
 
+/**
+ * Parse an OPTIONAL non-negative-integer CORE numeric param (max_bytes /
+ * start_byte / end_byte / limit / offset / timeout_ms). ABSENT ⇒ undefined
+ * (passthrough — the handler then applies its own default). PRESENT ⇒ must be a
+ * NON-NEGATIVE integer; a negative or non-integer value is REJECTED fail-closed
+ * (throws PlaneCapError → invalid_request), NOT clamped — a negative byte-window /
+ * limit / offset / timeout is a malformed request, never silently coerced. (`asInt`
+ * accepted negatives; this is R3.P2a's param half.)
+ */
+function parseNonNegInt(x: unknown): number | undefined {
+  if (x === undefined || x === null) return undefined
+  const n = asInt(x)
+  if (n === undefined || n < 0) {
+    throw new PlaneCapError(
+      `expected a non-negative integer, got ${JSON.stringify(x)}`
+    )
+  }
+  return n
+}
+
 /** Map a thrown error from the plane/kernel to the McpDispatchResult error taxonomy. */
 function mapPlaneError(err: unknown): McpDispatchResult {
   if (err instanceof EmptyScopeDeniedError) {
@@ -871,6 +1114,15 @@ function mapPlaneError(err: unknown): McpDispatchResult {
     return errResult("invalid_request", err.message)
   }
   if (err instanceof PlaneExecUnconfinedError) {
+    return errResult("runtime_constraint", err.message)
+  }
+  if (err instanceof CapabilityUnsupportedError) {
+    // A capability toggled off in the descriptor — a MISSING capability, mapped to
+    // runtime_constraint (same taxonomy as PlaneExecUnconfinedError), NOT invalid_request.
+    return errResult("runtime_constraint", err.message)
+  }
+  if (err instanceof PlaneDisposedError) {
+    // R3.3: op raced teardown — the plane was disposed mid-flight. Fail closed.
     return errResult("runtime_constraint", err.message)
   }
   if (err instanceof SandboxResourceGoneError) {
@@ -923,9 +1175,9 @@ export async function coreInvokeBarePlane(input: {
         const r = await plane.read(
           path,
           {
-            maxBytes: asInt(args["max_bytes"]),
-            startByte: asInt(args["start_byte"]),
-            endByte: asInt(args["end_byte"]),
+            maxBytes: parseNonNegInt(args["max_bytes"]),
+            startByte: parseNonNegInt(args["start_byte"]),
+            endByte: parseNonNegInt(args["end_byte"]),
           },
           ctx
         )
@@ -1067,8 +1319,8 @@ export async function coreInvokeBarePlane(input: {
             query,
             regex: asBool(args["regex"]) ?? false,
             glob: asString(args["glob"]),
-            limit: asInt(args["limit"]) ?? 100,
-            offset: asInt(args["offset"]) ?? 0,
+            limit: parseNonNegInt(args["limit"]) ?? 100,
+            offset: parseNonNegInt(args["offset"]) ?? 0,
           },
           ctx
         )
@@ -1201,7 +1453,7 @@ async function coreExec(
 ): Promise<McpDispatchResult> {
   // cwd default applied AFTER matching (matching already ran on the virtual path).
   const cwd = asString(args["working_directory"]) || DEFAULT_SANDBOX_CWD
-  const timeoutMs = asInt(args["timeout_ms"])
+  const timeoutMs = parseNonNegInt(args["timeout_ms"])
   const payload: SandboxExecPayload =
     toolName === "bash"
       ? {

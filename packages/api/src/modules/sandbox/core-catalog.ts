@@ -64,42 +64,41 @@ const REDUCED_FIDELITY_STRIP: Readonly<Record<string, readonly string[]>> = {
  * still emits camelCase `mtimeMs`/`isSymlink`. The contract is honest either way; we
  * chose "document" over "converge" per the owner's separate-contract decision.
  */
-export const BARE_TOOL_DESCRIPTION_OVERRIDES: Readonly<
-  Record<string, string>
-> = {
-  fs_read:
-    "Read a file from the bare sandbox. Defaults to utf-8 and automatically falls " +
-    "back to base64 for non-UTF-8/binary content — the returned `encoding` field " +
-    "reflects the encoding actually used (never lossy U+FFFD over binary). Byte " +
-    "windows via start_byte/end_byte/max_bytes. Result fields: path, content, " +
-    "encoding, total_size (total file size in bytes), truncated. No line-range " +
-    "slicing and no sha256/mtime in the result (reduced-fidelity vs the resident " +
-    "device builtin).",
-  fs_stat:
-    "Stat a path in the bare sandbox. Returns: path, exists, and when the path " +
-    "exists kind, size, mtimeMs, isSymlink. No sha256 hashing and no mode_octal " +
-    "(reduced-fidelity vs the resident device builtin).",
-  fs_search:
-    "Search the bare sandbox filesystem with a live, NON-indexed scan (ripgrep-" +
-    "style) over the granted prefixes. mode=content matches file contents; " +
-    "mode=path matches file paths; regex/glob supported. There is NO in-sandbox " +
-    "index — this is not SQLite FTS5 / bm25 indexed search. Result fields: mode, " +
-    "query, hits, truncated.",
-  bash:
-    "Run a bash command inside the confined bare sandbox (bwrap/container jail, no " +
-    "network). Output is captured and returned synchronously as a JSON object with " +
-    "fields: exit_code, stdout, stderr, truncated, killed (reduced-fidelity vs the " +
-    "resident device builtin's markdown-formatted output). A non-zero exit or a " +
-    "killed command is flagged with isError. Subject to a commandline grant.",
-  exec_file:
-    "Spawn an executable directly with structured argv (no shell) inside the " +
-    "confined bare sandbox. Program must be a bare command name (no path " +
-    "separators, parent traversal, or absolute paths). Returns a JSON object with " +
-    "fields: exit_code, stdout, stderr, truncated, killed (reduced-fidelity vs the " +
-    "resident device builtin's markdown-formatted output). A non-zero exit or a " +
-    "killed command is flagged with isError. Subject to a commandline grant with " +
-    "executor='exec_file'.",
-}
+export const BARE_TOOL_DESCRIPTION_OVERRIDES: Readonly<Record<string, string>> =
+  {
+    fs_read:
+      "Read a file from the bare sandbox. Defaults to utf-8 and automatically falls " +
+      "back to base64 for non-UTF-8/binary content — the returned `encoding` field " +
+      "reflects the encoding actually used (never lossy U+FFFD over binary). Byte " +
+      "windows via start_byte/end_byte/max_bytes. Result fields: path, content, " +
+      "encoding, total_size (total file size in bytes), truncated. No line-range " +
+      "slicing and no sha256/mtime in the result (reduced-fidelity vs the resident " +
+      "device builtin).",
+    fs_stat:
+      "Stat a path in the bare sandbox. Returns: path, exists, and when the path " +
+      "exists kind, size, mtimeMs, isSymlink. No sha256 hashing and no mode_octal " +
+      "(reduced-fidelity vs the resident device builtin).",
+    fs_search:
+      "Search the bare sandbox filesystem with a live, NON-indexed scan (ripgrep-" +
+      "style) over the granted prefixes. mode=content matches file contents; " +
+      "mode=path matches file paths; regex/glob supported. There is NO in-sandbox " +
+      "index — this is not SQLite FTS5 / bm25 indexed search. Result fields: mode, " +
+      "query, hits, truncated.",
+    bash:
+      "Run a bash command inside the confined bare sandbox (bwrap/container jail, no " +
+      "network). Output is captured and returned synchronously as a JSON object with " +
+      "fields: exit_code, stdout, stderr, truncated, killed (reduced-fidelity vs the " +
+      "resident device builtin's markdown-formatted output). A non-zero exit or a " +
+      "killed command is flagged with isError. Subject to a commandline grant.",
+    exec_file:
+      "Spawn an executable directly with structured argv (no shell) inside the " +
+      "confined bare sandbox. Program must be a bare command name (no path " +
+      "separators, parent traversal, or absolute paths). Returns a JSON object with " +
+      "fields: exit_code, stdout, stderr, truncated, killed (reduced-fidelity vs the " +
+      "resident device builtin's markdown-formatted output). A non-zero exit or a " +
+      "killed command is flagged with isError. Subject to a commandline grant with " +
+      "executor='exec_file'.",
+  }
 
 /** Apply the BARE description override for a tool, if any. Returns a NEW object
  *  (spread) so the shared resident TOOLS[] descriptor is never mutated — only the
@@ -131,21 +130,46 @@ function stripUnhonoredParams(
 }
 
 /** The descriptor-gated, reduced-fidelity bare filesystem tool set: derive DOWN
- *  from the resident builtin, strip params the bare plane ignores, and OMIT
- *  fs_search when the plane has no ripgrep (descriptor.core.search === false) so
- *  it is never advertised as a dead/unbacked tool (fail-closed). */
+ *  from the resident builtin, strip params the bare plane ignores, and enforce the
+ *  capability_descriptor tool toggles (Layer 1 of 2 — mirrored by the plane guards
+ *  in data-plane.ts buildConfinedHostFs). A toggled-off op is OMITTED entirely so
+ *  it is never advertised as a dead/unbacked tool (fail-closed); a toggled-off
+ *  byte-window is stripped from the surviving tool's schema:
+ *    - !core.mkdir  ⇒ OMIT fs_mkdir  AND strip create_parents from fs_write
+ *      (an implicit parent-dir create is a mkdir).
+ *    - !core.move   ⇒ OMIT fs_move.
+ *    - !core.remove ⇒ OMIT fs_remove.
+ *    - !core.search ⇒ OMIT fs_search (no ripgrep backing).
+ *    - !core.rangeRead ⇒ strip start_byte + end_byte from fs_read (the byte-window
+ *      range feature). max_bytes is a RESPONSE-SIZE cap, NOT a range feature, so it
+ *      is always retained. */
 function bareFilesystemTools(
   descriptor: SandboxCapabilityDescriptor
 ): RuntimeCatalogTool[] {
-  const tools = filesystemCoreToolDefs().map((t) => {
-    const strip = REDUCED_FIDELITY_STRIP[t.name]
-    const stripped = strip ? stripUnhonoredParams(t, strip) : t
-    return applyBareDescription(stripped)
-  })
-  if (!descriptor.core.search) {
-    return tools.filter((t) => t.name !== "fs_search")
+  const caps = descriptor.core
+  const omit = new Set<string>()
+  if (!caps.mkdir) omit.add("fs_mkdir")
+  if (!caps.move) omit.add("fs_move")
+  if (!caps.remove) omit.add("fs_remove")
+  if (!caps.search) omit.add("fs_search")
+
+  const out: RuntimeCatalogTool[] = []
+  for (const t of filesystemCoreToolDefs()) {
+    if (omit.has(t.name)) continue
+    // Static reduced-fidelity strips + DESCRIPTOR-AWARE conditional strips (kept
+    // OUT of the static REDUCED_FIDELITY_STRIP map because they depend on the
+    // capability descriptor, not on the bare surface always being reduced).
+    const strip = [...(REDUCED_FIDELITY_STRIP[t.name] ?? [])]
+    if (t.name === "fs_read" && !caps.rangeRead) {
+      strip.push("start_byte", "end_byte")
+    }
+    if (t.name === "fs_write" && !caps.mkdir) {
+      strip.push("create_parents")
+    }
+    const stripped = strip.length > 0 ? stripUnhonoredParams(t, strip) : t
+    out.push(applyBareDescription(stripped))
   }
-  return tools
+  return out
 }
 
 /** Stable keys the bare catalog uses (mirror the resident builtin exposures). */
@@ -172,7 +196,11 @@ export function buildBareCoreCatalog(
         confinedFs: descriptor.confinedFs,
         features: {
           read: true,
-          write: descriptor.core.atomicWrite,
+          // Writing is ALWAYS-PRESENT CORE (a bare sandbox always confines writes
+          // through the vfs kernel). The atomicity GUARANTEE is surfaced SEPARATELY
+          // as `atomicWrite` so the write-PRESENCE flag stops conflating with it.
+          write: true,
+          atomicWrite: descriptor.core.atomicWrite,
           delete: descriptor.core.remove,
           mkdir: descriptor.core.mkdir,
           move: descriptor.core.move,

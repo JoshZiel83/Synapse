@@ -29,6 +29,7 @@ import {
   type ConfinementCtx,
   type SandboxDataPlane,
 } from "./data-plane.js"
+import type { SandboxCapabilityDescriptor } from "./model.js"
 import type { McpDispatchResult } from "../devices/dispatch.js"
 
 function toolMap(tools: RuntimeCatalogTool[]): Map<string, RuntimeCatalogTool> {
@@ -62,6 +63,38 @@ function parseOkBody(r: McpDispatchResult): Record<string, unknown> {
   assert.equal(r.ok, true, `expected ok result, got ${JSON.stringify(r.error)}`)
   const result = r.result as { content: Array<{ type: string; text: string }> }
   return JSON.parse(result.content[0]!.text) as Record<string, unknown>
+}
+
+/** A local:bare descriptor with CORE capability overrides (buildLocalBareDescriptor
+ *  only exposes isolation/search, so R3.1's mkdir/move/remove/rangeRead/atomicWrite
+ *  variants are applied here — non-mutating so tests don't cross-contaminate). */
+function coreOver(
+  over: Partial<SandboxCapabilityDescriptor["core"]>
+): SandboxCapabilityDescriptor {
+  const base = buildLocalBareDescriptor({ isolation: "bwrap", search: true })
+  return { ...base, core: { ...base.core, ...over } }
+}
+
+function bareFsTools(desc: SandboxCapabilityDescriptor): RuntimeCatalogTool[] {
+  return buildBareCoreCatalog(desc).find(
+    (e) => e.builtin_kind === "filesystem"
+  )!.tools
+}
+
+function propsOf(t: RuntimeCatalogTool): Record<string, unknown> {
+  return (schemaOf(t).properties ?? {}) as Record<string, unknown>
+}
+
+/** A bare plane bound to a fresh root under a CORE-overridden descriptor. */
+async function makeBarePlaneCore(
+  over: Partial<SandboxCapabilityDescriptor["core"]>
+): Promise<{ plane: SandboxDataPlane; writeCtx: ConfinementCtx }> {
+  const root = await mkdtemp(join(tmpdir(), "synapse-bare-caps-"))
+  const plane = createLocalBareDataPlane({
+    sandboxRoot: root,
+    descriptor: coreOver(over),
+  })
+  return { plane, writeCtx: { scope: WHOLE_SCOPE, access: "write" } }
 }
 
 test("F-D: the bare catalog exposes NO pty (production) and is descriptor-gated", () => {
@@ -246,7 +279,10 @@ test("full separate contract: every BARE_TOOL_DESCRIPTION_OVERRIDES tool ships a
   assert.ok(overridden.length > 0, "there is at least one override")
   for (const name of overridden) {
     const bareTool = bareTools.get(name)
-    assert.ok(bareTool, `overridden tool ${name} is present in the bare catalog`)
+    assert.ok(
+      bareTool,
+      `overridden tool ${name} is present in the bare catalog`
+    )
     assert.equal(
       bareTool!.description,
       BARE_TOOL_DESCRIPTION_OVERRIDES[name],
@@ -426,6 +462,207 @@ test("behavior: fs_write stale-guard REJECTS a wrong expected_mtime_ms", async (
     assert.equal(stale.ok, false)
     assert.equal(stale.error?.code, "runtime_constraint")
     assert.equal(stale.error?.details?.["stale_write"], true)
+  } finally {
+    await plane.dispose()
+  }
+})
+
+// ─────────── R3.1 — capability_descriptor tool toggles are ENFORCED ────────────
+// (honest contract): a toggled-off op is OMITTED from the published catalog AND
+// fail-closes at the plane. Two layers: the catalog (Layer 1, bareFilesystemTools)
+// and the plane (Layer 2, buildConfinedHostFs guards → runtime_constraint).
+
+test("R3.1 Layer 1: !mkdir/!move/!remove/!search OMIT the tool from the published bare catalog", () => {
+  const full = new Set(bareFsTools(coreOver({})).map((t) => t.name))
+  for (const n of ["fs_mkdir", "fs_move", "fs_remove", "fs_search"]) {
+    assert.ok(full.has(n), `${n} present under full caps`)
+  }
+  assert.ok(
+    !bareFsTools(coreOver({ mkdir: false })).some((t) => t.name === "fs_mkdir"),
+    "!mkdir OMITS fs_mkdir"
+  )
+  assert.ok(
+    !bareFsTools(coreOver({ move: false })).some((t) => t.name === "fs_move"),
+    "!move OMITS fs_move"
+  )
+  assert.ok(
+    !bareFsTools(coreOver({ remove: false })).some(
+      (t) => t.name === "fs_remove"
+    ),
+    "!remove OMITS fs_remove"
+  )
+  assert.ok(
+    !bareFsTools(coreOver({ search: false })).some(
+      (t) => t.name === "fs_search"
+    ),
+    "!search OMITS fs_search"
+  )
+})
+
+test("R3.1 Layer 1: !rangeRead strips start_byte+end_byte from fs_read but RETAINS max_bytes (response-size cap, not a range feature)", () => {
+  // Control: with rangeRead all three byte params are advertised.
+  const withRange = propsOf(
+    bareFsTools(coreOver({})).find((t) => t.name === "fs_read")!
+  )
+  assert.ok("start_byte" in withRange, "rangeRead advertises start_byte")
+  assert.ok("end_byte" in withRange, "rangeRead advertises end_byte")
+  assert.ok("max_bytes" in withRange, "rangeRead advertises max_bytes")
+
+  const noRange = propsOf(
+    bareFsTools(coreOver({ rangeRead: false })).find(
+      (t) => t.name === "fs_read"
+    )!
+  )
+  assert.ok(!("start_byte" in noRange), "!rangeRead STRIPS start_byte")
+  assert.ok(!("end_byte" in noRange), "!rangeRead STRIPS end_byte")
+  assert.ok(
+    "max_bytes" in noRange,
+    "!rangeRead RETAINS max_bytes (not a range feature)"
+  )
+})
+
+test("R3.1 Layer 1: !mkdir also STRIPS create_parents from fs_write's schema (implicit dir-create)", () => {
+  const withMkdir = propsOf(
+    bareFsTools(coreOver({})).find((t) => t.name === "fs_write")!
+  )
+  assert.ok("create_parents" in withMkdir, "mkdir advertises create_parents")
+  const noMkdir = propsOf(
+    bareFsTools(coreOver({ mkdir: false })).find((t) => t.name === "fs_write")!
+  )
+  assert.ok(
+    !("create_parents" in noMkdir),
+    "!mkdir STRIPS fs_write.create_parents"
+  )
+})
+
+test("R3.1: the filesystem exposure surfaces write=true (always-present CORE) and atomicWrite SEPARATELY", () => {
+  const feats = (desc: SandboxCapabilityDescriptor): Record<string, unknown> =>
+    (
+      buildBareCoreCatalog(desc).find((e) => e.builtin_kind === "filesystem")!
+        .metadata as { features: Record<string, unknown> }
+    ).features
+  const on = feats(coreOver({ atomicWrite: true }))
+  assert.equal(on["write"], true, "write is always-present CORE")
+  assert.equal(on["atomicWrite"], true, "atomicWrite reflects the descriptor")
+  const off = feats(coreOver({ atomicWrite: false }))
+  assert.equal(
+    off["write"],
+    true,
+    "write stays true even when atomicity is off (no longer conflated)"
+  )
+  assert.equal(off["atomicWrite"], false, "atomicWrite is surfaced separately")
+})
+
+test("R3.1 Layer 2: a direct coreInvokeBarePlane call fail-closes with runtime_constraint when the capability is toggled off", async () => {
+  const cases: Array<{
+    over: Partial<SandboxCapabilityDescriptor["core"]>
+    toolName: string
+    args: Record<string, unknown>
+  }> = [
+    { over: { mkdir: false }, toolName: "fs_mkdir", args: { path: "/d" } },
+    {
+      over: { move: false },
+      toolName: "fs_move",
+      args: { source: "/a.txt", destination: "/b.txt" },
+    },
+    {
+      over: { remove: false },
+      toolName: "fs_remove",
+      args: { path: "/x.txt" },
+    },
+    {
+      over: { rangeRead: false },
+      toolName: "fs_read",
+      args: { path: "/f.txt", start_byte: 0, end_byte: 4 },
+    },
+    {
+      over: { search: false },
+      toolName: "fs_search",
+      args: { mode: "content", query: "x" },
+    },
+  ]
+  for (const c of cases) {
+    const { plane, writeCtx } = await makeBarePlaneCore(c.over)
+    try {
+      const r = await coreInvokeBarePlane({
+        plane,
+        builtinKind: "filesystem",
+        toolName: c.toolName,
+        args: c.args,
+        ctx: writeCtx,
+      })
+      assert.equal(r.ok, false, `${c.toolName} must fail-close`)
+      assert.equal(
+        r.error?.code,
+        "runtime_constraint",
+        `${c.toolName} → runtime_constraint (missing capability, not invalid_request)`
+      )
+    } finally {
+      await plane.dispose()
+    }
+  }
+})
+
+test("R3.1 Layer 2: fs_write create_parents:true under !mkdir fail-closes (runtime_constraint); a plain write still works", async () => {
+  const { plane, writeCtx } = await makeBarePlaneCore({ mkdir: false })
+  try {
+    const rejected = await coreInvokeBarePlane({
+      plane,
+      builtinKind: "filesystem",
+      toolName: "fs_write",
+      args: {
+        path: "/newdir/f.txt",
+        content: "hi",
+        encoding: "utf-8",
+        create_parents: true,
+      },
+      ctx: writeCtx,
+    })
+    assert.equal(rejected.ok, false, "create_parents:true must fail-close")
+    assert.equal(rejected.error?.code, "runtime_constraint")
+
+    // A plain write (no implicit dir-create) is unaffected by !mkdir.
+    const ok = await coreInvokeBarePlane({
+      plane,
+      builtinKind: "filesystem",
+      toolName: "fs_write",
+      args: { path: "/f.txt", content: "hi", encoding: "utf-8" },
+      ctx: writeCtx,
+    })
+    assert.equal(ok.ok, true, "a plain write still works under !mkdir")
+  } finally {
+    await plane.dispose()
+  }
+})
+
+test("R3.P2a: a negative CORE numeric param (max_bytes) is REJECTED, not clamped", async () => {
+  const { plane, writeCtx } = await makeBarePlaneCore({})
+  try {
+    await coreInvokeBarePlane({
+      plane,
+      builtinKind: "filesystem",
+      toolName: "fs_write",
+      args: { path: "/n.txt", content: "0123456789", encoding: "utf-8" },
+      ctx: writeCtx,
+    })
+    const neg = await coreInvokeBarePlane({
+      plane,
+      builtinKind: "filesystem",
+      toolName: "fs_read",
+      args: { path: "/n.txt", max_bytes: -5 },
+      ctx: writeCtx,
+    })
+    assert.equal(neg.ok, false, "negative max_bytes must be rejected")
+    assert.equal(neg.error?.code, "invalid_request")
+    // A non-negative max_bytes still works (not clamped away).
+    const ok = await coreInvokeBarePlane({
+      plane,
+      builtinKind: "filesystem",
+      toolName: "fs_read",
+      args: { path: "/n.txt", max_bytes: 4 },
+      ctx: writeCtx,
+    })
+    assert.equal(ok.ok, true)
   } finally {
     await plane.dispose()
   }

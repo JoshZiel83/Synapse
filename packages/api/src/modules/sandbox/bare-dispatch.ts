@@ -50,22 +50,47 @@ const inflightBareRebuilds = new Map<
   Promise<{ plane: SandboxDataPlane } | { deny: McpDispatchResult }>
 >()
 
-// P1.3(c) / P8(A): a bare data-plane endpoint's scheme MUST match its persisted
-// adapter — local:bare ⇒ `inprocess:<id>`, docker:bare ⇒ `docker-exec:<cid>`.
-// An unknown adapter, a scheme/adapter mismatch, an empty id segment, or a null
-// endpoint is row CORRUPTION — fail closed, never fall through to the in-process
-// local plane on the API host. rebuildBarePlane forks on the SAME scheme set.
-const BARE_ENDPOINT_SCHEME_BY_ADAPTER: Record<string, string> = {
-  local: "inprocess:",
-  docker: "docker-exec:",
-}
-function bareEndpointMatchesAdapter(
-  adapter: string,
-  endpoint: string | null
-): boolean {
-  const prefix = BARE_ENDPOINT_SCHEME_BY_ADAPTER[adapter]
-  if (!prefix || endpoint === null || !endpoint.startsWith(prefix)) return false
-  return endpoint.slice(prefix.length).length > 0
+// R3.3 (rebuild/teardown race — generation fence). A teardown that unregisters a
+// plane MUST invalidate any rebuild that started BEFORE the unregister but whose
+// compare-and-set has not yet fired (the rebuild's async factory window). Each
+// unregister bumps a per-runtimeId generation; the singleflighted rebuild
+// captures the generation at START and, in ONE synchronous span immediately
+// before its compare-and-set, re-checks that the generation is UNCHANGED — else it
+// disposes the built plane and denies. A kill() writes no DB, so the DB re-read
+// alone can't catch this window; the fence is what makes it fail closed.
+const bareTeardownGen = new Map<string, number>()
+
+// R3.7 (teardown close-gate — in-process tombstone). While teardownSandbox is
+// stopping a runtime, its id sits in this set so NO new dispatch in THIS process
+// starts a plane for it (the DB state='closing' gate closes the cross-process
+// window; this closes the same-process TOCTOU between the DB read and the
+// compare-and-set). Cleared in teardown's finally.
+const closingBarePlanes = new Set<string>()
+
+// R3.2 (target-confusion, SECURITY). A bare data-plane endpoint is only a SCHEME
+// discriminant — local:bare ⇒ `inprocess:<runtimeId>`, docker:bare ⇒
+// `docker-exec:<containerId>`. The docker container id is bound to the
+// AUTHORITATIVE `sandboxes.resource_id`, never sliced out of the free-string
+// endpoint, so a hand-edited endpoint can't redirect the docker-exec plane at an
+// arbitrary container. An unknown adapter, a scheme/adapter mismatch, an
+// endpoint that doesn't bind its resource id, or a null endpoint is row
+// CORRUPTION — fail closed, never fall through to the in-process local plane.
+function bareTargetIdentityOk(row: {
+  adapter: string
+  runtimeId: string
+  resourceId: string | null
+  dataPlaneEndpoint: string | null
+}): boolean {
+  if (row.adapter === "docker") {
+    return (
+      !!row.resourceId &&
+      row.dataPlaneEndpoint === `docker-exec:${row.resourceId}`
+    )
+  }
+  if (row.adapter === "local") {
+    return row.dataPlaneEndpoint === `inprocess:${row.runtimeId}`
+  }
+  return false
 }
 
 export function registerBareDataPlane(
@@ -80,6 +105,8 @@ export function unregisterBareDataPlane(
 ): SandboxDataPlane | undefined {
   const plane = liveBarePlanes.get(runtimeId)
   liveBarePlanes.delete(runtimeId)
+  // R3.3: invalidate any in-flight rebuild that started before this unregister.
+  bareTeardownGen.set(runtimeId, (bareTeardownGen.get(runtimeId) ?? 0) + 1)
   return plane
 }
 
@@ -89,9 +116,27 @@ export function getLiveBareDataPlane(
   return liveBarePlanes.get(runtimeId)
 }
 
-/** Test-only: drop every live plane (isolation between unit tests). */
+/**
+ * R3.7 close-gate: mark a runtime's bare plane as tearing down so no new dispatch
+ * (HIT or rebuild) in THIS process resurrects a plane while teardown stops the
+ * writer. Idempotent. Paired with {@link clearBareDataPlaneClosing} in teardown's
+ * finally. The persisted state='closing' keeps denying cross-process rebuilds
+ * after the tombstone clears.
+ */
+export function markBareDataPlaneClosing(runtimeId: string): void {
+  closingBarePlanes.add(runtimeId)
+}
+
+/** R3.7: clear the close-gate tombstone (teardown finally, both branches). */
+export function clearBareDataPlaneClosing(runtimeId: string): void {
+  closingBarePlanes.delete(runtimeId)
+}
+
+/** Test-only: drop every live plane + fence/tombstone (isolation between tests). */
 export function __clearBareDataPlanes(): void {
   liveBarePlanes.clear()
+  bareTeardownGen.clear()
+  closingBarePlanes.clear()
 }
 
 function sandboxRootForSession(sessionId: string): string {
@@ -124,27 +169,32 @@ export interface DispatchBareRuntimeToolInput {
     descriptor: SandboxCapabilityDescriptor
     /** The persisted scheme-tagged endpoint (inprocess:/docker-exec:). */
     dataPlaneEndpoint: string | null
+    /** R3.2: the AUTHORITATIVE provider resource id (docker container id / ""). */
+    resourceId: string | null
   }) => SandboxDataPlane
 }
 
 /**
  * Rebuild the correct plane kind from the persisted, scheme-tagged endpoint
- * (never live config — mode-flip safety). `docker-exec:<cid>` → a docker:bare
- * plane bound to that container; anything else (`inprocess:<id>`) → the in-process
- * local:bare plane. The plane's fs is host-side either way (same vfs kernel).
+ * (never live config — mode-flip safety). `docker-exec:` → a docker:bare plane
+ * bound to the AUTHORITATIVE `sandboxes.resource_id` container id (R3.2 — NOT
+ * endpoint.slice, so the free-string endpoint cannot select the target);
+ * anything else (`inprocess:<id>`) → the in-process local:bare plane. The plane's
+ * fs is host-side either way (same vfs kernel).
  */
 function rebuildBarePlane(opts: {
   sandboxRoot: string
   descriptor: SandboxCapabilityDescriptor
   dataPlaneEndpoint: string | null
+  resourceId: string | null
 }): SandboxDataPlane {
   const endpoint = opts.dataPlaneEndpoint ?? ""
   if (endpoint.startsWith("docker-exec:")) {
-    const containerId = endpoint.slice("docker-exec:".length)
     return createDockerBareDataPlane({
       sandboxRoot: opts.sandboxRoot,
       descriptor: opts.descriptor,
-      containerId,
+      // R3.2: container id from resource_id, never the endpoint string.
+      containerId: opts.resourceId ?? "",
     })
   }
   return createLocalBareDataPlane({
@@ -184,12 +234,25 @@ export async function dispatchBareRuntimeTool(
     )
   }
 
+  // R3.7 close-gate: a runtime whose teardown is in flight (in THIS process) must
+  // not start OR reuse a plane — deny at the HIT check too, not just rebuild, so a
+  // dispatch racing the stop step can't run against a plane about to be disposed.
+  if (closingBarePlanes.has(input.runtimeId)) {
+    return errResult(
+      "runtime_constraint",
+      `bare sandbox ${input.runtimeId} is being torn down (dispatch refused)`
+    )
+  }
+
   // (1) Resolve the plane. HIT = live; MISS = singleflighted lazy rebuild — the
   // only place the rebuild-on-restart runs (never a registry-first gate).
   let plane = liveBarePlanes.get(input.runtimeId)
   if (!plane) {
     let inflight = inflightBareRebuilds.get(input.runtimeId)
     if (!inflight) {
+      // R3.3: capture the teardown generation BEFORE the async rebuild so a
+      // concurrent unregister (which bumps it) is detected at the compare-and-set.
+      const genAtStart = bareTeardownGen.get(input.runtimeId) ?? 0
       inflight = (async (): Promise<
         { plane: SandboxDataPlane } | { deny: McpDispatchResult }
       > => {
@@ -221,16 +284,25 @@ export async function dispatchBareRuntimeTool(
             ),
           }
         }
-        // P1.3(c) / P8(A): the persisted endpoint scheme MUST match the persisted
-        // adapter and carry a non-empty id. A null / empty / typo'd / mismatched /
-        // future 'https:' endpoint is CORRUPTION — NOT an implicit local plane on
-        // the API host. rebuildBarePlane stays TOTAL for the recognized set (a raw
-        // throw there would escape the McpDispatchResult contract).
-        if (!bareEndpointMatchesAdapter(row.adapter, row.dataPlaneEndpoint)) {
+        // R3.2 (target-confusion, SECURITY) — supersedes the old scheme-only gate.
+        // The persisted endpoint must not only carry a recognized scheme for its
+        // adapter, it must BIND its authoritative resource identity: docker:bare ⇒
+        // `docker-exec:${resource_id}` (resource_id non-empty), local:bare ⇒
+        // `inprocess:${runtimeId}`. A null / empty / typo'd / cross-adapter /
+        // wrong-container endpoint is CORRUPTION — NOT an implicit local plane on
+        // the API host, and never a docker-exec plane at an attacker-chosen id.
+        if (
+          !bareTargetIdentityOk({
+            adapter: row.adapter,
+            runtimeId: input.runtimeId,
+            resourceId: row.resourceId,
+            dataPlaneEndpoint: row.dataPlaneEndpoint,
+          })
+        ) {
           return {
             deny: errResult(
               "runtime_constraint",
-              `bare sandbox ${input.runtimeId} data-plane endpoint does not match adapter '${row.adapter}' (rebuild refused)`
+              `bare sandbox ${input.runtimeId} data-plane endpoint does not match adapter '${row.adapter}'/identity (rebuild refused)`
             ),
           }
         }
@@ -239,13 +311,31 @@ export async function dispatchBareRuntimeTool(
           sandboxRoot: sandboxRootForSession(row.sessionId),
           descriptor: row.capabilityDescriptor,
           dataPlaneEndpoint: row.dataPlaneEndpoint,
+          resourceId: row.resourceId,
         })
-        // P1.3(b) compare-and-set: if a concurrent miss already registered a
-        // plane, KEEP that one and dispose ours so no child escapes teardown.
+        // ONE synchronous span: [existing-check → fence/tombstone re-check →
+        // compare-and-set]. No await between the reads and liveBarePlanes.set so a
+        // teardown can only land BEFORE (caught by the re-checks) or AFTER (the
+        // plane is registered and the next unregister disposes it) — never inside.
         const existing = liveBarePlanes.get(input.runtimeId)
         if (existing) {
+          // P1.3(b): a concurrent miss already registered — keep that, dispose ours.
           await built.dispose().catch(() => {})
           return { plane: existing }
+        }
+        // R3.3 fence + R3.7 tombstone: a teardown fired (or is firing) during our
+        // async build window → do NOT resurrect a plane. Dispose + deny.
+        if (
+          (bareTeardownGen.get(input.runtimeId) ?? 0) !== genAtStart ||
+          closingBarePlanes.has(input.runtimeId)
+        ) {
+          await built.dispose().catch(() => {})
+          return {
+            deny: errResult(
+              "runtime_constraint",
+              `bare sandbox ${input.runtimeId} teardown raced the rebuild (dispatch refused)`
+            ),
+          }
         }
         liveBarePlanes.set(input.runtimeId, built)
         return { plane: built }
@@ -284,6 +374,13 @@ export async function dispatchBareRuntimeTool(
       runtimeServiceId: input.runtimeServiceId,
       exposureId: input.envelope.runtime_exposure_id,
       toolId: input.envelope.runtime_tool_id,
+      // R3.P2a — resident-parity binding. The visible tool name + the envelope's
+      // tool revision + the claimed grant family must ALL re-derive to the CURRENT
+      // catalog row, not merely exist. grant.capability is the authoritative family
+      // (read here from the claimed grant, so both dispatch call sites agree).
+      toolName: input.toolName,
+      toolRevisionId: input.envelope.runtime_tool_revision_id,
+      capabilityFamily: input.grant.capability,
     },
     input.run
   )

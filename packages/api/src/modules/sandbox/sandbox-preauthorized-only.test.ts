@@ -25,6 +25,7 @@ const SANDBOX_ROW: SandboxRow = {
   state: "active",
   resourceId: null,
   hostPid: null,
+  hostPidIdentity: null,
   pairingSessionId: null,
 }
 

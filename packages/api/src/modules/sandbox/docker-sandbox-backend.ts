@@ -27,6 +27,7 @@ import {
   type SandboxBackend,
   type SandboxHandle,
   type SandboxInfo,
+  type SandboxLiveness,
   type SandboxRef,
   type SandboxSpec,
 } from "./sandbox-backend.js"
@@ -198,6 +199,7 @@ export function createDockerSandboxBackend(
 
         return makeDockerHandle({
           docker,
+          spawnImpl,
           sessionId: spec.sessionId,
           containerId,
           runtimeId: resolved.runtimeId,
@@ -232,6 +234,7 @@ export function createDockerSandboxBackend(
       }
       return makeDockerHandle({
         docker,
+        spawnImpl,
         sessionId: ref.sandboxId,
         containerId: ref.resourceId,
         runtimeId: ref.runtimeId,
@@ -279,6 +282,7 @@ export function createDockerReconnectBackend(
       }
       return makeDockerHandle({
         docker,
+        spawnImpl,
         sessionId: ref.sandboxId,
         containerId: ref.resourceId,
         runtimeId: ref.runtimeId,
@@ -539,6 +543,7 @@ export async function reapDockerSandboxOrphans(
 
 function makeDockerHandle(args: {
   docker: (a: string[]) => Promise<{ stdout: string; stderr: string }>
+  spawnImpl: SpawnImpl
   sessionId: string
   containerId: string
   runtimeId: string
@@ -546,6 +551,8 @@ function makeDockerHandle(args: {
   pairingSessionId?: string
 }): SandboxHandle {
   const startedAt = new Date()
+  const probeLiveness = () =>
+    probeDockerContainerLiveness(args.spawnImpl, args.containerId)
   return {
     adapter: "docker",
     mode: "resident",
@@ -567,11 +574,9 @@ function makeDockerHandle(args: {
         "setTimeout is not supported by the docker sandbox backend"
       )
     },
+    probeLiveness,
     async isRunning(): Promise<boolean> {
-      const out = await args
-        .docker(["inspect", "--format", "{{.State.Running}}", args.containerId])
-        .catch(() => null)
-      return out?.stdout.trim() === "true"
+      return (await probeLiveness()) === "alive"
     },
     getInfo(): SandboxInfo {
       return {
@@ -686,6 +691,41 @@ export class SandboxResourceGoneError extends Error {
   constructor(message: string) {
     super(message)
     this.name = "SandboxResourceGoneError"
+  }
+}
+
+/**
+ * Tristate liveness for a docker container (R3.4), shared by docker:resident and
+ * docker:bare. Routed through runDockerCapture (NOT runDocker) so a distinct
+ * "no such container/object" maps to 'dead' and any OTHER failure (docker daemon
+ * down, transport error, spawn 'error') maps to 'unknown' rather than being
+ * collapsed to a false 'dead'/false. Only a container that inspect confirms
+ * Running=false, or that docker reports gone, is 'dead' — the sole state on which
+ * the lifecycle callers reap/delete-tracking.
+ */
+export async function probeDockerContainerLiveness(
+  spawnImpl: SpawnImpl,
+  containerId: string
+): Promise<SandboxLiveness> {
+  try {
+    const out = await runDockerCapture(
+      spawnImpl,
+      ["inspect", "--format", "{{.State.Running}}", containerId],
+      { containerId }
+    )
+    if (out.code === 0) {
+      return out.stdout.trim() === "true" ? "alive" : "dead"
+    }
+    // Non-zero WITHOUT a resource_gone reject: a removed container makes
+    // `docker inspect` exit 1/125 with "No such object/container" — treat that as
+    // definitively 'dead'; anything else is an un-interpretable failure ('unknown').
+    if (/no such (container|object)/i.test(out.stderr)) return "dead"
+    return "unknown"
+  } catch (err) {
+    // runDockerCapture rejects ONLY on a spawn 'error' or an externally-gone
+    // container. Gone ⇒ dead; a transport/daemon error ⇒ unknown (never dead).
+    if (err instanceof SandboxResourceGoneError) return "dead"
+    return "unknown"
   }
 }
 

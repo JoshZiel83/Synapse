@@ -6,6 +6,7 @@ import {
   createDockerSandboxBackend,
   createDockerReconnectBackend,
   reapDockerSandboxOrphans,
+  probeDockerContainerLiveness,
 } from "./docker-sandbox-backend.js"
 import { SandboxBackendError, type SandboxSpec } from "./sandbox-backend.js"
 import { toSandboxVolumeSubpath } from "./service.js"
@@ -236,6 +237,68 @@ test("createDockerReconnectBackend: connect + kill by container id (no provision
     seen.some((c) => c[0] === "rm" && c.includes("container-reconnect")),
     "docker rm called via reconnect backend"
   )
+})
+
+// ── R3.4: docker tristate liveness distinguishes gone (dead) from error (unknown)
+
+test("R3.4 probeDockerContainerLiveness: Running=true→alive, false→dead", async () => {
+  const aliveDocker = fakeDocker((a) =>
+    a[0] === "inspect" ? { stdout: "true\n" } : { stdout: "" }
+  )
+  assert.equal(
+    await probeDockerContainerLiveness(aliveDocker.spawnImpl, "cid"),
+    "alive"
+  )
+  const deadDocker = fakeDocker((a) =>
+    a[0] === "inspect" ? { stdout: "false\n" } : { stdout: "" }
+  )
+  assert.equal(
+    await probeDockerContainerLiveness(deadDocker.spawnImpl, "cid"),
+    "dead"
+  )
+})
+
+test("R3.4 probeDockerContainerLiveness: a removed container → 'dead'", async () => {
+  const gone = fakeDocker((a) =>
+    a[0] === "inspect"
+      ? { code: 1, stderr: "Error: No such object: cid" }
+      : { stdout: "" }
+  )
+  assert.equal(
+    await probeDockerContainerLiveness(gone.spawnImpl, "cid"),
+    "dead"
+  )
+})
+
+test("R3.4 probeDockerContainerLiveness: a daemon/transport error → 'unknown' (NOT dead)", async () => {
+  // A docker daemon that is unreachable must NOT be collapsed to 'dead' — that is
+  // exactly the ambiguous-false the tristate exists to prevent (it would reap a
+  // possibly-live container). Non-"no such" non-zero exit ⇒ 'unknown'.
+  const daemonDown = fakeDocker((a) =>
+    a[0] === "inspect"
+      ? {
+          code: 1,
+          stderr:
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
+        }
+      : { stdout: "" }
+  )
+  assert.equal(
+    await probeDockerContainerLiveness(daemonDown.spawnImpl, "cid"),
+    "unknown"
+  )
+  // A spawn 'error' (docker CLI missing) is likewise 'unknown', never 'dead'.
+  const spawnErr = ((_cmd: string, _args: string[]) => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter
+      stderr: EventEmitter
+    }
+    child.stdout = new EventEmitter()
+    child.stderr = new EventEmitter()
+    setImmediate(() => child.emit("error", new Error("spawn docker ENOENT")))
+    return child
+  }) as never
+  assert.equal(await probeDockerContainerLiveness(spawnErr, "cid"), "unknown")
 })
 
 test("createDockerReconnectBackend: create() is unsupported (connect-only)", async () => {

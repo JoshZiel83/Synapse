@@ -18,6 +18,7 @@
 
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
+import { readFileSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { createFileBackedBroker } from "@synapse/device-runtime"
 import {
@@ -34,6 +35,21 @@ import { deleteRuntime, mintLocalSandboxRuntime } from "../devices/service.js"
  *  disambiguates resident vs bare. Future provider substrates (e2b/cube) widen
  *  this when they land. */
 export type SandboxBackendKind = "local" | "docker"
+
+/**
+ * Tristate liveness (R3.4). `probeLiveness()` returns this so lifecycle callers
+ * can distinguish a CONFIRMED-dead runtime from one they simply could NOT probe:
+ *   - 'alive'   — the runtime is definitively running.
+ *   - 'dead'    — the runtime is definitively gone (container removed, pid ESRCH,
+ *                 or a reused pid whose durable identity no longer matches).
+ *   - 'unknown' — the probe itself failed (docker daemon/transport error, a
+ *                 non-Linux / /proc-less host, or a NULL persisted pid identity).
+ * Irreversible actions (reap / delete tracking / commit-then-delete / signal a
+ * pid) are gated on 'dead' ONLY; 'alive' AND 'unknown' both SHIELD (preserve
+ * tracking + persisted state) so a transient probe error never destroys a live
+ * sandbox or kills a recycled pid.
+ */
+export type SandboxLiveness = "alive" | "dead" | "unknown"
 
 /**
  * Everything provisionSandbox hands a backend to stand up one sandbox. The
@@ -97,6 +113,15 @@ export interface SandboxRef {
   pairingSessionId?: string
   /** Local backend only: OS pid for SIGTERM/SIGKILL. */
   hostPid?: number
+  /**
+   * Local backend only (R3.6): the durable process-identity token
+   * ('<boot_id>:<starttime>' from Linux /proc) captured for hostPid at mint. The
+   * cross-process kill path signals hostPid ONLY when the LIVE pid's identity
+   * still matches this — so a recycled pid (our child exited, the OS reissued the
+   * number to an unrelated process) is never signalled. NULL/absent on a
+   * non-Linux host or a legacy row ⇒ identity is 'unknown' ⇒ never signalled.
+   */
+  hostPidIdentity?: string | null
 }
 
 /** Synapse convenience subset (NOT a 1:1 mirror of e2b's static getInfo). */
@@ -155,8 +180,19 @@ export interface SandboxHandle {
    *  throws "unsupported"; local backend has no deadline either. */
   setTimeout(ms: number): Promise<void>
 
-  /** e2b: isRunning() — liveness probe. */
+  /** e2b: isRunning() — liveness probe. DERIVED (`probeLiveness()==='alive'`) so
+   *  non-lifecycle callers are unchanged; lifecycle callers use probeLiveness. */
   isRunning(): Promise<boolean>
+
+  /**
+   * Tristate liveness probe (R3.4). Distinguishes a CONFIRMED-dead runtime
+   * ('dead') from one that could not be probed ('unknown' — a docker
+   * daemon/transport error, a non-Linux /proc-less host, or a NULL persisted pid
+   * identity). Lifecycle callers reap / delete-tracking / commit-then-delete ONLY
+   * on 'dead', and SHIELD (preserve tracking + persisted state) on 'alive' OR
+   * 'unknown'.
+   */
+  probeLiveness(): Promise<SandboxLiveness>
 
   /** Synapse convenience (not e2b instance method). */
   getInfo(): SandboxInfo
@@ -316,6 +352,17 @@ function makeLocalHandle(args: {
   runHandle: RunHandle
 }): SandboxHandle {
   const startedAt = new Date()
+  // Capture the child's durable process identity at spawn (R3.6). This is the
+  // SAME token service.ts persists post-create; probeLiveness re-reads /proc and
+  // compares so a recycled pid reads as 'dead', not a false 'alive'.
+  const pidIdentity = readHostPidIdentity(args.runHandle.pid)
+  const probeLiveness = async (): Promise<SandboxLiveness> => {
+    if (!isPidAlive(args.runHandle.pid)) return "dead"
+    const idv = verifyPidIdentity(args.runHandle.pid, pidIdentity)
+    if (idv === "match") return "alive"
+    if (idv === "mismatch") return "dead"
+    return "unknown"
+  }
   return {
     adapter: "local",
     mode: "resident",
@@ -338,8 +385,9 @@ function makeLocalHandle(args: {
         "setTimeout is not supported by the local sandbox backend"
       )
     },
+    probeLiveness,
     async isRunning(): Promise<boolean> {
-      return isPidAlive(args.runHandle.pid)
+      return (await probeLiveness()) === "alive"
     },
     getInfo(): SandboxInfo {
       return {
@@ -357,6 +405,18 @@ function makeLocalHandle(args: {
 }
 
 function makeLocalRefHandle(ref: SandboxRef): SandboxHandle {
+  // R3.6: probe/kill are PID-reuse-safe. probeLiveness returns 'dead' when the pid
+  // is gone OR its live identity no longer matches the persisted token; 'unknown'
+  // when we cannot verify (non-Linux / NULL token). kill() signals ONLY on a
+  // positive identity match — never on 'unknown'/'mismatch'.
+  const probeLiveness = async (): Promise<SandboxLiveness> => {
+    if (ref.hostPid === undefined) return "dead"
+    if (!isPidAlive(ref.hostPid)) return "dead"
+    const idv = verifyPidIdentity(ref.hostPid, ref.hostPidIdentity ?? null)
+    if (idv === "match") return "alive"
+    if (idv === "mismatch") return "dead"
+    return "unknown"
+  }
   return {
     adapter: "local",
     mode: ref.mode,
@@ -379,8 +439,9 @@ function makeLocalRefHandle(ref: SandboxRef): SandboxHandle {
         "setTimeout is not supported by the local sandbox backend"
       )
     },
+    probeLiveness,
     async isRunning(): Promise<boolean> {
-      return ref.hostPid !== undefined && isPidAlive(ref.hostPid)
+      return (await probeLiveness()) === "alive"
     },
     getInfo(): SandboxInfo {
       return {
@@ -394,6 +455,13 @@ function makeLocalRefHandle(ref: SandboxRef): SandboxHandle {
     },
     async kill(): Promise<void> {
       if (ref.hostPid === undefined) return
+      // NEVER signal a raw persisted pid unless the LIVE process is provably still
+      // our child (identity match). A 'mismatch' (pid reused) or 'unknown' (can't
+      // verify) must not SIGTERM an unrelated host process.
+      if (
+        verifyPidIdentity(ref.hostPid, ref.hostPidIdentity ?? null) !== "match"
+      )
+        return
       await signalPid(ref.hostPid)
     },
   }
@@ -406,6 +474,62 @@ function isPidAlive(pid: number): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * Read a durable process-identity token for `pid` (R3.6): `<boot_id>:<starttime>`
+ * from Linux /proc. `starttime` (field 22 of /proc/<pid>/stat, in clock ticks
+ * since boot) is unique-per-process-lifetime, and `boot_id` distinguishes the
+ * same starttime across reboots — so the pair survives a reboot AND a pid recycle.
+ * Returns null on a non-Linux host, a missing /proc, or any read error (=> the
+ * identity is "unknown", never signalled). The starttime is parsed AFTER the last
+ * ')' so a process whose comm contains spaces/parens can't shift the field index.
+ */
+export function readHostPidIdentity(pid: number): string | null {
+  if (process.platform !== "linux") return null
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8")
+    const rparen = stat.lastIndexOf(")")
+    if (rparen < 0) return null
+    // After ") " the fields are: state(3) ppid(4) ... starttime(22). Dropping
+    // pid(1)+comm(2) shifts the index by 3, so starttime is index 19.
+    const fields = stat
+      .slice(rparen + 1)
+      .trim()
+      .split(/\s+/)
+    const starttime = fields[19]
+    if (!starttime || !/^\d+$/.test(starttime)) return null
+    const bootId = readFileSync(
+      "/proc/sys/kernel/random/boot_id",
+      "utf8"
+    ).trim()
+    if (!bootId) return null
+    return `${bootId}:${starttime}`
+  } catch {
+    return null
+  }
+}
+
+/** The tristate result of comparing a live pid's identity to a persisted token. */
+export type PidIdentityResult = "match" | "mismatch" | "unknown"
+
+/**
+ * Compare the LIVE identity of `pid` to the `persisted` token (R3.6). Returns
+ * 'match' only when both boot_id and starttime are readable and equal;
+ * 'mismatch' when they differ (our original process exited — the pid was reused
+ * or the box rebooted, so the runtime is definitively DEAD); 'unknown' when the
+ * token is NULL, /proc is unreadable, or the host is non-Linux. The kill path
+ * signals ONLY on 'match'; the liveness path treats 'mismatch' as dead and
+ * 'unknown' as shield.
+ */
+export function verifyPidIdentity(
+  pid: number,
+  persisted: string | null
+): PidIdentityResult {
+  if (!persisted) return "unknown"
+  const current = readHostPidIdentity(pid)
+  if (current === null) return "unknown"
+  return current === persisted ? "match" : "mismatch"
 }
 
 const KILL_GRACE_MS = 2_000

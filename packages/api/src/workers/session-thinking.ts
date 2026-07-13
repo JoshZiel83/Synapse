@@ -36,6 +36,7 @@ import {
   peekPendingRefreshConflicts,
   clearPendingRefreshConflicts,
   mergePendingRefreshConflicts,
+  type SandboxProvisionResult,
 } from "../modules/sandbox/index.js"
 import {
   partitionSidecars,
@@ -715,8 +716,17 @@ export function startSessionThinkingWorker() {
           SidecarRestoreFailureReason
         >()
         if (sandboxEnabled) {
+          // R3.P2b-A: provisionSandbox is HOISTED out of the broad try/catch so a
+          // downstream refresh/conflict-surface failure on a HEALTHY sandbox is not
+          // mislabeled "provisioning failed / running WITHOUT isolation". try#1
+          // wraps ONLY the provision + its sidecar bookkeeping; its catch emits the
+          // true no-isolation notice. try#2 (only when provision succeeded) wraps
+          // refresh + conflict surfacing; ITS catch emits a DISTINCT stale-view
+          // notice and leaves surfacedPending* false so the persisted conflict
+          // store re-delivers next turn (at-least-once).
+          let provision: SandboxProvisionResult | null = null
           try {
-            const provision = await provisionSandbox(sessionId)
+            provision = await provisionSandbox(sessionId)
             failedSidecarReasons = new Map(
               provision.failedSidecars.map((f) => [f.sidecar, f.reason])
             )
@@ -731,263 +741,295 @@ export function startSessionThinkingWorker() {
             hasTransientSidecarFailure =
               restoreStatusUnknown ||
               provision.failedSidecars.some((f) => f.reason === "transient")
-            const refresh = await refreshSpaces(sessionId)
-            // Record any spaces whose refresh FAILED so turn-end commit skips
-            // them (their live tree is half-synced; committing it could entangle
-            // this turn's edits with partially-applied head bytes). Next turn
-            // re-runs the refresh from the same base and self-heals.
-            refreshFailedSubpaths = new Set(
-              Object.keys(refresh.syncFailuresBySubpath)
+          } catch (provisionErr) {
+            log.error(
+              { sessionId, err: provisionErr },
+              "sandbox PROVISION failed"
             )
-            // Commit conflicts recorded by a PREVIOUS turn's turn-end commit
-            // (which ran after the actor already replied). READ but do NOT clear
-            // yet — clearing happens post-actorThink so a crash before the model
-            // sees the notice doesn't drop it.
-            const pendingCommitConflicts =
-              await peekPendingCommitConflicts(sessionId)
-            // Refresh conflicts persisted across turns for at-least-once delivery
-            // (round-10 #1). refreshSpaces already stashed THIS turn's conflicts;
-            // peek returns them merged with any still-undelivered from a prior
-            // interrupted turn. UNION with this turn's in-memory result too, so a
-            // swallowed persist failure (base may already have advanced for synced
-            // subpaths) can't drop this turn's conflict from the notice. Cleared
-            // only after actorThink returns.
-            const persistedRefresh =
-              await peekPendingRefreshConflicts(sessionId)
-            const displayRefresh = mergePendingRefreshConflicts(
-              persistedRefresh,
-              {
-                deferredConflictsBySubpath: refresh.deferredConflictsBySubpath,
-                sidecarsBySubpath: refresh.sidecarsBySubpath,
-              }
-            )
-
-            const refreshEntries = Object.entries(
-              displayRefresh.deferredConflictsBySubpath
-            )
-            // Subpaths that did NOT fully sync THIS turn — for them we must not
-            // promise "head LIVES at the path" (round-10 #4: the live path may be
-            // only half-synced). Their conflicts/sidecars are still surfaced, but
-            // under a "view may be half-synced" caveat below.
-            const syncFailureEntries = Object.entries(
-              refresh.syncFailuresBySubpath
-            )
-            const failedSet = new Set(syncFailureEntries.map(([sp]) => sp))
-            const commitEntries = Object.entries(pendingCommitConflicts)
-            // Head-wins refresh lines cover ONLY subpaths that fully synced (head
-            // genuinely LIVES at the path). Incomplete subpaths get the
-            // half-synced caveat instead (round-10 #4).
-            const syncedRefreshEntries = refreshEntries.filter(
-              ([sp]) => !failedSet.has(sp)
-            )
-            const incompleteRefreshEntries = refreshEntries.filter(([sp]) =>
-              failedSet.has(sp)
-            )
-            const refreshLines = syncedRefreshEntries.map(
-              ([sp, paths]) =>
-                `/${sp}: ${paths.map((p) => `/${sp}${p}`).join(", ")}`
-            )
-            const commitLines = commitEntries.map(
-              ([sp, c]) =>
-                `/${sp}: ${c.paths.map((p) => `/${sp}${p}`).join(", ")}`
-            )
-            // Sidecars to surface = the merged refresh sidecars (persisted ∪ this
-            // turn, round-10 #1). `kind` distinguishes a readable-bytes file
-            // sidecar from a readable-JSON symlink sidecar (round-10 #3). These
-            // are ALWAYS listed when present — independent of whether their
-            // subpath fully synced — so an incomplete subpath's preserved copy is
-            // never orphaned before the persisted store is cleared (round-10
-            // follow-up: the sidecar listing must not hide behind the head-wins
-            // line).
-            const refreshSidecars = Object.values(
-              displayRefresh.sidecarsBySubpath
-            ).flat()
-            // P2/P3: split restored (leaf exists, "read it") from unrestored,
-            // and unrestored further into transient (retry later) vs permanent
-            // (unrecoverable). Failed sidecars never get a "read it".
-            const {
-              restored: restoredRefreshSidecars,
-              transient: transientRefreshSidecars,
-              permanent: permanentRefreshSidecars,
-            } = partitionSidecars(
-              refreshSidecars,
-              failedSidecarReasons,
-              restoreStatusUnknown
-            )
-            const sidecarPairs = restoredRefreshSidecars.map(formatRestoredPair)
-            // Per-path coverage (round-7 #D), restricted to fully-synced subpaths:
-            // a deferred conflict path is "covered" iff some sidecar's original IS
-            // that path or sits under it.
-            const sidecarOriginals = refreshSidecars.map((s) => s.original)
-            const hasUncoveredRefreshConflict = syncedRefreshEntries.some(
-              ([sp, paths]) =>
-                paths.some((p) => {
-                  const abs = `/${sp}${p}`
-                  return !sidecarOriginals.some(
-                    (o) => o === abs || o.startsWith(`${abs}/`)
-                  )
-                })
-            )
-            // We surfaced (and may clear) persisted refresh conflicts iff there
-            // were any deferred paths OR any sidecars to show.
-            surfacedPendingRefreshConflicts =
-              refreshEntries.length > 0 || refreshSidecars.length > 0
-
-            if (
-              refreshLines.length > 0 ||
-              commitLines.length > 0 ||
-              syncFailureEntries.length > 0 ||
-              surfacedPendingRefreshConflicts
-            ) {
-              if (refreshLines.length > 0) {
-                console.warn(
-                  `[session-thinking] sandbox refresh conflicts for ${sessionId}: ${refreshLines.join("; ")}`
-                )
-              }
-              if (commitLines.length > 0) {
-                console.warn(
-                  `[session-thinking] sandbox prior-turn commit conflicts for ${sessionId}: ${commitLines.join("; ")}`
-                )
-              }
-              if (syncFailureEntries.length > 0) {
-                console.warn(
-                  `[session-thinking] sandbox refresh sync failures for ${sessionId}: ${syncFailureEntries
-                    .map(([sp, msg]) => `/${sp}: ${msg}`)
-                    .join("; ")}`
-                )
-              }
-              const sections: string[] = []
-              if (refreshLines.length > 0) {
-                const noSidecarNote = hasUncoveredRefreshConflict
-                  ? " Some conflict paths have NO sidecar — for any conflict path without a listed sidecar (below), re-read the live path: it now holds the other writer's version."
-                  : ""
-                sections.push(
-                  `Another writer's change to these paths was applied and now LIVES at the path (head wins): ${refreshLines.join("; ")}.${noSidecarNote}`
-                )
-              }
-              // The preserved-copy listing is its OWN sentence, emitted whenever
-              // ANY refresh sidecar exists — even if every conflicting subpath was
-              // incomplete this turn (so refreshLines is empty). This guarantees a
-              // preserved copy is named before the persisted store is cleared
-              // post-actorThink (round-10 follow-up: no orphaned sidecar).
-              if (sidecarPairs.length > 0) {
-                sections.push(
-                  `Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar (read it — file sidecars hold the bytes verbatim, symlink sidecars hold JSON {"kind":"symlink","target":...} — reconcile with the live/head version, then write the merged result back to the original path): ${sidecarPairs.join("; ")}.`
-                )
-              }
-              // P2/P3: sidecars that FAILED to re-materialize are listed WITHOUT
-              // a "read it" — transient ones promise a later-turn restore,
-              // permanent ones (corrupt/missing payload) are flagged as
-              // unrecoverable so the agent redoes the work instead of waiting.
-              const transientRefreshSentence = transientUnrestoredSentence(
-                transientRefreshSidecars
-              )
-              if (transientRefreshSentence) {
-                sections.push(transientRefreshSentence)
-              }
-              const permanentRefreshSentence = permanentUnrestoredSentence(
-                permanentRefreshSidecars
-              )
-              if (permanentRefreshSentence) {
-                sections.push(permanentRefreshSentence)
-              }
-              if (commitEntries.length > 0) {
-                // round-7 #C: the post-commit reconcile preserved the agent's
-                // pre-conflict copy at a sidecar — point at it instead of
-                // claiming the work was simply lost. P2/P3: split restored ("read
-                // it") from transient (retry later) and permanent (unrecoverable).
-                const commitSidecars = commitEntries.flatMap(
-                  ([, c]) => c.sidecars
-                )
-                const {
-                  restored: restoredCommitSidecars,
-                  transient: transientCommitSidecars,
-                  permanent: permanentCommitSidecars,
-                } = partitionSidecars(
-                  commitSidecars,
-                  failedSidecarReasons,
-                  restoreStatusUnknown
-                )
-                const commitSidecarPairs =
-                  restoredCommitSidecars.map(formatRestoredPair)
-                const commitSidecarNote =
-                  commitSidecarPairs.length > 0
-                    ? ` Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar — read it (symlink sidecars hold JSON metadata), reconcile with the current saved version, and save the merged result back to the original path: ${commitSidecarPairs.join("; ")}.`
-                    : ""
-                const transientCommitSentence = transientUnrestoredSentence(
-                  transientCommitSidecars
-                )
-                const permanentCommitSentence = permanentUnrestoredSentence(
-                  permanentCommitSidecars
-                )
-                const unrestoredCommitNote = [
-                  transientCommitSentence,
-                  permanentCommitSentence,
-                ]
-                  .filter(Boolean)
-                  .map((s) => ` ${s}`)
-                  .join("")
-                sections.push(
-                  `Your previous turn's save to these paths LOST to a concurrent writer (${commitLines.join("; ")}); the current saved version is the other writer's.${commitSidecarNote}${unrestoredCommitNote} Re-read each path and re-apply your change if it's still needed.`
-                )
-                surfacedPendingCommitConflicts = true
-              }
-              if (syncFailureEntries.length > 0) {
-                // round-8 follow-up + round-10 #4: a space failed to FULLY merge
-                // in the latest head this turn. Its view may be HALF-SYNCED — head
-                // is NOT guaranteed to be at the path — and it will NOT be
-                // committed at turn-end (avoids snapshotting a half-synced tree);
-                // the platform retries the merge next turn. Any conflict paths +
-                // sidecars already preserved for it ARE listed above and remain
-                // valid; surface those paths here too so the agent re-reads them.
-                const incompleteLines = incompleteRefreshEntries.map(
-                  ([sp, paths]) =>
-                    `/${sp}: ${paths.map((p) => `/${sp}${p}`).join(", ")}`
-                )
-                const incompletePathsNote =
-                  incompleteLines.length > 0
-                    ? ` Conflicting paths there (re-read carefully; your preserved copies are in the sidecar list above): ${incompleteLines.join("; ")}.`
-                    : ""
-                sections.push(
-                  `These spaces could NOT be fully refreshed to the latest version this turn and may show a HALF-SYNCED view — do NOT assume the other writer's version is at the path there; re-read carefully and avoid large edits until they recover: ${syncFailureEntries
-                    .map(([sp]) => `/${sp}`)
-                    .join(", ")}.${incompletePathsNote}`
-                )
-              }
-              sandboxConflictNotice = {
-                kind: "system_notice",
-                noticeType: "generic",
-                scope: "private",
-                surface: "internal",
-                parts: textBlocks(`File merge conflict. ${sections.join(" ")}`),
-                metadata: {
-                  refreshConflicts: displayRefresh.deferredConflictsBySubpath,
-                  priorCommitConflicts: pendingCommitConflicts,
-                  refreshSyncFailures: refresh.syncFailuresBySubpath,
-                },
-              }
+            provision = null
+            // Owner policy: run the turn UNSANDBOXED but surface a VISIBLE degraded
+            // notice so the actor + operator know isolation is off.
+            sandboxConflictNotice = {
+              kind: "system_notice",
+              noticeType: "generic",
+              scope: "private",
+              surface: "internal",
+              parts: textBlocks(
+                "Sandbox unavailable — this turn is running WITHOUT filesystem/command isolation. Provisioning failed; retry once the sandbox backend is healthy."
+              ),
+              metadata: { sandboxDegraded: true },
             }
-          } catch (sandboxErr) {
-            console.error(
-              `[session-thinking] sandbox provision/refresh failed for ${sessionId}:`,
-              sandboxErr
-            )
-            // P1.5: a REQUESTED sandbox (SANDBOX_PROVIDER!=none) failed to
-            // provision. Owner policy = run the turn UNSANDBOXED but surface a
-            // VISIBLE degraded-turn notice (vs the previous total silence) so the
-            // actor + operator know isolation is off. sandboxEnabled gates it so
-            // provider=none never emits it. Reuses the prepended notice channel;
-            // provision throwing means the conflict-notice path above did not run.
-            if (sandboxEnabled) {
+          }
+          if (provision) {
+            try {
+              const refresh = await refreshSpaces(sessionId)
+              // Record any spaces whose refresh FAILED so turn-end commit skips
+              // them (their live tree is half-synced; committing it could entangle
+              // this turn's edits with partially-applied head bytes). Next turn
+              // re-runs the refresh from the same base and self-heals.
+              refreshFailedSubpaths = new Set(
+                Object.keys(refresh.syncFailuresBySubpath)
+              )
+              // Commit conflicts recorded by a PREVIOUS turn's turn-end commit
+              // (which ran after the actor already replied). READ but do NOT clear
+              // yet — clearing happens post-actorThink so a crash before the model
+              // sees the notice doesn't drop it.
+              const pendingCommitConflicts =
+                await peekPendingCommitConflicts(sessionId)
+              // Refresh conflicts persisted across turns for at-least-once delivery
+              // (round-10 #1). refreshSpaces already stashed THIS turn's conflicts;
+              // peek returns them merged with any still-undelivered from a prior
+              // interrupted turn. UNION with this turn's in-memory result too, so a
+              // swallowed persist failure (base may already have advanced for synced
+              // subpaths) can't drop this turn's conflict from the notice. Cleared
+              // only after actorThink returns.
+              const persistedRefresh =
+                await peekPendingRefreshConflicts(sessionId)
+              const displayRefresh = mergePendingRefreshConflicts(
+                persistedRefresh,
+                {
+                  deferredConflictsBySubpath:
+                    refresh.deferredConflictsBySubpath,
+                  sidecarsBySubpath: refresh.sidecarsBySubpath,
+                }
+              )
+
+              const refreshEntries = Object.entries(
+                displayRefresh.deferredConflictsBySubpath
+              )
+              // Subpaths that did NOT fully sync THIS turn — for them we must not
+              // promise "head LIVES at the path" (round-10 #4: the live path may be
+              // only half-synced). Their conflicts/sidecars are still surfaced, but
+              // under a "view may be half-synced" caveat below.
+              const syncFailureEntries = Object.entries(
+                refresh.syncFailuresBySubpath
+              )
+              const failedSet = new Set(syncFailureEntries.map(([sp]) => sp))
+              const commitEntries = Object.entries(pendingCommitConflicts)
+              // Head-wins refresh lines cover ONLY subpaths that fully synced (head
+              // genuinely LIVES at the path). Incomplete subpaths get the
+              // half-synced caveat instead (round-10 #4).
+              const syncedRefreshEntries = refreshEntries.filter(
+                ([sp]) => !failedSet.has(sp)
+              )
+              const incompleteRefreshEntries = refreshEntries.filter(([sp]) =>
+                failedSet.has(sp)
+              )
+              const refreshLines = syncedRefreshEntries.map(
+                ([sp, paths]) =>
+                  `/${sp}: ${paths.map((p) => `/${sp}${p}`).join(", ")}`
+              )
+              const commitLines = commitEntries.map(
+                ([sp, c]) =>
+                  `/${sp}: ${c.paths.map((p) => `/${sp}${p}`).join(", ")}`
+              )
+              // Sidecars to surface = the merged refresh sidecars (persisted ∪ this
+              // turn, round-10 #1). `kind` distinguishes a readable-bytes file
+              // sidecar from a readable-JSON symlink sidecar (round-10 #3). These
+              // are ALWAYS listed when present — independent of whether their
+              // subpath fully synced — so an incomplete subpath's preserved copy is
+              // never orphaned before the persisted store is cleared (round-10
+              // follow-up: the sidecar listing must not hide behind the head-wins
+              // line).
+              const refreshSidecars = Object.values(
+                displayRefresh.sidecarsBySubpath
+              ).flat()
+              // P2/P3: split restored (leaf exists, "read it") from unrestored,
+              // and unrestored further into transient (retry later) vs permanent
+              // (unrecoverable). Failed sidecars never get a "read it".
+              const {
+                restored: restoredRefreshSidecars,
+                transient: transientRefreshSidecars,
+                permanent: permanentRefreshSidecars,
+              } = partitionSidecars(
+                refreshSidecars,
+                failedSidecarReasons,
+                restoreStatusUnknown
+              )
+              const sidecarPairs =
+                restoredRefreshSidecars.map(formatRestoredPair)
+              // Per-path coverage (round-7 #D), restricted to fully-synced subpaths:
+              // a deferred conflict path is "covered" iff some sidecar's original IS
+              // that path or sits under it.
+              const sidecarOriginals = refreshSidecars.map((s) => s.original)
+              const hasUncoveredRefreshConflict = syncedRefreshEntries.some(
+                ([sp, paths]) =>
+                  paths.some((p) => {
+                    const abs = `/${sp}${p}`
+                    return !sidecarOriginals.some(
+                      (o) => o === abs || o.startsWith(`${abs}/`)
+                    )
+                  })
+              )
+              // We surfaced (and may clear) persisted refresh conflicts iff there
+              // were any deferred paths OR any sidecars to show.
+              surfacedPendingRefreshConflicts =
+                refreshEntries.length > 0 || refreshSidecars.length > 0
+
+              if (
+                refreshLines.length > 0 ||
+                commitLines.length > 0 ||
+                syncFailureEntries.length > 0 ||
+                surfacedPendingRefreshConflicts
+              ) {
+                if (refreshLines.length > 0) {
+                  console.warn(
+                    `[session-thinking] sandbox refresh conflicts for ${sessionId}: ${refreshLines.join("; ")}`
+                  )
+                }
+                if (commitLines.length > 0) {
+                  console.warn(
+                    `[session-thinking] sandbox prior-turn commit conflicts for ${sessionId}: ${commitLines.join("; ")}`
+                  )
+                }
+                if (syncFailureEntries.length > 0) {
+                  console.warn(
+                    `[session-thinking] sandbox refresh sync failures for ${sessionId}: ${syncFailureEntries
+                      .map(([sp, msg]) => `/${sp}: ${msg}`)
+                      .join("; ")}`
+                  )
+                }
+                const sections: string[] = []
+                if (refreshLines.length > 0) {
+                  const noSidecarNote = hasUncoveredRefreshConflict
+                    ? " Some conflict paths have NO sidecar — for any conflict path without a listed sidecar (below), re-read the live path: it now holds the other writer's version."
+                    : ""
+                  sections.push(
+                    `Another writer's change to these paths was applied and now LIVES at the path (head wins): ${refreshLines.join("; ")}.${noSidecarNote}`
+                  )
+                }
+                // The preserved-copy listing is its OWN sentence, emitted whenever
+                // ANY refresh sidecar exists — even if every conflicting subpath was
+                // incomplete this turn (so refreshLines is empty). This guarantees a
+                // preserved copy is named before the persisted store is cleared
+                // post-actorThink (round-10 follow-up: no orphaned sidecar).
+                if (sidecarPairs.length > 0) {
+                  sections.push(
+                    `Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar (read it — file sidecars hold the bytes verbatim, symlink sidecars hold JSON {"kind":"symlink","target":...} — reconcile with the live/head version, then write the merged result back to the original path): ${sidecarPairs.join("; ")}.`
+                  )
+                }
+                // P2/P3: sidecars that FAILED to re-materialize are listed WITHOUT
+                // a "read it" — transient ones promise a later-turn restore,
+                // permanent ones (corrupt/missing payload) are flagged as
+                // unrecoverable so the agent redoes the work instead of waiting.
+                const transientRefreshSentence = transientUnrestoredSentence(
+                  transientRefreshSidecars
+                )
+                if (transientRefreshSentence) {
+                  sections.push(transientRefreshSentence)
+                }
+                const permanentRefreshSentence = permanentUnrestoredSentence(
+                  permanentRefreshSidecars
+                )
+                if (permanentRefreshSentence) {
+                  sections.push(permanentRefreshSentence)
+                }
+                if (commitEntries.length > 0) {
+                  // round-7 #C: the post-commit reconcile preserved the agent's
+                  // pre-conflict copy at a sidecar — point at it instead of
+                  // claiming the work was simply lost. P2/P3: split restored ("read
+                  // it") from transient (retry later) and permanent (unrecoverable).
+                  const commitSidecars = commitEntries.flatMap(
+                    ([, c]) => c.sidecars
+                  )
+                  const {
+                    restored: restoredCommitSidecars,
+                    transient: transientCommitSidecars,
+                    permanent: permanentCommitSidecars,
+                  } = partitionSidecars(
+                    commitSidecars,
+                    failedSidecarReasons,
+                    restoreStatusUnknown
+                  )
+                  const commitSidecarPairs =
+                    restoredCommitSidecars.map(formatRestoredPair)
+                  const commitSidecarNote =
+                    commitSidecarPairs.length > 0
+                      ? ` Your pre-conflict copy of each preserved FILE/SYMLINK was saved to a sidecar — read it (symlink sidecars hold JSON metadata), reconcile with the current saved version, and save the merged result back to the original path: ${commitSidecarPairs.join("; ")}.`
+                      : ""
+                  const transientCommitSentence = transientUnrestoredSentence(
+                    transientCommitSidecars
+                  )
+                  const permanentCommitSentence = permanentUnrestoredSentence(
+                    permanentCommitSidecars
+                  )
+                  const unrestoredCommitNote = [
+                    transientCommitSentence,
+                    permanentCommitSentence,
+                  ]
+                    .filter(Boolean)
+                    .map((s) => ` ${s}`)
+                    .join("")
+                  sections.push(
+                    `Your previous turn's save to these paths LOST to a concurrent writer (${commitLines.join("; ")}); the current saved version is the other writer's.${commitSidecarNote}${unrestoredCommitNote} Re-read each path and re-apply your change if it's still needed.`
+                  )
+                  surfacedPendingCommitConflicts = true
+                }
+                if (syncFailureEntries.length > 0) {
+                  // round-8 follow-up + round-10 #4: a space failed to FULLY merge
+                  // in the latest head this turn. Its view may be HALF-SYNCED — head
+                  // is NOT guaranteed to be at the path — and it will NOT be
+                  // committed at turn-end (avoids snapshotting a half-synced tree);
+                  // the platform retries the merge next turn. Any conflict paths +
+                  // sidecars already preserved for it ARE listed above and remain
+                  // valid; surface those paths here too so the agent re-reads them.
+                  const incompleteLines = incompleteRefreshEntries.map(
+                    ([sp, paths]) =>
+                      `/${sp}: ${paths.map((p) => `/${sp}${p}`).join(", ")}`
+                  )
+                  const incompletePathsNote =
+                    incompleteLines.length > 0
+                      ? ` Conflicting paths there (re-read carefully; your preserved copies are in the sidecar list above): ${incompleteLines.join("; ")}.`
+                      : ""
+                  sections.push(
+                    `These spaces could NOT be fully refreshed to the latest version this turn and may show a HALF-SYNCED view — do NOT assume the other writer's version is at the path there; re-read carefully and avoid large edits until they recover: ${syncFailureEntries
+                      .map(([sp]) => `/${sp}`)
+                      .join(", ")}.${incompletePathsNote}`
+                  )
+                }
+                sandboxConflictNotice = {
+                  kind: "system_notice",
+                  noticeType: "generic",
+                  scope: "private",
+                  surface: "internal",
+                  parts: textBlocks(
+                    `File merge conflict. ${sections.join(" ")}`
+                  ),
+                  metadata: {
+                    refreshConflicts: displayRefresh.deferredConflictsBySubpath,
+                    priorCommitConflicts: pendingCommitConflicts,
+                    refreshSyncFailures: refresh.syncFailuresBySubpath,
+                  },
+                }
+              }
+            } catch (refreshErr) {
+              // R3.P2b-A: the sandbox IS provisioned/active — a refresh or
+              // conflict-surface step threw (e.g. a helper RPC error, a snapshot
+              // read failure). This is NOT a provisioning failure, so do NOT emit
+              // the "running WITHOUT isolation" notice (isolation IS on). Emit a
+              // DISTINCT stale-view notice instead.
+              // E-2 (at-least-once): FORCE surfacedPending* back to false. They may
+              // already be true (set at the surface steps above) if the throw landed
+              // AFTER those lines — but the surfacing did NOT complete, so only this
+              // generic stale-view notice reached the model, NOT the actual conflict
+              // details. Resetting keeps the post-actorThink cleanup from clearing
+              // the persisted conflict store, so the conflicts re-deliver next turn
+              // (at-least-once tolerates a duplicate, never a drop).
+              surfacedPendingRefreshConflicts = false
+              surfacedPendingCommitConflicts = false
+              log.error(
+                { sessionId, err: refreshErr },
+                "sandbox refresh/conflict-surface failed (sandbox IS active)"
+              )
               sandboxConflictNotice = {
                 kind: "system_notice",
                 noticeType: "generic",
                 scope: "private",
                 surface: "internal",
                 parts: textBlocks(
-                  "Sandbox unavailable — this turn is running WITHOUT filesystem/command isolation. Provisioning failed; retry once the sandbox backend is healthy."
+                  "Your sandbox is active, but its file view may be STALE this turn — a background refresh failed, so recent changes by other writers might not be reflected. Re-read any file before editing it, and avoid large overwrites until the next turn refreshes cleanly."
                 ),
-                metadata: { sandboxDegraded: true },
+                metadata: { sandboxStaleView: true },
               }
             }
           }

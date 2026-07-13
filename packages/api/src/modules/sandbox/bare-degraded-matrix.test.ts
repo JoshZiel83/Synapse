@@ -212,3 +212,124 @@ test("B4 — WHOLE_SCOPE root-jails: a within-root path resolves; the empty scop
   })
   assert.equal(w.ok, true, "WHOLE_SCOPE permits within-root writes")
 })
+
+// ─────────── R3.1 — capability_descriptor tool toggles ENFORCED at the plane ────
+// A toggled-off op fail-closes at coreInvokeBarePlane with runtime_constraint (a
+// MISSING capability, not invalid_request) — mirrors the Layer-1 catalog omission
+// in core-catalog.ts so an omitted/stripped tool can never be executed anyway.
+
+test("R3.1 — a toggled-off CORE op (mkdir/move/remove/search) fail-closes at coreInvokeBarePlane with runtime_constraint", async () => {
+  const root = await makeRoot()
+  const wholeCtx: ConfinementCtx = { scope: WHOLE_SCOPE, access: "write" }
+  const cases: Array<{
+    over: Partial<SandboxCapabilityDescriptor["core"]>
+    toolName: string
+    args: Record<string, unknown>
+  }> = [
+    {
+      over: { mkdir: false },
+      toolName: "fs_mkdir",
+      args: { path: "/conversation/d" },
+    },
+    {
+      over: { move: false },
+      toolName: "fs_move",
+      args: {
+        source: "/conversation/a.txt",
+        destination: "/conversation/b.txt",
+      },
+    },
+    {
+      over: { remove: false },
+      toolName: "fs_remove",
+      args: { path: "/conversation/x.txt" },
+    },
+    {
+      over: { search: false },
+      toolName: "fs_search",
+      args: { mode: "content", query: "x" },
+    },
+  ]
+  for (const c of cases) {
+    const plane = createLocalBareDataPlane({
+      sandboxRoot: root,
+      descriptor: descriptor(c.over),
+    })
+    const r = await coreInvokeBarePlane({
+      plane,
+      builtinKind: "filesystem",
+      toolName: c.toolName,
+      args: c.args,
+      ctx: wholeCtx,
+    })
+    assert.equal(r.ok, false, `${c.toolName} must fail-close`)
+    assert.equal(
+      r.error?.code,
+      "runtime_constraint",
+      `${c.toolName} → runtime_constraint`
+    )
+    await plane.dispose()
+  }
+})
+
+test("R3.1 — !rangeRead rejects a supplied byte-window (start_byte/end_byte) but a plain read + max_bytes still works (max_bytes is not a range feature)", async () => {
+  const root = await makeRoot()
+  const wholeCtx: ConfinementCtx = { scope: WHOLE_SCOPE, access: "write" }
+  const plane = createLocalBareDataPlane({
+    sandboxRoot: root,
+    descriptor: descriptor({ rangeRead: false }),
+  })
+  await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_write",
+    args: { path: "/conversation/f.txt", content: "0123456789" },
+    ctx: wholeCtx,
+  })
+  const ranged = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_read",
+    args: { path: "/conversation/f.txt", start_byte: 2, end_byte: 5 },
+    ctx: wholeCtx,
+  })
+  assert.equal(ranged.ok, false, "!rangeRead rejects a supplied byte window")
+  assert.equal(ranged.error?.code, "runtime_constraint")
+
+  const plain = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_read",
+    args: { path: "/conversation/f.txt", max_bytes: 4 },
+    ctx: wholeCtx,
+  })
+  assert.equal(
+    plain.ok,
+    true,
+    "!rangeRead still permits a plain read with max_bytes"
+  )
+  await plane.dispose()
+})
+
+test("R3.1 — fs_write create_parents:true under !mkdir fail-closes with runtime_constraint", async () => {
+  const root = await makeRoot()
+  const wholeCtx: ConfinementCtx = { scope: WHOLE_SCOPE, access: "write" }
+  const plane = createLocalBareDataPlane({
+    sandboxRoot: root,
+    descriptor: descriptor({ mkdir: false }),
+  })
+  const r = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_write",
+    args: {
+      path: "/conversation/newdir/f.txt",
+      content: "hi",
+      create_parents: true,
+    },
+    ctx: wholeCtx,
+  })
+  assert.equal(r.ok, false, "create_parents:true under !mkdir must fail-close")
+  assert.equal(r.error?.code, "runtime_constraint")
+  await plane.dispose()
+})

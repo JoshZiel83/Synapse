@@ -77,6 +77,8 @@ import { recoverInterruptedExecutions } from "./modules/execution/service.js"
 import {
   recoverFailedSandboxMounts,
   reconcileSandboxes,
+  reapStuckProvisioningSandboxes,
+  retryStuckClosingSandboxes,
 } from "./modules/sandbox/index.js"
 import { reapDockerSandboxOrphans } from "./modules/sandbox/docker-sandbox-backend.js"
 import {
@@ -398,6 +400,47 @@ async function main() {
     } catch (err) {
       console.error("Failed to reconcile sandboxes:", err)
     }
+    // R3.P2b: periodic TTL reaper for sandboxes stuck in 'provisioning' past their
+    // deadline_at (a provision that crashed/hung before its CAS active flip). Runs
+    // on an interval (unref'd so it never keeps the process alive), restricted to
+    // state='provisioning' — boot reconcile owns the other states. The CAS flip in
+    // provisionSandbox is the race-guard so this can never tear down a legit
+    // in-flight provision.
+    const stuckProvisionReaper = setInterval(() => {
+      void reapStuckProvisioningSandboxes()
+        .then((r) => {
+          if (r.reaped > 0) {
+            log.warn(
+              { reaped: r.reaped, scanned: r.scanned },
+              "[sandbox] TTL-reaped stuck 'provisioning' sandbox(es)"
+            )
+          }
+        })
+        .catch((err) =>
+          log.error({ err }, "[sandbox] stuck-provisioning reaper failed")
+        )
+    }, 60_000)
+    stuckProvisionReaper.unref?.()
+    // F3: periodic fail-closed retry for sandboxes stuck in 'closing' (teardown
+    // preserved them on an alive/unknown probe). Re-drives the full teardown, which
+    // converges only on a CONFIRMED-dead re-probe — never force-orphans. Boot
+    // reconcile owns the first pass; this closes the boot-only gap on a long-uptime
+    // process. Unref'd so it never keeps the process alive.
+    const stuckClosingRetry = setInterval(() => {
+      void retryStuckClosingSandboxes()
+        .then((r) => {
+          if (r.retried > 0) {
+            log.warn(
+              { retried: r.retried, scanned: r.scanned },
+              "[sandbox] re-drove teardown for stuck 'closing' sandbox(es)"
+            )
+          }
+        })
+        .catch((err) =>
+          log.error({ err }, "[sandbox] stuck-closing retry failed")
+        )
+    }, 60_000)
+    stuckClosingRetry.unref?.()
   } else {
     // SANDBOX_PROVIDER=none (P2, owner decision): `none` is a PROVISIONING
     // selector, NOT a teardown switch. We do NOT provision, reconcile, tear down,

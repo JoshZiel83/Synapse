@@ -611,9 +611,17 @@ test("Part A#1: a binary fs_read (default utf-8) falls back to base64 on the bod
   })
   assert.equal(res.ok, true)
   const body = bodyOf(res)
-  assert.equal(body["encoding"], "base64", "body.encoding reflects the fallback")
+  assert.equal(
+    body["encoding"],
+    "base64",
+    "body.encoding reflects the fallback"
+  )
   const meta = metaOf(res)
-  assert.equal(meta["encoding"], "base64", "_meta.encoding reflects the fallback")
+  assert.equal(
+    meta["encoding"],
+    "base64",
+    "_meta.encoding reflects the fallback"
+  )
   assert.equal(meta["encoding_fallback"], true)
   // The returned base64 decodes back to the EXACT original bytes (no corruption).
   assert.ok(
@@ -672,7 +680,11 @@ test("Part A#2: a non-zero-exit / killed command yields result.isError===true; a
     args: { command: "exit 3" },
     ctx,
   })
-  assert.equal(failed.ok, true, "a failed command is still a RESULT, not a fork error")
+  assert.equal(
+    failed.ok,
+    true,
+    "a failed command is still a RESULT, not a fork error"
+  )
   assert.equal(
     (failed.result as { isError?: boolean }).isError,
     true,
@@ -733,4 +745,111 @@ test("B5: exec concurrency cap rejects an over-cap concurrent invocation", async
   assert.equal(second.ok, false)
   assert.match(second.error?.message ?? "", /concurrency/i)
   await slow
+})
+
+test("R3.3 disposed-guard: a fs op after dispose() fails CLOSED (runtime_constraint), not a raw fs error", async () => {
+  const { root, plane } = await makeSandbox()
+  await writeFile(join(root, "conversation", "live.txt"), "hello")
+  const ctx: ConfinementCtx = { scope: ["/conversation"], access: READ }
+  // Before dispose: a read succeeds.
+  const before = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_read",
+    args: { path: "/conversation/live.txt" },
+    ctx,
+  })
+  assert.equal(before.ok, true, "read works before teardown")
+
+  // Teardown disposes the plane.
+  await plane.dispose()
+
+  // Every op now fails closed with runtime_constraint — the guard fires at the
+  // TOP of the op, BEFORE any backend I/O, so a slow op can't touch a dir being
+  // removed. The file still physically exists (makeSandbox's tmpdir is intact),
+  // so a passing read here would prove the guard is MISSING.
+  const afterRead = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_read",
+    args: { path: "/conversation/live.txt" },
+    ctx,
+  })
+  assert.equal(afterRead.ok, false, "read after dispose is denied")
+  assert.equal(afterRead.error?.code, "runtime_constraint")
+  assert.match(afterRead.error?.message ?? "", /torn down/i)
+
+  // A write is likewise refused — no bytes reach the disposed sandbox root.
+  const afterWrite = await coreInvokeBarePlane({
+    plane,
+    builtinKind: "filesystem",
+    toolName: "fs_write",
+    args: { path: "/conversation/ghost.txt", content: "should never land" },
+    ctx: { scope: ["/conversation"], access: WRITE },
+  })
+  assert.equal(afterWrite.ok, false, "write after dispose is denied")
+  assert.equal(afterWrite.error?.code, "runtime_constraint")
+  await assert.rejects(
+    stat(join(root, "conversation", "ghost.txt")),
+    "a disposed-plane write must not create the file"
+  )
+})
+
+test("R3.7 drain: dispose() AWAITS an in-flight fs write so it lands on disk (not lost by the commit snapshot)", async () => {
+  const desc = buildLocalBareDescriptor({ isolation: "bwrap" })
+  desc.core.maxWriteBytes = 128 * 1024 * 1024
+  const { root, plane } = await makeSandbox(desc)
+  const ctx: ConfinementCtx = { scope: ["/conversation"], access: WRITE }
+  // A large payload so the atomicWrite (hash → temp-write → rename) is reliably
+  // still in flight when dispose() is called synchronously right after. We do NOT
+  // await the write — only dispose(). WITH the drain, dispose() awaits the write to
+  // completion, so the FINAL path exists at full size when dispose() returns.
+  // WITHOUT the drain, dispose() returns mid-temp-write and the rename hasn't
+  // happened → stat(final) would ENOENT → this test fails (proving the drain).
+  const bytes = new Uint8Array(48 * 1024 * 1024).fill(0x61)
+  const writeP = plane.write("/conversation/big.txt", bytes, {}, ctx)
+  await plane.dispose()
+  const st = await stat(join(root, "conversation", "big.txt"))
+  assert.equal(
+    st.size,
+    bytes.length,
+    "dispose() drained the in-flight write before returning (full bytes durable)"
+  )
+  const res = await writeP
+  assert.equal(res.bytesWritten, bytes.length)
+})
+
+test("R3.7 drain: dispose() aborts AND drains an in-flight exec child (bounded, reported killed)", async () => {
+  if (!bwrapAvailable()) return // exec drain is only meaningful when bwrap jails run
+  const desc = buildLocalBareDescriptor({ isolation: "bwrap" })
+  const { plane } = await makeSandbox(desc)
+  const ctx: ConfinementCtx = { scope: WHOLE_SCOPE, access: WRITE }
+  const execP = coreInvokeBarePlane({
+    plane,
+    builtinKind: "commandline",
+    toolName: "bash",
+    args: { command: "sleep 30" },
+    ctx,
+  })
+  // Let the child actually spawn before we tear down.
+  await new Promise((r) => setTimeout(r, 200))
+  const startedAt = Date.now()
+  await plane.dispose()
+  const elapsed = Date.now() - startedAt
+  // dispose() aborted the child (did NOT wait out the 30s sleep) but DID await its
+  // exit (drain) — so it returns within the drain budget, never instantly-nor-30s.
+  assert.ok(
+    elapsed < 5_000,
+    `dispose() returned within the drain budget (was ${elapsed}ms)`
+  )
+  const res = await execP
+  assert.equal(res.ok, true)
+  const body = JSON.parse(
+    (res.result as { content: { text: string }[] }).content[0]!.text
+  )
+  assert.equal(
+    body.killed,
+    true,
+    "the in-flight exec child was aborted by dispose"
+  )
 })

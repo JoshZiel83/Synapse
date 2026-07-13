@@ -46,12 +46,13 @@ import {
   restoreSidecar,
 } from "./materialize.js"
 import type { DirSyncResult } from "@synapse/device-runtime"
-import { createLocalHostProvider, type HostProvider } from "./host-provider.js"
+import type { HostProvider } from "./host-provider.js"
 import {
-  createLocalSandboxBackend,
-  type SandboxBackend,
+  readHostPidIdentity,
+  verifyPidIdentity,
   type SandboxBackendKind,
   type SandboxHandle,
+  type SandboxLiveness,
   type SandboxRef,
   type SandboxSpec,
 } from "./sandbox-backend.js"
@@ -59,6 +60,10 @@ import {
   reapDockerSandboxOrphans,
   type SpawnImpl,
 } from "./docker-sandbox-backend.js"
+import {
+  markBareDataPlaneClosing,
+  clearBareDataPlaneClosing,
+} from "./bare-dispatch.js"
 import {
   resolveSandboxAdapter,
   adapterForRow,
@@ -116,6 +121,15 @@ export class SandboxServiceError extends Error {
 // `sandboxes` row (P3) so a different process / post-restart teardown can rebuild a
 // SandboxRef (via the mount's sandbox_id) and kill it without the in-process handle.
 const liveSandboxHandles = new Map<string, SandboxHandle>()
+
+/**
+ * R3.P2b: the provision budget written to sandboxes.deadline_at at the post-create
+ * back-fill. Deliberately generous — it must exceed the worst-case provision
+ * wall-clock (create + catalog wait 30s + tunnel wait 30s + sidecar restore) so
+ * the periodic TTL reaper only ever fires on a genuinely-stuck 'provisioning' row,
+ * never on a slow-but-healthy in-flight provision. 5 minutes.
+ */
+const PROVISION_DEADLINE_MS = 5 * 60_000
 
 /**
  * Resolve the sandbox ADAPTER for the provision path (§4.1). Forks on BOTH
@@ -208,15 +222,19 @@ function backendForKind(
  *   1. mount.sandbox_id → getSandboxById (NO state filter),
  *   2. by-session → getSandboxBySessionForControl (only runtimes.deleted_at IS
  *      NULL, ANY state).
- * NEVER uses the state-filtered getLiveSandboxBySession (that is reuse-only).
+ * This is the STATE-AGNOSTIC control-path resolver; the reuse fast path instead
+ * gates on state === 'active' at its own call site (R3.5).
  * runtimeServiceId is intentionally omitted — the kill/liveness path (docker rm
  * by resource id / pid signal) never needs it.
  */
 async function buildSandboxRefFromSandboxRow(
   mounts: FileMountRow[],
-  run: Executor = repo.defaultDbh()
+  run: Executor = repo.defaultDbh(),
+  // R3.5(D): an explicit sessionId lets a MOUNT-LESS teardown still resolve its
+  // owning sandbox by-session (the mounts-derived sessionId is "" with no mounts).
+  explicitSessionId?: string
 ): Promise<SandboxRef | null> {
-  const sessionId = mounts[0]?.sessionId ?? ""
+  const sessionId = explicitSessionId ?? mounts[0]?.sessionId ?? ""
   const mountSandboxId = mounts.find((m) => m.sandboxId)?.sandboxId ?? null
   let row: repo.SandboxRow | null = null
   if (mountSandboxId) {
@@ -234,6 +252,9 @@ async function buildSandboxRefFromSandboxRow(
       runtimeId: row.id,
       pairingSessionId: row.pairingSessionId ?? undefined,
       hostPid: row.hostPid ?? undefined,
+      // R3.6: carry the durable pid-identity token so the cross-process kill path
+      // signals host_pid ONLY when the live pid still matches (PID-reuse-safe).
+      hostPidIdentity: row.hostPidIdentity,
     }
   }
   // No owning sandbox row resolvable (crash before the sandbox was minted, or a
@@ -252,24 +273,28 @@ function runtimeIdFromMounts(mounts: FileMountRow[]): string {
 }
 
 /**
- * Whether the runtime behind a session's mounts is actually alive. Prefers the
+ * TRISTATE liveness (R3.4) of the runtime behind a session's mounts. Prefers the
  * in-process handle (cheap); otherwise rebuilds a SandboxRef via the STATE-AGNOSTIC
  * control-path resolver and probes via the owning adapter (docker inspect / pid
- * signal). On any error, treat as NOT alive so the caller recovers rather than
- * handing back a dead sandbox.
+ * identity). Crucially it NO LONGER collapses a probe failure to "dead": a
+ * transport/daemon error or an unverifiable pid returns 'unknown', so callers can
+ * SHIELD (preserve tracking + persisted state) instead of destructively reaping a
+ * sandbox they merely couldn't reach. Only a STRUCTURAL absence (no killable ref)
+ * returns 'dead' here.
  */
 export async function isSandboxRuntimeAlive(
   mounts: FileMountRow[],
   opts: { run?: Executor; dockerSpawnImpl?: SpawnImpl } = {}
-): Promise<boolean> {
+): Promise<SandboxLiveness> {
   const sessionId = mounts[0]?.sessionId
   if (sessionId) {
     const live = liveSandboxHandles.get(sessionId)
     if (live) {
       try {
-        return await live.isRunning()
+        return await live.probeLiveness()
       } catch {
-        return false
+        // The in-process probe itself threw → we could not determine liveness.
+        return "unknown"
       }
     }
   }
@@ -277,12 +302,15 @@ export async function isSandboxRuntimeAlive(
     mounts,
     opts.run ?? repo.defaultDbh()
   )
-  if (!ref) return false
+  // No killable ref (crash before mint, or a mount with no runtime) → structural
+  // absence: there is nothing to keep alive, so 'dead' is safe (not 'unknown').
+  if (!ref) return "dead"
   try {
     const handle = await backendForKind(ref, opts.dockerSpawnImpl).connect(ref)
-    return await handle.isRunning()
+    return await handle.probeLiveness()
   } catch {
-    return false
+    // Could not even connect/probe (e.g. docker CLI missing) → unknown, NOT dead.
+    return "unknown"
   }
 }
 
@@ -408,25 +436,52 @@ export async function reconcileSandboxes(
   for (const sessionId of sessionIds) {
     try {
       const mounts = await getActiveMountsForSession(run, sessionId)
-      // A sandboxes-only candidate (no live mounts) is NOT shielded here — for
-      // Mode-A this cannot happen (an active sandbox always co-holds its 3 live
-      // mounts). Liveness moves off mounts only in S11.
-      if (mounts.length === 0) continue
+      // The authoritative sandbox row (STATE-AGNOSTIC control resolver). Its state
+      // — not merely mount presence — decides shield vs reap (R3.5).
+      const sandboxRow = await repo.getSandboxBySessionForControl(
+        sessionId,
+        run
+      )
+      const nonTerminal =
+        !!sandboxRow &&
+        sandboxRow.state !== "closed" &&
+        sandboxRow.state !== "failed"
+      if (mounts.length === 0) {
+        // R3.5: a mount-less candidate came from the sandbox-arm of the union — a
+        // sandbox row with no live mounts. At startup (the only reconcile caller)
+        // that is a crash orphan; if its row is non-terminal, tear it down so a
+        // leaked runtime/container doesn't linger. A session with NO row (and no
+        // mounts) is a true no-op.
+        if (nonTerminal) {
+          log.warn(
+            { sessionId, state: sandboxRow!.state },
+            "reconcile: tearing down mount-less non-terminal sandbox"
+          )
+          await teardownSandbox(sessionId, { executor: deps.executor })
+        }
+        continue
+      }
       const allActive = mounts.every((m) => m.status === "active")
-      if (
-        allActive &&
-        (await isSandboxRuntimeAlive(mounts, {
-          run,
-          dockerSpawnImpl: deps.dockerSpawnImpl,
-        }))
-      ) {
-        // Healthy + alive — keep it (and shield its container from the orphan
-        // reaper below).
+      // R3.5: shield ONLY a genuinely-'active' sandbox. A provisioning/closing/
+      // failed sandbox (even with live mounts) is NOT reusable — route it to
+      // teardown so it converges instead of being reused/shielded forever.
+      const stateActive = sandboxRow?.state === "active"
+      const liveness: SandboxLiveness =
+        allActive && stateActive
+          ? await isSandboxRuntimeAlive(mounts, {
+              run,
+              dockerSpawnImpl: deps.dockerSpawnImpl,
+            })
+          : "dead"
+      if (allActive && stateActive && liveness !== "dead") {
+        // Healthy + (alive OR unknown) — keep it and shield its container from the
+        // orphan reaper below. R3.4: a transient probe error ('unknown') must NOT
+        // reap a possibly-live sandbox, so it shields exactly like 'alive'.
         liveSessionIds.add(sessionId)
         continue
       }
       log.warn(
-        { sessionId, allActive },
+        { sessionId, allActive, state: sandboxRow?.state, liveness },
         "reconcile: tearing down stale session"
       )
       // Thread the RAW injected executor: in prod deps.executor is undefined so
@@ -449,10 +504,7 @@ export async function reconcileSandboxes(
     try {
       const { removed } = await reap(liveSessionIds)
       if (removed.length > 0) {
-        log.warn(
-          { removed },
-          "reconcile: reaped label-only docker orphan(s)"
-        )
+        log.warn({ removed }, "reconcile: reaped label-only docker orphan(s)")
       }
     } catch (err) {
       log.error({ err }, "reconcile: docker orphan reap failed")
@@ -461,6 +513,132 @@ export async function reconcileSandboxes(
 }
 
 const loadSessionContext = repo.loadSessionContext
+
+export interface ReapStuckProvisioningResult {
+  scanned: number
+  reaped: number
+}
+
+/**
+ * R3.P2b — periodic TTL reaper for sandboxes STUCK in 'provisioning' past their
+ * deadline_at (a provisionSandbox that crashed/hung before its CAS active flip).
+ * RESTRICTED to state='provisioning' ONLY (the idx_sandboxes_reap partial index) —
+ * active/committing/closing are boot-reconcile's job, NEVER this periodic sweep.
+ *
+ * For each stuck row it does a CAS 'provisioning'→'failed' (so a provision that
+ * flips to 'active' at the same instant WINS and the reaper no-ops on it — the
+ * race-closer paired with {@link provisionSandbox}'s casFlipSandboxActive), then
+ * revokes its grants + marks its mounts 'failed' + best-effort kills the
+ * in-process handle if THIS process happens to hold one. It NEVER calls the
+ * liveness-based teardown (host-scoped, boot-only) and never touches an
+ * active/committing/closing row. Best-effort + idempotent.
+ */
+export async function reapStuckProvisioningSandboxes(
+  deps: {
+    executor?: Executor
+  } = {}
+): Promise<ReapStuckProvisioningResult> {
+  const run = deps.executor ?? repo.defaultDbh()
+  const stuck = await repo.listStuckProvisioningSandboxes(run)
+  let reaped = 0
+  for (const row of stuck) {
+    try {
+      const flipped = await repo.casFailStuckProvisioningSandbox(
+        row.id,
+        "provisioning exceeded deadline_at (TTL reaped)",
+        run
+      )
+      if (!flipped) continue // a concurrent active-flip won; leave it.
+      reaped += 1
+      // Best-effort kill the in-process handle if this process holds one.
+      if (row.sessionId) {
+        const handle = liveSandboxHandles.get(row.sessionId)
+        if (handle) {
+          await handle.kill().catch(() => {})
+          liveSandboxHandles.delete(row.sessionId)
+        }
+        // Revoke grants (need the session's actor/conversation context).
+        const ctx = await loadSessionContext(row.sessionId, run)
+        if (ctx) {
+          await revokeSandboxGrants({
+            workspaceId: ctx.workspaceId,
+            runtimeId: row.id,
+            actorId: ctx.actorId,
+            conversationId: ctx.conversationId,
+            executor: run,
+          }).catch(() => {})
+        }
+        // Mark its live mounts 'failed' (preserve dirs — nothing to commit yet, but
+        // don't leave them 'provisioning' forever).
+        const mounts = await getActiveMountsForSession(run, row.sessionId)
+        for (const mount of mounts) {
+          await updateFileMount(run, mount.id, {
+            status: "failed",
+            errorMessage: "sandbox provisioning TTL-reaped",
+          }).catch(() => {})
+        }
+      }
+      // E-1: converge the runtime — soft-delete it (CASCADEs any remaining grants),
+      // matching teardownSandbox. Without this the CAS-'failed' runtimes row lingers
+      // with deleted_at IS NULL forever (reconcile excludes 'failed', reuse requires
+      // 'active') — an unbounded accumulation. Runs regardless of sessionId.
+      await deleteRuntime(row.workspaceId, row.id, run).catch((err) =>
+        log.error(
+          { sandboxId: row.id, err },
+          "reaper soft-delete runtime failed"
+        )
+      )
+    } catch (err) {
+      log.error(
+        { sandboxId: row.id, err },
+        "reapStuckProvisioningSandboxes failed for a row"
+      )
+    }
+  }
+  return { scanned: stuck.length, reaped }
+}
+
+/** Grace before a 'closing' sandbox is retried — long enough that a normal
+ *  in-flight teardown (seconds) is never disturbed, short enough to converge a
+ *  genuinely-stuck row without waiting for the next process restart. */
+const CLOSING_RETRY_GRACE_SECONDS = 180
+
+/**
+ * F3 — periodic fail-closed retry for sandboxes STUCK in 'closing'. teardownSandbox
+ * preserves a sandbox in 'closing' (rather than committing + soft-deleting) whenever
+ * its post-kill liveness probe is 'alive' or 'unknown' — the deliberate PID-reuse-
+ * safe / no-orphan choice. Without a periodic nudge such a row only reconverges at
+ * the next process restart (reconcileSandboxes is boot-only). This re-drives the
+ * FULL teardown for each stuck row: it re-probes and converges the instant the
+ * runtime is CONFIRMED dead (a restarted API loses the in-process plane, so a
+ * local:bare row converges immediately), and otherwise re-preserves + re-alerts —
+ * never force-orphaning a possibly-live runtime. The close-gate bumps updated_at on
+ * each pass, so this also paces the retry cadence.
+ */
+export async function retryStuckClosingSandboxes(
+  deps: {
+    executor?: Executor
+  } = {}
+): Promise<{ scanned: number; retried: number }> {
+  const run = deps.executor ?? repo.defaultDbh()
+  const stuck = await repo.listReapableClosingSandboxSessions(
+    CLOSING_RETRY_GRACE_SECONDS,
+    run
+  )
+  let retried = 0
+  for (const row of stuck) {
+    try {
+      await teardownSandbox(row.sessionId, { executor: deps.executor })
+      retried += 1
+    } catch (err) {
+      log.error(
+        { sessionId: row.sessionId, err },
+        "retryStuckClosingSandboxes teardown re-drive failed"
+      )
+    }
+  }
+  return { scanned: stuck.length, retried }
+}
 
 /** Per-session sandbox root: <STORAGE_DIR>/sandboxes/<sessionId>. */
 function sandboxRootFor(sessionId: string): string {
@@ -607,27 +785,33 @@ export async function provisionSandbox(
   // re-register its endpoint. If it never does, we DON'T fast-path — we fall
   // through to the stale-mount teardown + re-provision below.
   let fastPathOk = false
-  if (
-    existing.length > 0 &&
-    allActive &&
-    (await isSandboxRuntimeAlive(existing))
-  ) {
+  // R3.4: reuse on 'alive' OR 'unknown' (a transient probe error must NOT force a
+  // destructive teardown + reprovision of a possibly-live sandbox — the endpoint
+  // wait below is the real reuse gate). Only a confirmed 'dead' runtime declines.
+  const liveness: SandboxLiveness =
+    existing.length > 0 && allActive
+      ? await isSandboxRuntimeAlive(existing)
+      : "dead"
+  if (existing.length > 0 && allActive && liveness !== "dead") {
     const runtimeIdForEndpoint = runtimeIdFromMounts(existing)
-    // Mode gates the endpoint probe: 'bare' has no device_runtime service to
-    // resolve (P4), 'resident' must wait for its tunnel endpoint. A missing
-    // sandboxes row (shouldn't happen for a live all-active sandbox) defaults to
-    // 'resident' — fail-safe toward the endpoint-probe path.
-    const sandboxMode =
-      (runtimeIdForEndpoint
-        ? await repo.getSandboxById(runtimeIdForEndpoint)
-        : null
-      )?.mode ?? "resident"
-    fastPathOk = await fastPathEndpointReady({
-      sessionId,
-      runtimeId: runtimeIdForEndpoint,
-      mode: sandboxMode,
-      tunnelTimeoutMs: options.tunnelTimeoutMs ?? 30_000,
-    })
+    // R3.5 reuse-gate (the load-bearing convergence fix): only fast-path a
+    // genuinely 'active' sandbox. A row still 'provisioning' or already 'closing'/
+    // 'failed' must NOT be reused — fall through to the stale-mount teardown +
+    // re-provision below. A null row (shouldn't happen for a live all-active
+    // sandbox) is fail-safe → declines the fast path.
+    const sandboxRow = runtimeIdForEndpoint
+      ? await repo.getSandboxById(runtimeIdForEndpoint)
+      : null
+    if (sandboxRow?.state === "active") {
+      // Mode gates the endpoint probe: 'bare' has no device_runtime service to
+      // resolve (P4), 'resident' must wait for its tunnel endpoint.
+      fastPathOk = await fastPathEndpointReady({
+        sessionId,
+        runtimeId: runtimeIdForEndpoint,
+        mode: sandboxRow.mode,
+        tunnelTimeoutMs: options.tunnelTimeoutMs ?? 30_000,
+      })
+    }
   }
   if (fastPathOk) {
     // Already provisioned this session — report the ACTUAL state, not a
@@ -846,9 +1030,22 @@ export async function provisionSandbox(
     // consume mints the row, so it is written HERE (post-create), not from
     // onResourceCreated (which would 0-row-UPDATE a not-yet-existent row).
     await persistAll({ sandboxId: runtimeId })
+    // R3.6: for a LOCAL sandbox capture the child pid's durable identity token
+    // ('<boot_id>:<starttime>') the instant we know the pid, so recovery/teardown
+    // can signal it PID-reuse-safely. NULL for docker/off-box (no host pid) and
+    // non-Linux hosts (readHostPidIdentity returns null there).
+    const hostPidIdentity =
+      adapter.kind === "local" && handle.hostPid !== undefined
+        ? readHostPidIdentity(handle.hostPid)
+        : null
     await repo.updateSandboxRow(runtimeId, {
       resourceId: handle.resourceId || null,
       hostPid: handle.hostPid ?? null,
+      hostPidIdentity,
+      // R3.P2b: stamp the provision budget so a stuck 'provisioning' row is
+      // TTL-reapable, while a healthy in-flight provision (well under the budget)
+      // is never touched.
+      deadlineAt: new Date(Date.now() + PROVISION_DEADLINE_MS),
     })
 
     // ⑦/⑦b — catalog + tunnel readiness. Forked on adapter.catalogSource:
@@ -898,7 +1095,18 @@ export async function provisionSandbox(
     // ⑨ mark mounts active + flip the sandbox row provisioning→active (fully
     // provisioned: catalog synced, tunnel up, grants built).
     await persistAll({ status: "active" })
-    await repo.updateSandboxRow(runtimeId, { state: "active" })
+    // R3.P2b: CAS the active flip — only flip a row that is STILL 'provisioning'.
+    // If a periodic TTL reaper already moved it to 'failed' (deadline exceeded),
+    // the flip finds 0 rows and we run the provision-failure cleanup below instead
+    // of resurrecting a reaped row (the actual provision↔reaper race-closer).
+    const flippedActive = await repo.casFlipSandboxActive(runtimeId)
+    if (!flippedActive) {
+      throw new SandboxServiceError(
+        `provision for ${sessionId} lost the active-flip race — the sandbox row is ` +
+          `no longer 'provisioning' (a TTL reaper won); re-provision next turn`,
+        409
+      )
+    }
 
     return {
       sessionId,
@@ -1821,7 +2029,6 @@ async function commitOneMount(
 }
 
 export interface TeardownSandboxOptions {
-  hostProvider?: HostProvider
   /**
    * Inject the DB executor used for ALL reads AND writes on the teardown/crash-
    * recovery path. Defaults to the top-level db (repo.defaultDbh()) so prod
@@ -1854,12 +2061,27 @@ export async function markSandboxResourceGone(
 }
 
 /**
- * Teardown: commit all dirty spaces, stop the daemon, then — only if the commit
- * succeeded — delete the live dirs and close the mounts. If the commit FAILS,
- * the live dirs are PRESERVED and the mounts are marked 'failed' (not deleted),
- * so uncommitted sandbox data is never thrown away; an operator / reconciler can
- * retry the commit from the preserved materialized_dir. The daemon is stopped
- * and the device deleted regardless (the process/device can't linger).
+ * Teardown (R3.7 REORDERED — no lost write, trigger-safe). The order is now
+ * CLOSE-GATE → STOP writer → CONFIRM-DEAD → FINAL commit → cleanup, so:
+ *   1. CLOSE-GATE: flip the sandbox OUT of state='active' (→ 'closing') AND set an
+ *      in-process bare tombstone BEFORE anything else. This (a) closes the
+ *      dispatch window — no new/reused bare plane can start in this process while
+ *      we tear down (the DB 'closing' closes the cross-process window), and (b)
+ *      satisfies the R3.8 trigger: every subsequent service detach / soft-delete
+ *      happens while state is non-'active', so the exactly-one-when-active
+ *      invariant is never violated at commit.
+ *   2. STOP the writer (kill: bare-plane dispose / local SIGTERM+KILL on identity
+ *      match / docker stop+rm) — the plane's own dispose is the in-boundary drain.
+ *   3. CONFIRM-DEAD via the R3.4 tristate probe. 'alive' OR 'unknown' ⇒ do NOT
+ *      commit-then-delete (that could lose a write to a live process or snapshot a
+ *      dir under active write, and would strand a live container). Leave state=
+ *      'closing' + preserve dirs/mounts/grants for the reaper, and RETURN.
+ *   4. FINAL commit runs ONLY on confirmed 'dead' — so no writer can mutate the dir
+ *      after the commit scan (the lost-write the old commit-before-stop order had).
+ *   5. cleanup: on commit success delete dirs + close mounts; on failure PRESERVE
+ *      dirs + mark mounts 'failed' (uncommitted data is never thrown away). Then
+ *      revoke grants + flip state closed/failed + soft-delete the runtime.
+ * The in-process tombstone is always cleared in the finally (both branches).
  */
 export async function teardownSandbox(
   sessionId: string,
@@ -1874,145 +2096,180 @@ export async function teardownSandbox(
   const run = options.executor ?? repo.defaultDbh()
   const ctx = await loadSessionContext(sessionId, run)
   const mounts = await getActiveMountsForSession(run, sessionId)
-  if (mounts.length === 0) return
 
-  // ① commit ALL dirty spaces (incl /actor-conversation, and any /conversation
-  // ·/actor that an exception skipped at turn-end). Track success: a failure
-  // here MUST NOT lead to deleting the live dirs (that would lose data).
-  let commitOk = true
-  let commitError: unknown = null
-  try {
-    // Only override commitSpaces' deps when a real executor is injected — so the
-    // commit's reads/writes run on the SAME pinned connection (no nested BEGIN:
-    // runInTx just calls fn(run)). In prod (no executor) commitSpaces keeps its
-    // default deps (real repo.runInTx transaction), preserving turn-end behaviour.
-    const commitOverride: Partial<CommitDeps> | undefined = options.executor
-      ? {
-          dbh: run,
-          loadCtx: (sid) => loadSessionContext(sid, run),
-          runInTx: (fn) => fn(run),
-        }
-      : undefined
-    await commitSpaces(
-      sessionId,
-      ["conversation", "actor", "actor-conversation"],
-      commitOverride
-    )
-  } catch (err) {
-    commitOk = false
-    commitError = err
-    log.error({ sessionId, err }, "teardown commit failed")
+  // Resolve the owning runtime id from mounts OR (R3.5(D) mount-less sandbox) from
+  // the by-session control resolver, so a mount-less non-terminal sandbox is still
+  // reapable. A session with NO mounts AND no owning row is a true no-op.
+  let runtimeId = runtimeIdFromMounts(mounts) || null
+  if (!runtimeId) {
+    runtimeId =
+      (await repo.getSandboxBySessionForControl(sessionId, run))?.id ?? null
+  }
+  if (mounts.length === 0 && !runtimeId) return
+
+  // ① CLOSE-GATE (R3.7 step 1): state OUT of 'active' + in-process tombstone,
+  // BEFORE stopping the writer. Deny same-process bare dispatch (tombstone) +
+  // cross-process rebuild (DB 'closing'); satisfy the R3.8 exactly-one-when-active
+  // invariant for every write below.
+  if (runtimeId) {
+    await repo
+      .updateSandboxRow(runtimeId, { state: "closing" }, run)
+      .catch(() => {})
+    markBareDataPlaneClosing(runtimeId)
   }
 
-  const runtimeId = runtimeIdFromMounts(mounts) || null
-
-  // ② stop the runtime the backend started. Prefer the in-process handle
-  // (keyed by sessionId); else rebuild a SandboxRef via the STATE-AGNOSTIC
-  // control-path resolver and reconnect via the SAME adapter that created it
-  // (recorded on sandboxes.adapter), so a docker sandbox is `docker rm`'d and a
-  // local one is SIGTERM'd — never guessed from the current config. Always — a
-  // failed commit doesn't justify leaving the runtime alive.
-  const liveHandle = liveSandboxHandles.get(sessionId)
-  let stillAlive = false
-  if (liveHandle) {
-    await liveHandle.kill().catch(() => {})
-    // P1.5: RE-PROBE. If the kill did NOT actually stop the process, we must NOT
-    // delete the sole tracking record below — keep the handle so a retry can kill
-    // it again, and fall through to the state='closing' branch.
-    stillAlive = await liveHandle.isRunning().catch(() => false)
-    if (!stillAlive) liveSandboxHandles.delete(sessionId)
-  } else {
-    const ref = await buildSandboxRefFromSandboxRow(mounts, run)
-    if (ref) {
-      try {
-        const backend = backendForKind(ref)
-        const handle = await backend.connect(ref)
-        await handle.kill()
-        stillAlive = await handle.isRunning().catch(() => false)
-      } catch (err) {
-        log.error(
-          { sessionId, adapter: ref.adapter, err },
-          "teardown could not kill runtime via adapter"
-        )
-        // Could not even connect/kill → treat as possibly-alive and leave it for
-        // the reaper rather than deleting its tracking. (Dropped the killPid(
-        // hostPid) fallback: signalling a persisted pid is a PID-reuse hazard.)
-        stillAlive = true
+  try {
+    // ② STOP the writer + ③ CONFIRM-DEAD (R3.7 steps 2-4). Prefer the in-process
+    // handle (keyed by sessionId); else rebuild a SandboxRef via the STATE-AGNOSTIC
+    // control resolver (by explicit sessionId, so a mount-less sandbox resolves)
+    // and reconnect via the SAME adapter that created it. kill() disposes the bare
+    // plane (aborting its exec children — the in-boundary drain) / SIGTERM+KILLs a
+    // local child on identity match / docker stop+rm. The R3.4 tristate probe then
+    // decides: only a CONFIRMED 'dead' runtime proceeds to commit+delete.
+    const liveHandle = liveSandboxHandles.get(sessionId)
+    let stillAlive = false
+    if (liveHandle) {
+      await liveHandle.kill().catch(() => {})
+      // R3.4: shield on 'alive' OR 'unknown' (a torn/failed probe must NOT lead to
+      // deleting the sole tracking record of a possibly-live runtime).
+      const live = await liveHandle
+        .probeLiveness()
+        .catch((): SandboxLiveness => "unknown")
+      stillAlive = live !== "dead"
+      if (!stillAlive) liveSandboxHandles.delete(sessionId)
+    } else {
+      const ref = await buildSandboxRefFromSandboxRow(mounts, run, sessionId)
+      if (ref) {
+        try {
+          const backend = backendForKind(ref)
+          const handle = await backend.connect(ref)
+          await handle.kill()
+          const live = await handle
+            .probeLiveness()
+            .catch((): SandboxLiveness => "unknown")
+          stillAlive = live !== "dead"
+        } catch (err) {
+          log.error(
+            { sessionId, adapter: ref.adapter, err },
+            "teardown could not kill runtime via adapter"
+          )
+          // Could not even connect/kill → possibly-alive → leave for the reaper.
+          stillAlive = true
+        }
       }
     }
-  }
 
-  // P1.5: the runtime survived the kill. Do NOT delete its sole tracking record
-  // (that would strand a live container/process). Leave state='closing' (still
-  // reconcile-visible) + PRESERVE dirs/mounts/grants so reconcileSandboxes retries
-  // the whole teardown at the next startup.
-  if (stillAlive) {
-    if (runtimeId) {
-      await repo
-        .updateSandboxRow(runtimeId, { state: "closing" }, run)
-        .catch(() => {})
-    }
-    log.warn(
-      { sessionId, runtimeId },
-      "teardown: runtime still alive after kill — left state='closing' for the reaper (tracking + live dirs preserved)"
-    )
-    return
-  }
-
-  if (commitOk) {
-    // ③ delete the live dirs (CAS is the source of truth; dirs are scratch).
-    await rm(sandboxRootFor(sessionId), {
-      recursive: true,
-      force: true,
-    }).catch(() => {})
-    await cleanupDirs([sandboxRootFor(sessionId)]).catch(() => {})
-
-    // ④ close mounts.
-    for (const mount of mounts) {
-      await updateFileMount(run, mount.id, {
-        status: "closed",
-        closedAt: true,
-      }).catch(() => {})
-    }
-  } else {
-    // Commit failed → PRESERVE the live dirs. Mark mounts 'failed' (keeping
-    // materialized_dir + host) so the data can be recovered/retried, and record
-    // the error. Do NOT rm the sandbox root.
-    const message =
-      commitError instanceof Error ? commitError.message : String(commitError)
-    for (const mount of mounts) {
-      await updateFileMount(run, mount.id, {
-        status: "failed",
-        errorMessage: `teardown commit failed (live dir preserved at ${mount.materializedDir}): ${message}`,
-      }).catch(() => {})
-    }
-    log.error(
-      { sessionId, sandboxRoot: sandboxRootFor(sessionId) },
-      "teardown commit failed — preserved live dirs for recovery"
-    )
-  }
-
-  // ⑤ revoke grants + close the sandbox row + ⑥ soft-delete the runtime (keeps
-  // children for audit). The runtime is per-session and can't be reused, so it's
-  // removed even on a failed commit; the preserved live dirs do not depend on it.
-  if (ctx && runtimeId) {
-    await revokeSandboxGrants({
-      workspaceId: ctx.workspaceId,
-      runtimeId,
-      actorId: ctx.actorId,
-      conversationId: ctx.conversationId,
-      executor: run,
-    }).catch((err) => log.error({ sessionId, err }, "revoke grants failed"))
-    await repo
-      .updateSandboxRow(
-        runtimeId,
-        { state: commitOk ? "closed" : "failed" },
-        run
+    // ③ (R3.4/R3.7): survived the kill OR liveness UNKNOWN → do NOT commit-then-
+    // delete. State is already 'closing' (still reconcile-visible); PRESERVE
+    // dirs/mounts/grants so reconcileSandboxes retries the whole teardown next
+    // startup. (For docker the label reaper backstops a genuinely-wedged
+    // container; for local on a non-Linux host an unverifiable pid stays 'closing'
+    // — the accepted PID-reuse-safe trade-off.)
+    if (stillAlive) {
+      log.warn(
+        { sessionId, runtimeId },
+        "teardown: runtime still alive/unknown after kill — left state='closing' for the reaper (tracking + live dirs preserved)"
       )
-      .catch(() => {})
-    await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
-      log.error({ sessionId, err }, "soft-delete runtime failed")
-    )
+      return
+    }
+
+    // ④ FINAL commit (R3.7 step 5) — now that the writer is CONFIRMED dead, commit
+    // all dirty spaces. No writer can mutate the dir past this point, so no write
+    // is lost (the bug the old commit-before-stop order carried). Skipped when
+    // there are no mounts (a mount-less orphan sandbox).
+    let commitOk = true
+    let commitError: unknown = null
+    if (mounts.length > 0) {
+      try {
+        const commitOverride: Partial<CommitDeps> | undefined = options.executor
+          ? {
+              dbh: run,
+              loadCtx: (sid) => loadSessionContext(sid, run),
+              runInTx: (fn) => fn(run),
+            }
+          : undefined
+        await commitSpaces(
+          sessionId,
+          ["conversation", "actor", "actor-conversation"],
+          commitOverride
+        )
+      } catch (err) {
+        commitOk = false
+        commitError = err
+        log.error({ sessionId, err }, "teardown commit failed")
+      }
+
+      if (commitOk) {
+        // delete the live dirs (CAS is the source of truth; dirs are scratch).
+        await rm(sandboxRootFor(sessionId), {
+          recursive: true,
+          force: true,
+        }).catch(() => {})
+        await cleanupDirs([sandboxRootFor(sessionId)]).catch(() => {})
+        for (const mount of mounts) {
+          await updateFileMount(run, mount.id, {
+            status: "closed",
+            closedAt: true,
+          }).catch(() => {})
+        }
+      } else {
+        // Commit failed → PRESERVE the live dirs. Mark mounts 'failed' (keeping
+        // materialized_dir) so the data can be recovered/retried later.
+        const message =
+          commitError instanceof Error
+            ? commitError.message
+            : String(commitError)
+        for (const mount of mounts) {
+          await updateFileMount(run, mount.id, {
+            status: "failed",
+            errorMessage: `teardown commit failed (live dir preserved at ${mount.materializedDir}): ${message}`,
+          }).catch(() => {})
+        }
+        log.error(
+          { sessionId, sandboxRoot: sandboxRootFor(sessionId) },
+          "teardown commit failed — preserved live dirs for recovery"
+        )
+      }
+    }
+
+    // ⑤ revoke grants + flip the sandbox row terminal + ⑥ soft-delete the runtime
+    // (keeps children for audit). CRITICAL (R3.8): state is already 'closing'
+    // (non-'active') from the CLOSE-GATE, so this terminal flip + soft-delete
+    // satisfies the exactly-one-when-active trigger. The runtime is per-session and
+    // can't be reused, so it's removed even on a failed commit.
+    //
+    // ctx is GUARANTEED non-null whenever runtimeId resolved: both resolvers above
+    // are session-keyed (runtimeIdFromMounts / getSandboxBySessionForControl match on
+    // sandboxes.session_id = sessionId), and sandboxes.session_id is ON DELETE SET
+    // NULL — so a purged session NULLs session_id, which makes the sandbox
+    // unresolvable here at all (and drops it from reconcile's session_id candidate
+    // list) rather than reaching this block with a null ctx. loadSessionContext
+    // therefore always finds the row. (Verified against the schema FKs — do not add a
+    // no-ctx branch; it would be unreachable.)
+    if (ctx && runtimeId) {
+      await revokeSandboxGrants({
+        workspaceId: ctx.workspaceId,
+        runtimeId,
+        actorId: ctx.actorId,
+        conversationId: ctx.conversationId,
+        executor: run,
+      }).catch((err) => log.error({ sessionId, err }, "revoke grants failed"))
+      await repo
+        .updateSandboxRow(
+          runtimeId,
+          { state: commitOk ? "closed" : "failed" },
+          run
+        )
+        .catch(() => {})
+      await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
+        log.error({ sessionId, err }, "soft-delete runtime failed")
+      )
+    }
+  } finally {
+    // R3.7: always clear the in-process close-gate tombstone (both the preserve
+    // and terminal branches). The DB state='closing'/'closed' keeps denying
+    // rebuilds thereafter, so clearing the in-memory set is safe.
+    if (runtimeId) clearBareDataPlaneClosing(runtimeId)
   }
 }
 
@@ -2104,9 +2361,20 @@ async function ensureRuntimeStoppedForRecovery(
   sessionId: string,
   mounts: FileMountRow[]
 ): Promise<boolean> {
-  if (!(await isSandboxRuntimeAlive(mounts))) return true
-  // Still alive — try to stop it. Prefer the in-process handle; else rebuild a
-  // ref and kill via the owning backend (docker rm / pid signal).
+  const live0 = await isSandboxRuntimeAlive(mounts)
+  if (live0 === "dead") return true // confirmed gone → safe to commit
+  if (live0 === "unknown") {
+    // R3.4: we could NOT confirm the runtime is dead (transport error / non-Linux
+    // unverifiable pid). Fail-closed against a torn snapshot: skip the commit this
+    // round rather than snapshot a dir that may still be under active write.
+    console.warn(
+      `[sandbox] recovery: runtime for session ${sessionId} liveness is UNKNOWN; ` +
+        `skipping commit this round (fail-closed against a torn snapshot)`
+    )
+    return false
+  }
+  // 'alive' — try to stop it. Prefer the in-process handle; else rebuild a ref and
+  // kill via the owning backend (docker rm / identity-gated pid signal).
   console.warn(
     `[sandbox] recovery: runtime for session ${sessionId} is still alive; attempting to stop before commit`
   )
@@ -2125,13 +2393,20 @@ async function ensureRuntimeStoppedForRecovery(
           `[sandbox] recovery: could not kill runtime for ${sessionId}:`,
           err
         )
-        if (ref.hostPid) killPid(ref.hostPid)
+        // R3.6: a raw persisted-pid signal is a PID-reuse hazard — signal ONLY on a
+        // positive durable-identity match (never on 'mismatch'/'unknown').
+        if (
+          ref.hostPid !== undefined &&
+          verifyPidIdentity(ref.hostPid, ref.hostPidIdentity ?? null) ===
+            "match"
+        ) {
+          killPid(ref.hostPid)
+        }
       }
     }
   }
-  // Re-check: killing is async (docker rm / SIGTERM grace), so a still-true here
-  // means we shouldn't risk a commit this round.
-  return !(await isSandboxRuntimeAlive(mounts))
+  // Re-check: only a CONFIRMED 'dead' allows the commit; 'alive'/'unknown' skip.
+  return (await isSandboxRuntimeAlive(mounts)) === "dead"
 }
 
 /** Recover a single failed mount (caller has already confirmed the runtime is

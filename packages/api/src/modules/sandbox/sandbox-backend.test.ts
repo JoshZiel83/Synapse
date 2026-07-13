@@ -5,6 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   createLocalSandboxBackend,
+  readHostPidIdentity,
+  verifyPidIdentity,
   SandboxBackendError,
   type SandboxSpec,
 } from "./sandbox-backend.js"
@@ -233,6 +235,103 @@ test("local backend connect(): rejects a non-local ref", async () => {
     SandboxBackendError
   )
 })
+
+// ── R3.6: PID-reuse-safe local liveness/kill ─────────────────────────────────
+
+test("R3.6 verifyPidIdentity: null token → unknown; matching → match; wrong → mismatch", () => {
+  // A NULL persisted token is always 'unknown' (never signalled).
+  assert.equal(verifyPidIdentity(process.pid, null), "unknown")
+  if (process.platform === "linux") {
+    const real = readHostPidIdentity(process.pid)
+    assert.ok(real, "readHostPidIdentity is non-null on Linux for a live pid")
+    assert.equal(
+      verifyPidIdentity(process.pid, real),
+      "match",
+      "the live pid's own token matches"
+    )
+    assert.equal(
+      verifyPidIdentity(process.pid, "00000000-0000-0000-0000-000000000000:1"),
+      "mismatch",
+      "a wrong token on a LIVE pid is a mismatch (pid reused / rebooted)"
+    )
+  } else {
+    // Non-Linux: /proc is absent → identity is always 'unknown' (fail-closed).
+    assert.equal(readHostPidIdentity(process.pid), null)
+    assert.equal(verifyPidIdentity(process.pid, "x:y"), "unknown")
+  }
+})
+
+test("R3.6 local ref kill REFUSES to signal on an identity mismatch (never SIGTERMs a reused pid)", async () => {
+  const backend = createLocalSandboxBackend({
+    hostProvider: stubProvider(),
+    mintRuntime: spyMint({}),
+  })
+  // hostPid = the LIVE test process, but with a token that cannot match. A broken
+  // guard would SIGTERM the test process (killing this run); the guard must skip
+  // signalling entirely, so the process survives and the assertions run.
+  const handle = await backend.connect({
+    adapter: "local",
+    mode: "resident",
+    sandboxId: "sess-mismatch",
+    resourceId: "",
+    runtimeId: "rt-mismatch",
+    runtimeServiceId: "svc",
+    hostPid: process.pid,
+    hostPidIdentity: "deadbeef-0000-0000-0000-000000000000:0",
+  })
+  // Mismatch on a LIVE pid ⇒ probeLiveness reports DEAD (our process is gone —
+  // the pid was reused), so the runtime is NOT shielded as alive. Detecting the
+  // mismatch needs /proc; off-Linux the current identity is unreadable → 'unknown'
+  // (which still refuses the kill below), so only assert the exact 'dead' on Linux.
+  if (process.platform === "linux") {
+    assert.equal(await handle.probeLiveness(), "dead")
+  } else {
+    assert.notEqual(await handle.probeLiveness(), "alive")
+  }
+  await handle.kill() // MUST NOT signal — no throw, and this process survives.
+  assert.equal(
+    isSelfAlive(),
+    true,
+    "kill did not signal the mismatched (reused) pid"
+  )
+})
+
+test("R3.6 local ref probeLiveness: NULL identity token → unknown (shield, never signal)", async () => {
+  const backend = createLocalSandboxBackend({
+    hostProvider: stubProvider(),
+    mintRuntime: spyMint({}),
+  })
+  const handle = await backend.connect({
+    adapter: "local",
+    mode: "resident",
+    sandboxId: "sess-null-id",
+    resourceId: "",
+    runtimeId: "rt-null-id",
+    runtimeServiceId: "svc",
+    hostPid: process.pid, // alive
+    hostPidIdentity: null, // cannot verify → unknown
+  })
+  assert.equal(
+    await handle.probeLiveness(),
+    "unknown",
+    "an unverifiable (NULL-token) live pid is 'unknown', not a false 'alive'/'dead'"
+  )
+  await handle.kill()
+  assert.equal(
+    isSelfAlive(),
+    true,
+    "kill did not signal on an unknown identity"
+  )
+})
+
+function isSelfAlive(): boolean {
+  try {
+    process.kill(process.pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
 
 test("local backend connect(): rebuilds a kill-capable handle from a ref", async () => {
   const backend = createLocalSandboxBackend({

@@ -599,8 +599,10 @@ export async function selectRuntimeCapabilityIds(
 //     getSandboxById (no filter) + getSandboxBySessionForControl (only
 //     runtimes.deleted_at IS NULL, ANY state) — a 'failed'/'closing' sandbox
 //     STILL resolves so a live runtime is killed before a recovery commit.
-//   • REUSE / FAST-PATH / reconcile enumeration: STATE-FILTERED.
-//     getLiveSandboxBySession (state NOT IN closed/failed).
+//   • REUSE / FAST-PATH / reconcile enumeration: STATE-FILTERED. The fast path
+//     reads getSandboxById / getSandboxBySessionForControl and reuses ONLY when
+//     state === 'active' (R3.5 — a 'provisioning'/'closing' row must converge,
+//     never be reused). There is no looser NOT-IN-(closed,failed) reader.
 
 export interface SandboxRow {
   id: string
@@ -617,6 +619,13 @@ export interface SandboxRow {
     | "failed"
   resourceId: string | null
   hostPid: number | null
+  /**
+   * R3.6: durable process-identity token ('<boot_id>:<starttime>') for a LOCAL
+   * sandbox's host_pid. The cross-process kill path signals host_pid ONLY when the
+   * live pid's identity still matches this. NULL for docker/off-box (no host pid),
+   * non-Linux hosts, and legacy rows minted before this column existed.
+   */
+  hostPidIdentity: string | null
   pairingSessionId: string | null
 }
 
@@ -629,6 +638,7 @@ const SANDBOX_ROW_COLUMNS = [
   "state",
   "resourceId",
   "hostPid",
+  "hostPidIdentity",
   "pairingSessionId",
 ] as const
 
@@ -641,6 +651,7 @@ const SANDBOX_ROW_COLUMNS_PREFIXED = [
   "sb.state",
   "sb.resourceId",
   "sb.hostPid",
+  "sb.hostPidIdentity",
   "sb.pairingSessionId",
 ] as const
 
@@ -654,6 +665,7 @@ function toSandboxRow(row: Record<string, unknown>): SandboxRow {
     state: row.state as SandboxRow["state"],
     resourceId: (row.resourceId as string | null) ?? null,
     hostPid: (row.hostPid as number | null) ?? null,
+    hostPidIdentity: (row.hostPidIdentity as string | null) ?? null,
     pairingSessionId: (row.pairingSessionId as string | null) ?? null,
   }
 }
@@ -670,6 +682,7 @@ export async function updateSandboxRow(
     state: SandboxRow["state"]
     resourceId: string | null
     hostPid: number | null
+    hostPidIdentity: string | null
     errorMessage: string | null
     deadlineAt: Date | null
   }>,
@@ -679,6 +692,8 @@ export async function updateSandboxRow(
   if (patch.state !== undefined) set.state = patch.state
   if (patch.resourceId !== undefined) set.resourceId = patch.resourceId
   if (patch.hostPid !== undefined) set.hostPid = patch.hostPid
+  if (patch.hostPidIdentity !== undefined)
+    set.hostPidIdentity = patch.hostPidIdentity
   if (patch.errorMessage !== undefined) set.errorMessage = patch.errorMessage
   if (patch.deadlineAt !== undefined) set.deadlineAt = patch.deadlineAt
   if (Object.keys(set).length === 0) return
@@ -688,6 +703,100 @@ export async function updateSandboxRow(
     .set(set as never)
     .where("id", "=", id)
     .execute()
+}
+
+/**
+ * R3.P2b — race-closing active flip. Provision's final `provisioning → active`
+ * transition MUST be a compare-and-swap: only flip when the row is STILL
+ * 'provisioning', so a concurrent TTL reaper that already moved it to 'failed'
+ * (deadline exceeded) is not silently resurrected. Returns true iff exactly one
+ * row flipped; false ⇒ the reaper (or another writer) won and the caller must run
+ * its provision-failure cleanup instead of reporting success.
+ */
+export async function casFlipSandboxActive(
+  id: string,
+  run: Executor = db
+): Promise<boolean> {
+  const res = await run
+    .updateTable("sandboxes")
+    .set({ state: "active", updatedAt: new Date() } as never)
+    .where("id", "=", id)
+    .where("state", "=", "provisioning")
+    .executeTakeFirst()
+  return Number(res.numUpdatedRows ?? 0n) === 1
+}
+
+/**
+ * R3.P2b — TTL reaper candidate query. Sandboxes STILL 'provisioning' whose
+ * deadline_at has passed: a provision that crashed/hung before its CAS active
+ * flip. Restricted to state='provisioning' (the idx_sandboxes_reap partial index)
+ * — active/committing/closing are boot-reconcile's job, never the periodic sweep.
+ */
+export async function listStuckProvisioningSandboxes(
+  run: Executor = db
+): Promise<
+  Array<{ id: string; workspaceId: string; sessionId: string | null }>
+> {
+  const rows = await sql<{
+    id: string
+    workspaceId: string
+    sessionId: string | null
+  }>`
+    SELECT id, workspace_id AS "workspaceId", session_id AS "sessionId"
+      FROM sandboxes
+      WHERE state = 'provisioning' AND deadline_at IS NOT NULL AND deadline_at < NOW()`.execute(
+    run
+  )
+  return rows.rows
+}
+
+/**
+ * R3.P2b — CAS the reaper's terminal flip. Only move a still-'provisioning' row
+ * to 'failed' (mirror of {@link casFlipSandboxActive}), so a provision that flips
+ * to 'active' at the same instant wins and the reaper no-ops. Returns true iff it
+ * flipped exactly one row.
+ */
+export async function casFailStuckProvisioningSandbox(
+  id: string,
+  errorMessage: string,
+  run: Executor = db
+): Promise<boolean> {
+  const res = await run
+    .updateTable("sandboxes")
+    .set({
+      state: "failed",
+      errorMessage,
+      updatedAt: new Date(),
+    } as never)
+    .where("id", "=", id)
+    .where("state", "=", "provisioning")
+    .executeTakeFirst()
+  return Number(res.numUpdatedRows ?? 0n) === 1
+}
+
+/**
+ * F3 — sessions of sandboxes STUCK in 'closing' (teardown preserved them on an
+ * alive/unknown liveness probe) whose runtime is not yet soft-deleted and whose
+ * last close attempt is older than the grace window. The periodic retry re-drives
+ * teardownSandbox for each (fail-closed: it converges only on a CONFIRMED-dead
+ * re-probe, never orphans a possibly-live runtime). `updated_at` is bumped by the
+ * close-gate on every attempt, so the grace both skips normal in-flight teardowns
+ * (seconds) and paces the retry cadence for a genuinely-stuck row.
+ */
+export async function listReapableClosingSandboxSessions(
+  graceSeconds: number,
+  run: Executor = db
+): Promise<Array<{ sessionId: string }>> {
+  const rows = await sql<{ sessionId: string }>`
+    SELECT sb.session_id AS "sessionId"
+      FROM sandboxes sb
+      JOIN runtimes_live r ON r.id = sb.id
+      WHERE sb.state = 'closing'
+        AND sb.session_id IS NOT NULL
+        AND sb.updated_at < NOW() - make_interval(secs => ${graceSeconds})`.execute(
+    run
+  )
+  return rows.rows
 }
 
 /**
@@ -719,6 +828,15 @@ export interface BareSandboxDispatchRow {
   mode: "resident" | "bare"
   adapter: string
   state: SandboxRow["state"]
+  /**
+   * R3.2 (target-confusion, SECURITY): the AUTHORITATIVE provider resource id from
+   * the sandboxes row (docker:bare → the container id; local:bare → ""). The
+   * rebuild path binds the free-string data_plane_endpoint to THIS value and takes
+   * the docker container id from HERE, never from `endpoint.slice(...)` — the
+   * endpoint degrades to a pure scheme discriminant so a hand-edited endpoint can
+   * no longer redirect the docker-exec plane at an arbitrary container.
+   */
+  resourceId: string | null
   runtimeDeletedAt: Date | null
   /**
    * Zod-decoded (P1.3) persisted descriptor, or NULL when the JSONB failed to
@@ -759,6 +877,7 @@ export async function getBareSandboxForDispatch(
       "sb.mode",
       "sb.adapter",
       "sb.state",
+      "sb.resourceId",
       "sb.capabilityDescriptor",
       "r.deletedAt as runtimeDeletedAt",
       "rs.dataPlaneEndpoint as dataPlaneEndpoint",
@@ -771,6 +890,7 @@ export async function getBareSandboxForDispatch(
     mode: row.mode as SandboxRow["mode"],
     adapter: row.adapter as string,
     state: row.state as SandboxRow["state"],
+    resourceId: (row.resourceId as string | null) ?? null,
     runtimeDeletedAt: (row.runtimeDeletedAt as Date | null) ?? null,
     // P1.3: Zod-decode at the repo exit; null on any decode failure so the
     // dispatch fork fails closed instead of trusting a corrupt safety cap.
@@ -782,11 +902,25 @@ export async function getBareSandboxForDispatch(
 }
 
 /**
- * Target-id binding for the bare fork (§4.7.1.1): the API-signed envelope's
- * runtime_exposure_id must belong to THIS runtime + service, and its
- * runtime_tool_id must belong to that exposure. This is the fork's own
- * verification in place of the resident device's in-process envelope verifier —
- * it rejects a replayed / cross-runtime envelope before any plane call.
+ * Target-id binding for the bare fork (§4.7.1.1), hardened to RESIDENT PARITY
+ * (R3.P2a). The old check was existence/ownership-only: it verified the exposure
+ * belonged to runtime+service and the tool belonged to the exposure, but never
+ * re-derived the tool's IDENTITY the way the resident projection query does
+ * (capability-projection/repo.ts joins dt.currentName / dt.latestRevisionId /
+ * dt.status='active' / dx.builtinKind). A stale-revision, renamed, removed, or
+ * cross-family envelope (e.g. a filesystem grant carrying toolName='bash') would
+ * pass. This now binds ALL of:
+ *   - exposure → runtime + service (existing ownership)
+ *   - exposure.builtinKind === capabilityFamily (the claimed grant's family —
+ *     bare exposures always set a non-null builtin_kind, so this always applies)
+ *   - tool.exposureId === exposureId (existing)
+ *   - tool.currentName === toolName (the dispatched visible name is the CURRENT
+ *     name — a renamed tool denies)
+ *   - tool.latestRevisionId === toolRevisionId (strict revision parity: the
+ *     envelope's revision must be the tool's LATEST — a stale revision denies)
+ *   - tool.status === 'active' (a removed/disabled tool denies)
+ * so a replayed / cross-runtime / stale / renamed / cross-family envelope is
+ * rejected before any plane call, matching the resident dispatch's guarantees.
  */
 export async function verifyBareDispatchTarget(
   args: {
@@ -794,24 +928,40 @@ export async function verifyBareDispatchTarget(
     runtimeServiceId: string
     exposureId: string
     toolId: string
+    toolName: string
+    toolRevisionId: string
+    /** The claimed grant's capability family (grant.capability). Bound to the
+     *  exposure's builtin_kind so a filesystem grant can't dispatch a bash tool. */
+    capabilityFamily: string
   },
   run: Executor = db
 ): Promise<boolean> {
   const exp = await run
     .selectFrom("runtimeExposures")
-    .select(["id"])
+    .select(["id", "builtinKind"])
     .where("id", "=", args.exposureId)
     .where("runtimeId", "=", args.runtimeId)
     .where("serviceId", "=", args.runtimeServiceId)
     .executeTakeFirst()
   if (!exp) return false
+  // A bare exposure ALWAYS carries a non-null builtin_kind (core-catalog). When
+  // present it MUST equal the claimed grant family; a null builtin_kind (should
+  // never happen for a bare exposure) cannot be trusted to bind, so deny.
+  const builtinKind = exp.builtinKind as string | null
+  if (builtinKind === null || builtinKind !== args.capabilityFamily)
+    return false
   const tool = await run
     .selectFrom("runtimeTools")
-    .select(["id"])
+    .select(["id", "currentName", "latestRevisionId", "status"])
     .where("id", "=", args.toolId)
     .where("exposureId", "=", args.exposureId)
     .executeTakeFirst()
-  return Boolean(tool)
+  if (!tool) return false
+  if ((tool.status as string) !== "active") return false
+  if ((tool.currentName as string) !== args.toolName) return false
+  if ((tool.latestRevisionId as string | null) !== args.toolRevisionId)
+    return false
+  return true
 }
 
 /**
@@ -829,28 +979,6 @@ export async function getSandboxBySessionForControl(
     .select(SANDBOX_ROW_COLUMNS_PREFIXED)
     .where("sb.sessionId", "=", sessionId)
     .where("r.deletedAt", "is", null)
-    .orderBy("sb.createdAt", "desc")
-    .limit(1)
-    .executeTakeFirst()
-  return row ? toSandboxRow(row) : null
-}
-
-/**
- * REUSE / FAST-PATH resolver: the latest LIVE sandbox for a session
- * (state NOT IN closed/failed, runtimes.deleted_at IS NULL). NEVER use for
- * teardown/recovery/liveness — reserved for reuse/fast-path (CORRECTION 5).
- */
-export async function getLiveSandboxBySession(
-  sessionId: string,
-  run: Executor = db
-): Promise<SandboxRow | null> {
-  const row = await run
-    .selectFrom("sandboxes as sb")
-    .innerJoin("runtimes as r", "r.id", "sb.id")
-    .select(SANDBOX_ROW_COLUMNS_PREFIXED)
-    .where("sb.sessionId", "=", sessionId)
-    .where("r.deletedAt", "is", null)
-    .where(sql<boolean>`sb.state NOT IN ('closed', 'failed')`)
     .orderBy("sb.createdAt", "desc")
     .limit(1)
     .executeTakeFirst()

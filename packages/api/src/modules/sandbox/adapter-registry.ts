@@ -37,6 +37,7 @@ import {
   type SandboxBackendKind,
   type SandboxHandle,
   type SandboxInfo,
+  type SandboxLiveness,
   type SandboxRef,
   type SandboxSpec,
 } from "./sandbox-backend.js"
@@ -45,6 +46,7 @@ import {
   createDockerReconnectBackend,
   buildBareDockerRunArgs,
   runDockerCapture,
+  probeDockerContainerLiveness,
   SANDBOX_SESSION_LABEL,
   type DockerSandboxBackendOptions,
   type SpawnImpl,
@@ -293,8 +295,16 @@ function makeLocalBareHandle(args: {
         "setTimeout is not supported by the local:bare sandbox adapter"
       )
     },
+    async probeLiveness(): Promise<SandboxLiveness> {
+      // In-process liveness is DEFINITIVE (no transport hop can fail): the plane
+      // lives in THIS process's memory, so registered ⇒ 'alive', absent ⇒ 'dead'
+      // (nothing live here to kill; a lazy rebuild re-creates it on next dispatch).
+      // There is no 'unknown' for an in-process check.
+      return getLiveBareDataPlane(args.runtimeId) !== undefined
+        ? "alive"
+        : "dead"
+    },
     async isRunning(): Promise<boolean> {
-      // In-process liveness: alive iff its plane is registered in THIS process.
       return getLiveBareDataPlane(args.runtimeId) !== undefined
     },
     getInfo(): SandboxInfo {
@@ -332,6 +342,11 @@ function makeLocalBareRefHandle(ref: SandboxRef): SandboxHandle {
     },
     async setTimeout(): Promise<void> {
       throw new SandboxBackendError("setTimeout is not supported (local:bare)")
+    },
+    async probeLiveness(): Promise<SandboxLiveness> {
+      return getLiveBareDataPlane(ref.runtimeId) !== undefined
+        ? "alive"
+        : "dead"
     },
     async isRunning(): Promise<boolean> {
       return getLiveBareDataPlane(ref.runtimeId) !== undefined
@@ -622,14 +637,16 @@ function makeDockerBareHandle(args: {
     async setTimeout(): Promise<void> {
       throw new SandboxBackendError("setTimeout is not supported (docker:bare)")
     },
+    async probeLiveness(): Promise<SandboxLiveness> {
+      return probeDockerContainerLiveness(args.spawnImpl, args.containerId)
+    },
     async isRunning(): Promise<boolean> {
-      const out = await runDockerCapture(args.spawnImpl, [
-        "inspect",
-        "--format",
-        "{{.State.Running}}",
-        args.containerId,
-      ]).catch(() => null)
-      return out?.stdout.trim() === "true"
+      return (
+        (await probeDockerContainerLiveness(
+          args.spawnImpl,
+          args.containerId
+        )) === "alive"
+      )
     },
     getInfo(): SandboxInfo {
       return {
@@ -666,14 +683,13 @@ function makeDockerBareRefHandle(
     async setTimeout(): Promise<void> {
       throw new SandboxBackendError("setTimeout is not supported (docker:bare)")
     },
+    async probeLiveness(): Promise<SandboxLiveness> {
+      return probeDockerContainerLiveness(spawnImpl, containerId)
+    },
     async isRunning(): Promise<boolean> {
-      const out = await runDockerCapture(spawnImpl, [
-        "inspect",
-        "--format",
-        "{{.State.Running}}",
-        containerId,
-      ]).catch(() => null)
-      return out?.stdout.trim() === "true"
+      return (
+        (await probeDockerContainerLiveness(spawnImpl, containerId)) === "alive"
+      )
     },
     getInfo(): SandboxInfo {
       return {
