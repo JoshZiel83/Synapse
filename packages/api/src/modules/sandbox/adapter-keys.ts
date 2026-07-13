@@ -9,6 +9,9 @@ export const SANDBOX_ADAPTER_KEYS = [
   "docker:resident",
   "local:bare",
   "docker:bare",
+  // First OFF-BOX (Mode-B) adapter — confinedFs:'unsupported', satisfies the P1.2
+  // host-side guard via adapter.rebuildDataPlane (P4b).
+  "cubesandbox:bare",
 ] as const
 
 export type SandboxAdapterKey = (typeof SANDBOX_ADAPTER_KEYS)[number]

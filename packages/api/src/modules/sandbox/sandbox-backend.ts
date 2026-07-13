@@ -33,8 +33,9 @@ import { deleteRuntime, mintLocalSandboxRuntime } from "../devices/service.js"
  *  resident); P4a adds the bare (Mode-B) reference adapters under the SAME
  *  provider strings ("local"/"docker") — the `sandboxes.mode` column
  *  disambiguates resident vs bare. Future provider substrates (e2b/cube) widen
- *  this when they land. */
-export type SandboxBackendKind = "local" | "docker"
+ *  this when they land. P4b adds the first OFF-BOX provider substrate,
+ *  "cubesandbox" (Mode-B bare only; confinedFs:'unsupported'). */
+export type SandboxBackendKind = "local" | "docker" | "cubesandbox"
 
 /**
  * Tristate liveness (R3.4). `probeLiveness()` returns this so lifecycle callers

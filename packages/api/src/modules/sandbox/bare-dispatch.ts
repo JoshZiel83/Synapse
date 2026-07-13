@@ -14,6 +14,8 @@ import type { OperationEnvelope } from "@synapse/device-protocol"
 import { fromExternalRfc3339 } from "@synapse/device-protocol/instant"
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
 import { config } from "../../config/index.js"
+import { adapterForRow } from "./adapter-registry.js"
+import { SandboxBackendError } from "./sandbox-backend.js"
 import type { McpDispatchResult } from "../devices/dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
 import {
@@ -90,6 +92,14 @@ function bareTargetIdentityOk(row: {
   if (row.adapter === "local") {
     return row.dataPlaneEndpoint === `inprocess:${row.runtimeId}`
   }
+  if (row.adapter === "cubesandbox") {
+    // R3.2: the off-box sandbox id is the AUTHORITATIVE `sandboxes.resource_id`,
+    // bound into the endpoint as `envd:${resource_id}` — NEVER endpoint.slice, so
+    // a hand-edited endpoint can't redirect the remote plane at another sandbox.
+    return (
+      !!row.resourceId && row.dataPlaneEndpoint === `envd:${row.resourceId}`
+    )
+  }
   return false
 }
 
@@ -165,11 +175,13 @@ export interface DispatchBareRuntimeToolInput {
   run?: Executor
   /** Rebuild factory (default: scheme-forked local:bare / docker:bare plane). */
   planeFactory?: (opts: {
+    /** The persisted adapter tag (row-authoritative) — forks the rebuild kind. */
+    adapter: string
     sandboxRoot: string
     descriptor: SandboxCapabilityDescriptor
-    /** The persisted scheme-tagged endpoint (inprocess:/docker-exec:). */
+    /** The persisted scheme-tagged endpoint (inprocess:/docker-exec:/envd:). */
     dataPlaneEndpoint: string | null
-    /** R3.2: the AUTHORITATIVE provider resource id (docker container id / ""). */
+    /** R3.2: the AUTHORITATIVE provider resource id (docker container id / sandbox id / ""). */
     resourceId: string | null
   }) => SandboxDataPlane
 }
@@ -183,6 +195,7 @@ export interface DispatchBareRuntimeToolInput {
  * fs is host-side either way (same vfs kernel).
  */
 function rebuildBarePlane(opts: {
+  adapter: string
   sandboxRoot: string
   descriptor: SandboxCapabilityDescriptor
   dataPlaneEndpoint: string | null
@@ -195,6 +208,26 @@ function rebuildBarePlane(opts: {
       descriptor: opts.descriptor,
       // R3.2: container id from resource_id, never the endpoint string.
       containerId: opts.resourceId ?? "",
+    })
+  }
+  if (endpoint.startsWith("envd:")) {
+    // OFF-BOX (P4b): delegate the remote-plane build to the persisted adapter's
+    // rebuildDataPlane (never a hardcoded fork here) — resolved row-driven via
+    // adapterForRow, so the connection facts come from config but the identity
+    // (resource_id) + descriptor come from the row. adapterForRow already
+    // fail-closes on an unknown adapter key.
+    const adapter = adapterForRow(opts.adapter, "bare")
+    if (!adapter.rebuildDataPlane) {
+      throw new SandboxBackendError(
+        `bare adapter '${opts.adapter}' has an envd: endpoint but no rebuildDataPlane seam`
+      )
+    }
+    return adapter.rebuildDataPlane({
+      adapter: opts.adapter,
+      resourceId: opts.resourceId,
+      dataPlaneEndpoint: opts.dataPlaneEndpoint,
+      descriptor: opts.descriptor,
+      sandboxRoot: opts.sandboxRoot,
     })
   }
   return createLocalBareDataPlane({
@@ -308,6 +341,7 @@ export async function dispatchBareRuntimeTool(
         }
         const factory = input.planeFactory ?? rebuildBarePlane
         const built = factory({
+          adapter: row.adapter,
           sandboxRoot: sandboxRootForSession(row.sessionId),
           descriptor: row.capabilityDescriptor,
           dataPlaneEndpoint: row.dataPlaneEndpoint,

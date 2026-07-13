@@ -139,6 +139,64 @@ export function decodeSandboxCapabilityDescriptor(
   return parsed.success ? parsed.data : null
 }
 
+/** Per-op safety caps for the off-box cubesandbox:bare adapter. Mirror the docker/
+ *  local bare ceilings — the API buffers whole reads/writes in memory across the
+ *  envd wire, so the same 10MB read / 50MB write bounds apply; exec is bounded to a
+ *  handful of concurrent in-flight remote commands. */
+const CUBESANDBOX_BARE_CAPS = {
+  maxReadBytes: 10 * 1024 * 1024,
+  maxWriteBytes: 50 * 1024 * 1024,
+  maxConcurrentExec: 4,
+} as const
+
+/**
+ * Frozen capability descriptor for the OFF-BOX `cubesandbox:bare` adapter (§4.7 /
+ * P4b). Unlike local:bare / docker:bare (confinedFs:'native' — the host-side vfs
+ * kernel realpath-confines every op), cubesandbox is a GENUINELY REMOTE filesystem
+ * the API cannot realpath, so:
+ *   - confinedFs:'unsupported' — confinement is LEXICAL (canonicalVfsPath + the
+ *     ctx.scope prefix check in cubesandbox/data-plane.ts); the VM is the isolation
+ *     boundary. This is exactly the descriptor that forces the P1.2 host-side guard
+ *     to be satisfied via adapter.rebuildDataPlane instead.
+ *   - isolation:'provider' — the sandbox VM is the jail (exec runs REMOTELY in it,
+ *     not a bwrap/container child on the API host), so the commandline exposure is
+ *     still minted (buildBareCoreCatalog gates it on isolation != null).
+ *   - staleWriteGuard:'advisory' — no host-side path-locked CAS off-box; a
+ *     caller-supplied expected_sha256/expected_mtime_ms is best-effort pre-checked.
+ *   - atomicWrite:false — envd writeFile is a truncating whole-file replace.
+ *   - search:false — no in-VM ripgrep bridge in the MVP → fs_search omitted at the
+ *     catalog (bareFilesystemTools) and fail-closed in the plane.
+ *   - rangeRead:true — envd GET /files honors HTTP Range.
+ *   - setTimeout:true — the control plane exposes an idle-TTL knob.
+ * Every value is within the persisted-descriptor Zod schema (isolation 'provider',
+ * confinedFs 'unsupported', staleWriteGuard 'advisory' are all permitted) — no DDL.
+ */
+export function buildCubesandboxBareDescriptor(): SandboxCapabilityDescriptor {
+  return {
+    mode: "bare",
+    transportDefault: "direct",
+    confinedFs: "unsupported",
+    core: {
+      atomicWrite: false,
+      staleWriteGuard: "advisory",
+      rangeRead: true,
+      search: false,
+      mkdir: true,
+      move: true,
+      remove: true,
+      pty: false,
+      maxReadBytes: CUBESANDBOX_BARE_CAPS.maxReadBytes,
+      maxWriteBytes: CUBESANDBOX_BARE_CAPS.maxWriteBytes,
+      maxConcurrentExec: CUBESANDBOX_BARE_CAPS.maxConcurrentExec,
+    },
+    advancedTools: [],
+    isolation: "provider",
+    egress: "named",
+    reconnectable: true,
+    setTimeout: true,
+  }
+}
+
 export interface SandboxProvisionResult {
   sessionId: string
   /** The sandbox FS root; its children are the materialized mount points. */

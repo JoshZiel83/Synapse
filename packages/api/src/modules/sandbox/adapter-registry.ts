@@ -56,7 +56,9 @@ import {
   createLocalBareDataPlane,
   createDockerBareDataPlane,
   type SandboxDataPlane,
+  type BareDataPlaneRebuildRow,
 } from "./data-plane.js"
+import { makeCubesandboxBareAdapter } from "./cubesandbox-adapter.js"
 import {
   registerBareDataPlane,
   unregisterBareDataPlane,
@@ -78,6 +80,15 @@ export interface SandboxAdapter {
   readonly capabilities: SandboxCapabilityDescriptor | null
   create(spec: SandboxSpec): Promise<SandboxHandle>
   connect(ref: SandboxRef): Promise<SandboxHandle>
+  /**
+   * OFF-BOX bare adapter seam (P4b). Reconstruct the data plane from a PERSISTED
+   * row on a bare-dispatch rebuild-on-miss (an `envd:`-scheme endpoint delegates
+   * here instead of a hardcoded fork). Host-side adapters (confinedFs:'native')
+   * leave this undefined — their plane rebuilds via the scheme-forked
+   * rebuildBarePlane. An adapter whose descriptor is confinedFs:'unsupported' MUST
+   * implement it (enforced by the P1.2 fail-closed guard).
+   */
+  rebuildDataPlane?(row: BareDataPlaneRebuildRow): SandboxDataPlane
 }
 
 /** Build the docker backend options from the validated config.sandbox namespace.
@@ -738,6 +749,8 @@ const ADAPTER_FACTORIES: Record<
   "local:bare": () => makeLocalBareAdapter(),
   "docker:bare": (deps) =>
     makeDockerBareAdapter({ dockerSpawnImpl: deps?.dockerSpawnImpl }),
+  // First OFF-BOX bare adapter (P4b): confinedFs:'unsupported' + rebuildDataPlane.
+  "cubesandbox:bare": () => makeCubesandboxBareAdapter(),
 }
 
 /**

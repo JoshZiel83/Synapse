@@ -5,10 +5,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import {
-  adapterForRow,
-  listRegisteredAdapterKeys,
-} from "./adapter-registry.js"
+import { adapterForRow, listRegisteredAdapterKeys } from "./adapter-registry.js"
 import { SANDBOX_ADAPTER_KEYS } from "./adapter-keys.js"
 
 test("P8(B): adapterForRow throws (fail-closed) on an unknown persisted adapter key", () => {
@@ -66,12 +63,19 @@ test("P1.2: no registry key-drift; every registered bare adapter is host-side (c
     const a = adapterForRow(provider, mode)
     if (mode === "bare") {
       assert.ok(a.capabilities, `${key} must carry a capability descriptor`)
-      assert.equal(
-        a.capabilities?.confinedFs,
-        "native",
-        `${key} must be host-side (confinedFs='native') — an off-box adapter must ` +
-          `instead implement adapter.rebuildDataPlane + the off-box working-set ` +
-          `seam (P4b) before it can be registered`
+      // A registered bare adapter is EITHER host-side (confinedFs='native', plane
+      // rebuilt via the scheme-forked rebuildBarePlane) OR off-box
+      // (confinedFs='unsupported'), in which case it MUST supply the P4b
+      // adapter.rebuildDataPlane seam (LEXICAL confinement; the VM is the jail).
+      // Anything else — an off-box descriptor WITHOUT rebuildDataPlane — trips this
+      // guard and stays unregisterable (the P1.2/P4b forcing function).
+      const cf = a.capabilities?.confinedFs
+      assert.ok(
+        cf === "native" ||
+          (cf === "unsupported" && typeof a.rebuildDataPlane === "function"),
+        `${key} must be host-side (confinedFs='native') OR an off-box adapter that ` +
+          `implements adapter.rebuildDataPlane (confinedFs='unsupported') — got ` +
+          `confinedFs='${cf}', rebuildDataPlane=${typeof a.rebuildDataPlane}`
       )
     } else {
       assert.equal(

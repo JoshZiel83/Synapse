@@ -331,6 +331,30 @@ export const envSchema = z
       z.coerce.number().int().min(1).default(512)
     ),
     SANDBOX_DOCKER_MEMORY: withDefault(z.string(), "1g"),
+    // cubesandbox:bare (Mode-B, OFF-BOX — P4b). The FIRST provider-backed bare
+    // substrate: a remote sandbox VM reached over the CubeSandbox wire client
+    // (control plane = E2B-compat REST; data plane = envd over CubeProxy). Defaults
+    // pin the local dev deployment; TEMPLATE has no default (required when selected).
+    SANDBOX_CUBESANDBOX_API_URL: withDefault(
+      z.string(),
+      "http://127.0.0.1:13000"
+    ),
+    SANDBOX_CUBESANDBOX_PROXY_URL: withDefault(
+      z.string(),
+      "http://127.0.0.1:11080"
+    ),
+    SANDBOX_CUBESANDBOX_DOMAIN: withDefault(z.string(), "cube.app"),
+    SANDBOX_CUBESANDBOX_TEMPLATE: withDefault(z.string(), ""),
+    // The in-sandbox absolute root the VFS maps onto (paths lower to
+    // `${VM_ROOT}${canonical}`). Non-empty; defaults to /workspace.
+    SANDBOX_CUBESANDBOX_VM_ROOT: withDefault(z.string().min(1), "/workspace"),
+    SANDBOX_CUBESANDBOX_ENVD_PORT: z.preprocess(
+      (v) => (v === "" || v == null ? undefined : v),
+      z.coerce.number().int().min(1).default(49983)
+    ),
+    // Optional management-plane API key (unused on the unauthenticated dev
+    // deployment; sent as X-API-Key + Authorization: Bearer when set).
+    SANDBOX_CUBESANDBOX_API_KEY: withDefault(z.string(), ""),
     // Shared transport facts, read under their EXISTING keys (NOT renamed).
     FRP_SHARED_TOKEN: withDefault(z.string(), ""),
     SYNAPSE_TUNNEL_VHOST_HOST: withDefault(z.string(), ""),
@@ -656,6 +680,37 @@ export const envSchema = z
         }
       }
     }
+    // cubesandbox (OFF-BOX, P4b): a remote sandbox provider is unreachable without
+    // its control/data-plane URLs + a template to instantiate, so fail fast at boot
+    // rather than on the first provision. (An UNconfigured provider — "none" — is a
+    // valid opt-out.) API_URL/PROXY_URL carry dev defaults (only a whitespace
+    // override trips them); TEMPLATE has no default and is always required.
+    if (sandboxProvider === "cubesandbox") {
+      if (!env.SANDBOX_CUBESANDBOX_API_URL?.trim()) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["SANDBOX_CUBESANDBOX_API_URL"],
+          message:
+            "SANDBOX_CUBESANDBOX_API_URL is required when SANDBOX_PROVIDER=cubesandbox",
+        })
+      }
+      if (!env.SANDBOX_CUBESANDBOX_PROXY_URL?.trim()) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["SANDBOX_CUBESANDBOX_PROXY_URL"],
+          message:
+            "SANDBOX_CUBESANDBOX_PROXY_URL is required when SANDBOX_PROVIDER=cubesandbox",
+        })
+      }
+      if (!env.SANDBOX_CUBESANDBOX_TEMPLATE?.trim()) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["SANDBOX_CUBESANDBOX_TEMPLATE"],
+          message:
+            "SANDBOX_CUBESANDBOX_TEMPLATE is required when SANDBOX_PROVIDER=cubesandbox (the sandbox template to instantiate)",
+        })
+      }
+    }
   })
 
 /**
@@ -759,7 +814,9 @@ export function resolveSandboxMode(env: {
 }): "resident" | "bare" {
   if (env.SANDBOX_MODE && env.SANDBOX_MODE !== "auto") return env.SANDBOX_MODE
   const provider = resolveSandboxProviderName(env)
-  return provider === "e2b" || provider === "cube" ? "bare" : "resident"
+  return provider === "e2b" || provider === "cube" || provider === "cubesandbox"
+    ? "bare"
+    : "resident"
 }
 
 function loadEnvOrExit(): z.infer<typeof envSchema> {
@@ -833,6 +890,17 @@ export const config = {
         serverAddr: env.SYNAPSE_TUNNEL_SERVER_ADDR.trim(),
         serverPort: env.SYNAPSE_TUNNEL_SERVER_PORT.trim(),
       },
+    },
+    // cubesandbox:bare (Mode-B, OFF-BOX — P4b) connection facts. Consumed by
+    // cubesandboxBareOptionsFromEnv; provisioning is gated at boot (superRefine).
+    cubesandbox: {
+      apiUrl: env.SANDBOX_CUBESANDBOX_API_URL.trim(),
+      proxyUrl: env.SANDBOX_CUBESANDBOX_PROXY_URL.trim(),
+      domain: env.SANDBOX_CUBESANDBOX_DOMAIN.trim(),
+      template: env.SANDBOX_CUBESANDBOX_TEMPLATE.trim(),
+      vmRoot: env.SANDBOX_CUBESANDBOX_VM_ROOT.trim() || "/workspace",
+      envdPort: env.SANDBOX_CUBESANDBOX_ENVD_PORT,
+      apiKey: env.SANDBOX_CUBESANDBOX_API_KEY.trim(),
     },
   },
   remoteAgent: {

@@ -158,9 +158,11 @@ test("SANDBOX_DOCKER_RUN_AS_UID permits 0 (root, today's default)", () => {
   assert.equal(parsed.data.SANDBOX_DOCKER_RUN_AS_UID, 0)
 })
 
-test("resolveSandboxMode: e2b/cube providers default to bare, explicit mode wins", () => {
+test("resolveSandboxMode: e2b/cube/cubesandbox providers default to bare, explicit mode wins", () => {
   assert.equal(resolveSandboxMode({ SANDBOX_PROVIDER: "e2b" }), "bare")
   assert.equal(resolveSandboxMode({ SANDBOX_PROVIDER: "cube" }), "bare")
+  // cubesandbox (P4b) is the FIRST bare-forcing provider actually registered.
+  assert.equal(resolveSandboxMode({ SANDBOX_PROVIDER: "cubesandbox" }), "bare")
   assert.equal(
     resolveSandboxMode({ SANDBOX_PROVIDER: "e2b", SANDBOX_MODE: "resident" }),
     "resident"

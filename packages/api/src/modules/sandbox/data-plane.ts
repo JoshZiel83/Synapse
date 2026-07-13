@@ -276,6 +276,24 @@ export interface SandboxDataPlane {
 }
 
 /**
+ * The persisted-row projection an off-box bare adapter reconstructs its data plane
+ * from on a bare-dispatch rebuild-on-miss (P4b). Carries ONLY row-authoritative
+ * facts (never live config for the adapter kind): the persisted adapter tag, the
+ * authoritative provider resource id (== sandboxes.resource_id), the scheme-tagged
+ * endpoint, the Zod-decoded capability descriptor, and the session sandbox root.
+ * `adapter.rebuildDataPlane(row)` maps these onto createRemoteBareDataPlane —
+ * deployment-wide connection facts (domain/proxy/vmRoot) come from config, but the
+ * per-sandbox identity (resource_id) and the descriptor come from THIS row.
+ */
+export interface BareDataPlaneRebuildRow {
+  adapter: string
+  resourceId: string | null
+  dataPlaneEndpoint: string | null
+  descriptor: SandboxCapabilityDescriptor
+  sandboxRoot: string
+}
+
+/**
  * Working-set identity bridge (§8.1). For local:bare (host-visible shared CAS)
  * these are the EXISTING spine primitives verbatim — the adapter never touches
  * CAS. Kept as an interface so docker:bare's detached variant (S12, deferred)
