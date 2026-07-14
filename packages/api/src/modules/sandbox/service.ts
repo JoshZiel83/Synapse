@@ -677,6 +677,12 @@ export async function retryStuckClosingSandboxes(
  */
 const OFFBOX_ORPHAN_MIN_AGE_MS = 600_000
 
+/** (R5 #4) How long a 'closing' off-box VM with failed-recoverable mounts is kept
+ *  alive (TTL refreshed) while recovery retries. Past this window the keepalive
+ *  stops and the provider TTL reclaims a genuinely un-recoverable VM — bounded
+ *  provider spend, no infinite renew. ~one TTL window. */
+const RECOVERY_KEEPALIVE_WINDOW_SECONDS = 1800
+
 /** Resolve the CURRENTLY-configured adapter when it is off-box, else null. Shared
  *  by the off-box sweep + keepalive so both target the same provider. Injectable. */
 function configuredOffBoxAdapter(
@@ -778,7 +784,13 @@ export async function keepAliveOffBoxSandboxes(
   }
   const run = deps.executor ?? repo.defaultDbh()
   const listInUse =
-    deps.listInUseResourceIds ?? repo.listKeepAliveSandboxResourceIds
+    deps.listInUseResourceIds ??
+    ((tag: string, r: Executor) =>
+      repo.listKeepAliveSandboxResourceIds(
+        tag,
+        RECOVERY_KEEPALIVE_WINDOW_SECONDS,
+        r
+      ))
   let resourceIds: string[]
   try {
     resourceIds = await listInUse(adapter.meta.tag, run)

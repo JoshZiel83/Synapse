@@ -306,10 +306,13 @@ export function createCubeEnvdWorkingSetBridge(opts: {
   }
 
   return {
-    // PUSH: replicate the mount's already-materialized mirror into the VM
-    // (materialize is idempotent — the spine wrote base into the mirror first).
+    // PUSH (#8): replicate the mount's already-populated mirror into the VM. The
+    // spine has ALREADY materialized base AND restored `.synapse-conflicts` sidecars
+    // into the mirror before this call, so we must NOT re-materialize (which would
+    // CLEAR the tree and delete the restored sidecars). Use the non-destructive
+    // replicate-only push instead of applyManifest.
     applyManifest: (input) =>
-      scopedBridge(input.targetDir).applyManifest(input),
+      scopedBridge(input.targetDir).pushMirrorToContainer(),
     // Full pull + prune + scanCommitDir (used by the round-trip test / future).
     scanManifest: (input) => scopedBridge(input.dir).scanManifest(input),
     // PULL-only (teardown/recovery): reconcile VM → mirror with delete-prune (F1),

@@ -297,6 +297,16 @@ export interface DetachedWorkingSetBridge extends WorkingSetBridge {
     reused: string[]
     pruned: string[]
   }>
+  /**
+   * (R5 #8) Replicate the ALREADY-POPULATED mirror INTO the container/VM — the
+   * NON-destructive PUSH. Unlike `applyManifest`, it does NOT re-run
+   * materializeSnapshot (which CLEARS the mirror tree first): the spine has already
+   * materialized base AND restored the `.synapse-conflicts` sidecars into the mirror
+   * before an off-box push, so re-materializing would DELETE the restored sidecars
+   * (while sidecarRestoreOk stayed true — a false positive). This only diffs the
+   * current mirror against the VM and writes/removes the delta.
+   */
+  pushMirrorToContainer(): Promise<void>
 }
 
 export function createDetachedWorkingSetBridge(
@@ -362,29 +372,36 @@ export function createDetachedWorkingSetBridge(
     }
   }
 
+  const pushMirrorToContainer = async (): Promise<void> => {
+    // NON-destructive PUSH (#8): replicate the mirror (already base+sidecars) into
+    // the VM — write-then-Move + explicit Removes — WITHOUT re-materializing.
+    const mirrorFiles = await listMirrorFiles()
+    const plan = await planFor(mirrorFiles)
+    for (const rel of plan.writes) {
+      const bytes = await readMirrorFile(rel)
+      await transport.write(rel, bytes)
+    }
+    for (const rel of plan.removes) {
+      await transport.remove(rel)
+    }
+  }
+
   return {
     listContainer,
     planFor,
     fetchChangedIntoMirror,
+    pushMirrorToContainer,
 
     async applyManifest(input) {
-      // ① materialize base into the API-local scratch MIRROR (CAS-world).
+      // ① materialize base into the API-local scratch MIRROR (CAS-world), then ②
+      //    replicate the mirror INTO the container/VM. (The off-box spine uses the
+      //    NON-destructive pushMirrorToContainer directly — #8 — because it has
+      //    already materialized base + restored sidecars into the mirror.)
       await materializeSnapshot({
         manifestSha256: input.manifestSha256,
         targetDir: mirrorDir,
       })
-      // ② replicate the mirror INTO the container/VM (container-world), via
-      //    write-then-Move + explicit Removes. NEVER docker cp / tar -x.
-      const mirrorFiles = await listMirrorFiles()
-      const plan = await planFor(mirrorFiles)
-      for (const rel of plan.writes) {
-        const bytes = await readMirrorFile(rel)
-        await transport.write(rel, bytes)
-      }
-      // Removes: delete-propagation for files the agent removed upstream.
-      for (const rel of plan.removes) {
-        await transport.remove(rel)
-      }
+      await pushMirrorToContainer()
     },
 
     async scanManifest(input) {

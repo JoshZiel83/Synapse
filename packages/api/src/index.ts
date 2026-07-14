@@ -476,6 +476,35 @@ async function main() {
         )
     }, 60_000)
     offBoxMaintenance.unref?.()
+
+    // (R5 #4) PERIODIC failed-mount recovery. recoverFailedSandboxMounts was
+    // boot-ONLY, so an off-box teardown whose PULL failed left the row 'closing'
+    // with 'failed' mounts and was never re-pulled until a process restart — while
+    // the provider TTL (kept alive only within the bounded recovery window, see
+    // keepalive) eventually destroyed the sole un-pulled copy. Drive it on an
+    // interval with an in-flight guard so a large pull can't overlap its own next
+    // tick. Unref'd so it never holds the process open.
+    let failedMountRecoveryInFlight = false
+    const failedMountRecovery = setInterval(() => {
+      if (failedMountRecoveryInFlight) return
+      failedMountRecoveryInFlight = true
+      void recoverFailedSandboxMounts()
+        .then((r) => {
+          if (r.recovered > 0 || r.stillFailed > 0) {
+            log.warn(
+              { recovered: r.recovered, stillFailed: r.stillFailed },
+              "[sandbox] periodic failed-mount recovery pass"
+            )
+          }
+        })
+        .catch((err) =>
+          log.error({ err }, "[sandbox] periodic failed-mount recovery failed")
+        )
+        .finally(() => {
+          failedMountRecoveryInFlight = false
+        })
+    }, 60_000)
+    failedMountRecovery.unref?.()
   } else {
     // SANDBOX_PROVIDER=none (P2, owner decision): `none` is a PROVISIONING
     // selector, NOT a teardown switch. We do NOT provision, reconcile, tear down,

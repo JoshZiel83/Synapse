@@ -894,15 +894,32 @@ export async function listNonTerminalSandboxResourceIds(
  */
 export async function listKeepAliveSandboxResourceIds(
   adapter: string,
+  recoveryWindowSeconds: number,
   run: Executor = db
 ): Promise<string[]> {
+  // (R5 #4) Also refresh a 'closing' off-box VM that still has failed-RECOVERABLE
+  // mounts — but ONLY within a bounded recovery window (updated_at, bumped by each
+  // recovery/close-gate pass). This keeps the provider TTL from destroying the sole
+  // un-pulled copy WHILE recovery is still trying, WITHOUT renewing forever: past the
+  // window the keepalive stops and the TTL reclaims a genuinely un-recoverable VM
+  // (bounded provider spend). Provisioning/active are always refreshed (in use).
   const rows = await sql<{ resourceId: string }>`
     SELECT sb.resource_id AS "resourceId"
       FROM sandboxes sb
       JOIN runtimes_live r ON r.id = sb.id
       WHERE sb.adapter = ${adapter}
         AND sb.resource_id <> ''
-        AND sb.state IN ('provisioning', 'active')`.execute(run)
+        AND (
+          sb.state IN ('provisioning', 'active')
+          OR (
+            sb.state = 'closing'
+            AND sb.updated_at > NOW() - make_interval(secs => ${recoveryWindowSeconds})
+            AND EXISTS (
+              SELECT 1 FROM file_mounts m
+                WHERE m.sandbox_id = sb.id AND m.status = 'failed'
+            )
+          )
+        )`.execute(run)
   return rows.rows.map((x) => x.resourceId)
 }
 
