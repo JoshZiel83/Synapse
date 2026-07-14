@@ -7,9 +7,7 @@ import {
 
 /**
  * normalizePendingConflicts coerces the session's stashed pending-commit-conflict
- * blob into the current {paths, sidecars} shape. The critical case is BACKWARD
- * COMPATIBILITY: a notice stashed by a pre-round-7 build (subpath → string[])
- * must still surface after upgrade (round-7 #C changed the storage shape).
+ * blob into the current {paths, sidecars} shape (a malformed/absent blob → {}).
  */
 
 test("normalizePendingConflicts: current shape passes through (kind defaulted)", () => {
@@ -29,14 +27,14 @@ test("normalizePendingConflicts: current shape passes through (kind defaulted)",
   assert.deepEqual(out, cur)
 })
 
-test("normalizePendingConflicts: legacy string[] format is upgraded (no sidecars)", () => {
-  // Pre-round-7: subpath → bare path array.
-  const legacy = { conversation: ["/a.txt", "/b.txt"], actor: ["/c.txt"] }
-  const out = normalizePendingConflicts(legacy)
-  assert.deepEqual(out, {
-    conversation: { paths: ["/a.txt", "/b.txt"], sidecars: [] },
+test("normalizePendingConflicts: a bare-array (non-record) subpath value is dropped", () => {
+  // No back-compat with the pre-round-7 string[] shape (removed): a non-record
+  // value is not the current {paths, sidecars} shape, so it is skipped.
+  const out = normalizePendingConflicts({
+    conversation: ["/a.txt"],
     actor: { paths: ["/c.txt"], sidecars: [] },
   })
+  assert.deepEqual(out, { actor: { paths: ["/c.txt"], sidecars: [] } })
 })
 
 test("normalizePendingConflicts: null/garbage → empty object", () => {

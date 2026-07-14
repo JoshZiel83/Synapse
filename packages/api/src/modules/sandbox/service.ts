@@ -205,16 +205,16 @@ export function sandboxSpecVolumeSubpath(
 }
 
 /**
- * A backend usable for `connect()` only (teardown / cross-process kill), built
+ * An adapter usable for `connect()` only (teardown / cross-process kill), built
  * from the persisted SandboxRef kind. `create()` is never called on these.
  *
  * Crucially this must NOT depend on the current provision env: a docker sandbox
- * has to stay reapable even after the API fell back to the local backend, had
+ * has to stay reapable even after the API fell back to the local adapter, had
  * sandboxes disabled, or lost its FRP_SHARED_TOKEN — so we use the connect-only
- * docker backend (docker CLI + persisted container id, no image/network/volume/
+ * docker adapter (docker CLI + persisted container id, no image/network/volume/
  * frp config), never createDockerSandboxBackend(dockerBackendOptionsFromEnv()).
  */
-function backendForKind(
+function adapterForKind(
   ref: SandboxRef,
   dockerSpawnImpl?: SpawnImpl
 ): SandboxAdapter {
@@ -328,7 +328,7 @@ export async function isSandboxRuntimeAlive(
   // absence: there is nothing to keep alive, so 'dead' is safe (not 'unknown').
   if (!ref) return "dead"
   try {
-    const handle = await backendForKind(ref, opts.dockerSpawnImpl).connect(ref)
+    const handle = await adapterForKind(ref, opts.dockerSpawnImpl).connect(ref)
     return await handle.probeLiveness()
   } catch {
     // Could not even connect/probe (e.g. docker CLI missing) → unknown, NOT dead.
@@ -3078,8 +3078,8 @@ export async function teardownSandbox(
       )
       if (ref) {
         try {
-          const backend = backendForKind(ref)
-          const handle = await backend.connect(ref)
+          const adapter = adapterForKind(ref)
+          const handle = await adapter.connect(ref)
           await handle.kill()
           const live = await handle
             .probeLiveness()
@@ -3582,7 +3582,7 @@ async function ensureRuntimeStoppedForRecovery(
     const ref = await buildSandboxRefFromSandboxRow(mounts)
     if (ref) {
       try {
-        const handle = await backendForKind(ref).connect(ref)
+        const handle = await adapterForKind(ref).connect(ref)
         await handle.kill()
       } catch (err) {
         console.error(

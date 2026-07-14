@@ -125,9 +125,8 @@ export function mergePendingConflicts(
 }
 
 /**
- * Coerce the stored pending-conflicts blob into the current shape. Tolerates the
- * pre-round-7 format (subpath -> string[]) so a notice stashed by an older build
- * still surfaces after upgrade.
+ * Coerce the stored pending-conflicts blob into the current shape
+ * (subpath -> { paths, sidecars }). A malformed/absent blob → {}.
  */
 export function normalizePendingConflicts(
   raw: unknown
@@ -135,10 +134,7 @@ export function normalizePendingConflicts(
   if (!isRecord(raw)) return {}
   const out: Record<string, PendingCommitConflict> = {}
   for (const [sub, val] of Object.entries(raw)) {
-    if (Array.isArray(val)) {
-      // Legacy: a bare path array, no sidecar info.
-      out[sub] = { paths: stringArray(val), sidecars: [] }
-    } else if (isRecord(val)) {
+    if (isRecord(val)) {
       out[sub] = {
         paths: stringArray(val.paths),
         sidecars: Array.isArray(val.sidecars)

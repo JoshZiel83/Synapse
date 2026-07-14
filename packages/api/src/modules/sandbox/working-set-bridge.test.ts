@@ -27,7 +27,6 @@ import {
   planReplication,
   reconcileStatCache,
   parseFindListing,
-  stashUncommittedWorkingSet,
   type ContainerFileStat,
   type DockerExecFn,
   type StatCache,
@@ -512,60 +511,6 @@ test("#5 collision — a NESTED base DIR replaced by a VM FILE round-trips (empt
     "hi"
   )
   await rm(root, { recursive: true, force: true })
-})
-
-// ─────────────────────── S12 forced-commit-failure stash ──────────────────────
-
-test("S12 — stashUncommittedWorkingSet exfiltrates + records the stash manifest (commit-failure recovery WRITE contract)", async () => {
-  const { exec } = recordingExec({
-    find: "7 200 /conversation/wip.py\n",
-    cat: { "/conversation/wip.py": "uncommitted" },
-  })
-  const bridge = createDetachedWorkingSetBridge({
-    mirrorDir: "/tmp/mirror",
-    mountRoots: ["/conversation"],
-    transport: makeDockerExecTransport({ containerId: "cid", exec }),
-    statCache: new Map(),
-    writeMirrorFile: async () => {},
-  })
-  let recorded: string | null = null
-  const res = await stashUncommittedWorkingSet({
-    bridge,
-    mirrorDir: "/tmp/mirror",
-    // Stub the CAS commit (the real path runs scanCommitDir on the mirror).
-    scanManifest: async () => ({ mergedManifestSha256: "stash-manifest-sha" }),
-    recordStash: async (sha) => {
-      recorded = sha
-    },
-  })
-  assert.equal(res.stashed, true)
-  assert.equal(res.manifestSha256, "stash-manifest-sha")
-  assert.equal(
-    recorded,
-    "stash-manifest-sha",
-    "stash pointer recorded as GC root"
-  )
-})
-
-test("S12 — stash is a clean no-op when the exfiltrate/commit yields no manifest", async () => {
-  const { exec } = recordingExec({ find: "" })
-  const bridge = createDetachedWorkingSetBridge({
-    mirrorDir: "/tmp/mirror",
-    mountRoots: ["/conversation"],
-    transport: makeDockerExecTransport({ containerId: "cid", exec }),
-    statCache: new Map(),
-  })
-  let recordCalls = 0
-  const res = await stashUncommittedWorkingSet({
-    bridge,
-    mirrorDir: "/tmp/mirror",
-    scanManifest: async () => ({}),
-    recordStash: async () => {
-      recordCalls += 1
-    },
-  })
-  assert.equal(res.stashed, false)
-  assert.equal(recordCalls, 0)
 })
 
 // ─────────────────────── R4: F1 pull delete-prune (P0) ───────────────────────

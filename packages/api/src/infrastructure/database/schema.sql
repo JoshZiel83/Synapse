@@ -3782,17 +3782,21 @@ CREATE TABLE sandboxes (
   host_pid INT,
   pairing_session_id UUID,
   capability_descriptor JSONB NOT NULL DEFAULT '{}',
-  stash_manifest_id UUID,
   data_plane_cert_fingerprint TEXT,
   -- R4 #6: off-box data-plane credentials, AES-256-GCM envelope (nonce‖ct‖tag,
-  -- base64; AAD bound to sandboxId(‖workspaceId)). Nullable, no CHECK: NULL for
-  -- host-side/resident adapters and any adapter whose meta.credentialed=false.
-  -- The decrypt-at-repo-exit wiring lands in a later phase; Phase 0 adds the
-  -- column + generated type only.
-  data_plane_credentials_encrypted TEXT,
+  -- base64; AAD bound to sandboxId(‖workspaceId)). Nullable: NULL for host-side/
+  -- resident adapters and any adapter whose meta.credentialed=false. (R6 H-9) A
+  -- NON-NULL value MUST be the `enc:b1:` envelope — a cheap internal-integrity CHECK
+  -- that fail-closes a plaintext/corrupt write at the DB layer (the decrypt-at-repo-
+  -- exit path already rejects a non-`enc:b1:` value, so this is defense-in-depth).
+  data_plane_credentials_encrypted TEXT
+    CHECK (
+      data_plane_credentials_encrypted IS NULL
+      OR data_plane_credentials_encrypted LIKE 'enc:b1:%'
+    ),
   -- Runtime platform facts for the capability projection's bundle/OS-guard logic.
   -- local adapter: the API host's process.platform/process.arch; docker: 'linux' +
-  -- the container's declared arch; off-box (E2B/Cube): provider-declared. R3.P2d:
+  -- the container's declared arch; off-box (Cube): provider-declared. R3.P2d:
   -- NOT NULL + fail-closed (no back-compat) — every sandbox mint site populates
   -- these, and a cloud bootstrap that omits them is rejected at the wire, so the
   -- capability projection never has to guess a sandbox's platform.

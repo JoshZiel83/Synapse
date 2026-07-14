@@ -10,7 +10,7 @@
 // current host-dir materialize/commit-scan + host-side endpoint fork valid. The
 // first OFF-BOX adapter (cubesandbox:bare, confinedFs:'unsupported') TRIPS that
 // guard, which is why the adapter.rebuildDataPlane + off-box working-set seam are
-// built + VALIDATED alongside it (R4). e2b remains a residual/unregistered example.
+// built + VALIDATED alongside it (R4).
 //
 // F-A (preserved): a docker adapter's teardown/liveness/reconnect NEVER forces
 // the provision config to evaluate. `create()` (provision) is backed by
@@ -1045,7 +1045,7 @@ let warnedNullResolve = false
  * provision resolver (resolveSandboxAdapter) and the persisted-row resolver
  * (adapterForRow) consume it, so the 4-key adapter set is declared ONCE and the
  * fail-closed default falls out of a single lookup — there is no second switch
- * to drift. cubesandbox:bare IS registered (R4); e2b (residual) stays UNregistered; a miss is the
+ * to drift. cubesandbox:bare IS the registered off-box adapter (R4); a miss is the
  * fail-closed case both consumers key off of.
  */
 interface AdapterFactoryDeps {
@@ -1101,7 +1101,7 @@ export function resolveSandboxAdapter(
   const key = `${provider}:${mode}`
   const factory = ADAPTER_FACTORIES[key]
   if (factory) return factory(deps)
-  // e2b (residual) is NOT registered; cubesandbox:bare IS (R4). An unknown tag denies.
+  // cubesandbox:bare IS the registered off-box adapter (R4). An unknown tag denies.
   if (provider !== "none" && !warnedNullResolve) {
     warnedNullResolve = true
     log.warn(
@@ -1120,7 +1120,7 @@ export function resolveSandboxAdapter(
  * FAIL-CLOSED (P8B): an unknown persisted adapter key THROWS rather than
  * silently downgrading to a local resident adapter. A silent downgrade would run
  * teardown / liveness / reconnect on the WRONG substrate (e.g. treat a persisted
- * docker/e2b row as a local in-process runtime), potentially mis-reaping or
+ * docker/cubesandbox row as a local in-process runtime), potentially mis-reaping or
  * declaring a live sandbox dead. Throwing is safe because every teardown caller
  * try/catches with a hostPid fallback, so an unrecognized legacy row degrades to
  * that fallback instead of a wrong-substrate action.

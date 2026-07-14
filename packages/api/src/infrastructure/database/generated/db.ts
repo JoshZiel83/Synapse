@@ -2380,7 +2380,6 @@ export interface Sandboxes {
   platform: string;
   resourceId: string | null;
   sessionId: string | null;
-  stashManifestId: string | null;
   state: Generated<SandboxesState>;
   teardownEpoch: Generated<Int8>;
   updatedAt: Generated<Date>;
@@ -2404,7 +2403,6 @@ export interface SandboxesLive {
   platform: string | null;
   resourceId: string | null;
   sessionId: string | null;
-  stashManifestId: string | null;
   state: SandboxesState | null;
   teardownEpoch: Int8 | null;
   updatedAt: Date | null;
