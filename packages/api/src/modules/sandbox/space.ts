@@ -11,6 +11,7 @@ export {
   sessionHasFailedRecoverableMounts,
   sandboxHasFailedRecoverableMounts,
   closeSessionFailedMounts,
+  closeSandboxFailedMounts,
   appendSnapshot,
   getSnapshotManifestSha,
 } from "./repo-space.js"

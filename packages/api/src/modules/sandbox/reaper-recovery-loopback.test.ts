@@ -921,3 +921,83 @@ test("R6 H-5: listBlockedSessionLiveSandboxes returns a blocked-session provider
     assert.equal(got?.adapter, "cubesandbox")
   })
 })
+
+test("R6 review-fix: the data-free convergence at the attempt cap CLOSES the straggler's OWN failed mounts (stops the recovery-sweep livelock) but never a live sibling generation's mounts", async () => {
+  await withTestDb(async (db) => {
+    const seed = await seedSession(db)
+    const insertOffBox = async (state: string, resourceId: string) => {
+      const id = randomUUID()
+      await db
+        .insertInto("runtimes")
+        .values({ id, workspaceId: seed.workspaceId, kind: "sandbox" } as any)
+        .execute()
+      await sql`
+        INSERT INTO sandboxes (id, workspace_id, session_id, mode, adapter, state, resource_id, host_pid, platform, arch)
+        VALUES (${id}, ${seed.workspaceId}, ${seed.sessionId}, 'bare', 'cubesandbox', ${state}::sandboxes_state, ${resourceId}, NULL, 'linux', 'x64')`.execute(
+        db
+      )
+      return id
+    }
+    const rOld = await insertOffBox("closing", "vm-old")
+    const rNew = await insertOffBox("active", "vm-new")
+
+    // A failed-recoverable mount owned by the STRAGGLER (rOld) …
+    const oldMount = await insertFileMount(db as any, {
+      workspaceId: seed.workspaceId,
+      sessionId: seed.sessionId,
+      fileSpaceId: seed.fileSpaceId,
+      mountSubpath: "conversation",
+      baseSnapshotId: null,
+      materializedDir: "/tmp/old-preserved",
+    })
+    await updateFileMount(db as any, oldMount.id, {
+      status: "failed",
+      sandboxId: rOld,
+    })
+    // … and a failed mount owned by the LIVE sibling (rNew), sharing the session.
+    const sibMount = await insertFileMount(db as any, {
+      workspaceId: seed.workspaceId,
+      sessionId: seed.sessionId,
+      fileSpaceId: seed.fileSpaceId,
+      mountSubpath: "actor",
+      baseSnapshotId: null,
+      materializedDir: "/tmp/new-preserved",
+    })
+    await updateFileMount(db as any, sibMount.id, {
+      status: "failed",
+      sandboxId: rNew,
+    })
+
+    // Exhaust the attempt cap: pre-set teardown_epoch above MAX_OFFBOX_RECOVERY_ATTEMPTS
+    // so the close-gate flip lands past the cap → the defer guard is false → convergence.
+    await sql`UPDATE sandboxes SET teardown_epoch = 30 WHERE id = ${rOld}`.execute(
+      db
+    )
+
+    await teardownSandbox(seed.sessionId, { runtimeId: rOld, executor: db })
+
+    // The straggler's OWN mount is TERMINALLY closed → claimFailedRecoverableMounts
+    // stops matching it → the recovery sweep no longer reconnects to the destroyed VM.
+    const old = await db
+      .selectFrom("fileMounts")
+      .select(["status"])
+      .where("id", "=", oldMount.id)
+      .executeTakeFirstOrThrow()
+    assert.equal(
+      old.status,
+      "closed",
+      "the converged straggler's failed mount is closed (livelock stopped)"
+    )
+    // The LIVE sibling generation's failed mount is UNTOUCHED (sandbox-scoped close).
+    const sib = await db
+      .selectFrom("fileMounts")
+      .select(["status"])
+      .where("id", "=", sibMount.id)
+      .executeTakeFirstOrThrow()
+    assert.equal(
+      sib.status,
+      "failed",
+      "a live sibling generation's failed mount is NOT closed by the straggler's convergence"
+    )
+  })
+})

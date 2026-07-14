@@ -376,6 +376,26 @@ export async function closeSessionFailedMounts(
 }
 
 /**
+ * (R6 review-fix) Terminally close every failed-recoverable mount of ONE SANDBOX
+ * (sandbox_id), the runtime-scoped twin of {@link closeSessionFailedMounts}. Used when
+ * the DATA-FREE convergence of a superseded straggler EXHAUSTS its recovery attempts +
+ * DESTROYS its VM: the straggler's own un-pulled mounts must be terminated too, or the
+ * periodic recovery sweep re-claims them forever and reconnects to the now-destroyed VM
+ * (an unbounded livelock). Scoped to sandbox_id (NOT session) so a LIVE sibling
+ * generation's failed mounts that share the session are never wrongly closed.
+ */
+export async function closeSandboxFailedMounts(
+  client: Executor,
+  runtimeId: string
+): Promise<void> {
+  await sql`
+    UPDATE file_mounts
+       SET status = 'closed', closed_at = NOW()
+     WHERE sandbox_id = ${runtimeId}
+       AND status IN ('failed', 'recovering')`.execute(client)
+}
+
+/**
  * Append a new snapshot to a space's DAG and advance current_snapshot_id, all
  * under a short transaction that serializes version assignment via
  * SELECT ... FOR UPDATE on the file_spaces row. The caller must have already

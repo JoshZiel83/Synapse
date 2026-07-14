@@ -33,6 +33,7 @@ import {
   sessionHasFailedRecoverableMounts,
   sandboxHasFailedRecoverableMounts,
   closeSessionFailedMounts,
+  closeSandboxFailedMounts,
   getFileSpace,
   ensureContentBlob,
   appendSnapshot,
@@ -2499,6 +2500,19 @@ async function teardownStaleRuntimeDataFree(
           )
         )
     }
+    // (R6 review-fix) The convergence past the attempt cap ACCEPTS THE LOSS + destroys
+    // the VM — so it must TERMINATE this straggler's OWN failed/recovering mounts too.
+    // SANDBOX-scoped (never closeSessionFailedMounts, which would wipe a live sibling
+    // generation's mounts). Without this the mounts stay failed-recoverable and the
+    // periodic recovery sweep re-claims them forever, reconnecting to the now-destroyed
+    // VM every tick — an unbounded livelock (the sibling teardown convergence closes its
+    // mounts at 2790; this data-free path previously omitted the equivalent).
+    await closeSandboxFailedMounts(run, runtimeId).catch((err) =>
+      log.error(
+        { runtimeId, err },
+        "data-free teardown: closing straggler mounts failed"
+      )
+    )
     const ctx = await loadSessionContext(sessionId, run)
     if (ctx) {
       await revokeSandboxGrants({
