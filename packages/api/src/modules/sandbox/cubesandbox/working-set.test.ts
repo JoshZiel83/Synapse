@@ -186,6 +186,67 @@ test("R4 2d — envd list is VFS-mount-rooted (vmRoot stripped), files-only, dot
   }
 })
 
+test("R6 #1 read-side — a symlink envd STAT-FOLLOWS (reports type file/dir) is excluded via its lstat permissions ('L…'); its target is never read-through or recursed", async () => {
+  // The REAL CubeSandbox envd stat-follows: a symlink→/etc/passwd is reported with
+  // type:'file' (the TARGET's type) + size, and a symlink→dir with type:'directory'.
+  // Only the `permissions` field is lstat-based ('Lrwxrwxrwx'). If the walk keyed off
+  // `type` alone it would read /etc/passwd INTO this mount's CAS and recurse an external
+  // dir tree in — the read-side twin of the #1 write-side escape. Live-verified vs a
+  // real Cube VM (scripts/r6-cube-verify.ts).
+  const tree: Record<string, FileEntry[]> = {
+    "/workspace/conversation": [
+      {
+        name: "real.txt",
+        path: "/workspace/conversation/real.txt",
+        type: "file",
+        size: 4,
+        permissions: "-rw-r--r--",
+        modifiedTime: MT,
+      },
+      {
+        // symlink → /etc/passwd, stat-followed to a regular file.
+        name: "evil-file",
+        path: "/workspace/conversation/evil-file",
+        type: "file",
+        size: 999,
+        permissions: "Lrwxrwxrwx",
+        modifiedTime: MT,
+      },
+      {
+        // symlink → /etc, stat-followed to a directory.
+        name: "evil-dir",
+        path: "/workspace/conversation/evil-dir",
+        type: "directory",
+        permissions: "lrwxrwxrwx",
+      },
+    ],
+    // If the walk WRONGLY recursed the dir-symlink, it would list this "external" tree
+    // and pull secret.conf. The exclusion (before recursion) means this is never read.
+    "/workspace/conversation/evil-dir": [
+      {
+        name: "secret.conf",
+        path: "/workspace/conversation/evil-dir/secret.conf",
+        type: "file",
+        size: 7,
+        permissions: "-rw-r--r--",
+        modifiedTime: MT,
+      },
+    ],
+  }
+  const transport = makeEnvdWorkingSetTransport({
+    envd: stubEnvd(tree),
+    vmRoot: "/workspace",
+  })
+  const relpaths = (await transport.list(["/workspace/conversation"]))
+    .map((f) => f.relpath)
+    .sort()
+  assert.deepEqual(
+    relpaths,
+    ["/conversation/real.txt"],
+    "only the real regular file is listed; the file-symlink and the dir-symlink (+ its tree) are excluded"
+  )
+})
+
 test("R4 2b — docker-vs-envd LIST PARITY: identical relpath set for the same tree", async () => {
   // Docker `find /conversation -type f` output (symlink already excluded by -type f).
   const find = [

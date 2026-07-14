@@ -269,6 +269,22 @@ export function makeEnvdWorkingSetTransport(opts: {
         )
         continue
       }
+      // (R6 #1 read-side SECURITY) envd STAT-FOLLOWS symlinks: a VM symlink is reported
+      // with the TARGET's `type` ('file'/'directory'), so `type !== 'file'` alone does
+      // NOT exclude it — a symlink to /etc/passwd would be read THROUGH (exfiltrating an
+      // out-of-mount file into this mount's CAS), and a symlink to a dir would be
+      // RECURSED INTO (pulling an external tree in). The `permissions` field is
+      // LSTAT-based (a symlink's symbolic mode leads with 'l'/'L'), so it is the
+      // reliable no-follow signal. EXCLUDE any symlink here, BEFORE the dir-recursion —
+      // the read-side twin of the write-side neutralizeMirrorSymlink. (Symlinks do not
+      // round-trip off-box anyway; see the factory doc H-7.)
+      if (typeof e.permissions === "string" && /^[lL]/.test(e.permissions)) {
+        log.warn(
+          { vmDir, rawPath: e.path, permissions: e.permissions },
+          "working-set: excluded a VM symlink (envd stat-follows type; lstat permissions reveal the link) — no read-through"
+        )
+        continue
+      }
       if (e.type === "directory") {
         // Descend the RE-DERIVED clean VM path (not the raw envd path) — ALL subdirs
         // incl dotdirs (find parity — 2b). Pass the child's key so an EMPTY subdir
