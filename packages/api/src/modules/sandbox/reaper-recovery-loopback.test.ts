@@ -26,6 +26,7 @@ import {
   listReconcileCandidateSessionIds,
   listReapableClosingSandboxSessions,
   listKeepAliveSandboxResourceIds,
+  listBlockedSessionLiveSandboxes,
   hasDockerMountHistory,
 } from "./repo.js"
 import { insertFileMount, updateFileMount } from "./repo-space.js"
@@ -792,5 +793,131 @@ test("R6 #4: data-free convergence of an off-box straggler DEFERS destroy when i
       null,
       "the straggler runtime is NOT soft-deleted while deferred"
     )
+  })
+})
+
+test("R6 H-5: keepalive EXCLUDES an active off-box VM whose session is 'closed' (no infinite TTL renew) but KEEPS a running/blocked one — and never touches the closing failed-recoverable arm", async () => {
+  await withTestDb(async (db) => {
+    // Three off-box (cubesandbox) sandboxes, each on its OWN session so the
+    // uq_sandboxes_live_session partial unique is satisfied.
+    const mk = async (
+      state: string,
+      resourceId: string,
+      sessionStatus: string
+    ) => {
+      const seed = await seedSession(db)
+      await sql`UPDATE sessions SET status = ${sessionStatus}::sessions_status WHERE id = ${seed.sessionId}`.execute(
+        db
+      )
+      const runtimeId = await insertSandboxRuntime(db, {
+        workspaceId: seed.workspaceId,
+        sessionId: seed.sessionId,
+        adapter: "cubesandbox",
+        state,
+        resourceId,
+      })
+      return { seed, runtimeId }
+    }
+
+    // (a) active + session running → kept (in use).
+    await mk("active", "vm-running", "running")
+    // (b) active + session blocked → kept (a blocked session may be resumed; the
+    //     dedicated H-5 teardown, not keepalive-exclusion, releases these).
+    await mk("active", "vm-blocked", "blocked")
+    // (c) active + session CLOSED → EXCLUDED (the crash-leftover infinite-renew leak).
+    await mk("active", "vm-closed-session", "closed")
+    // (d) CLOSING + a failed-recoverable mount + session closed → still KEPT: the
+    //     closing arm must hold the sole-source VM for recovery regardless of session.
+    const closing = await mk("closing", "vm-closing-recover", "closed")
+    const m = await insertFileMount(db as any, {
+      workspaceId: closing.seed.workspaceId,
+      sessionId: closing.seed.sessionId,
+      fileSpaceId: closing.seed.fileSpaceId,
+      mountSubpath: "conversation",
+      baseSnapshotId: null,
+      materializedDir: "/tmp/preserved",
+    })
+    await updateFileMount(db as any, m.id, {
+      status: "failed",
+      sandboxId: closing.runtimeId,
+    })
+
+    const kept = await listKeepAliveSandboxResourceIds(
+      "cubesandbox",
+      1800,
+      5,
+      db as any
+    )
+    assert.ok(
+      kept.includes("vm-running"),
+      "an active running-session VM is kept"
+    )
+    assert.ok(
+      kept.includes("vm-blocked"),
+      "an active blocked-session VM is kept"
+    )
+    assert.ok(
+      !kept.includes("vm-closed-session"),
+      "an active CLOSED-session VM is EXCLUDED (no infinite renew)"
+    )
+    assert.ok(
+      kept.includes("vm-closing-recover"),
+      "the closing failed-recoverable arm is kept regardless of session status"
+    )
+  })
+})
+
+test("R6 H-5: listBlockedSessionLiveSandboxes returns a blocked-session provider-backed sandbox, excluding host (resource_id='') and non-blocked sessions", async () => {
+  await withTestDb(async (db) => {
+    // (a) blocked session + off-box (resource_id set) → returned.
+    const s1 = await seedSession(db)
+    await sql`UPDATE sessions SET status = 'blocked' WHERE id = ${s1.sessionId}`.execute(
+      db
+    )
+    const r1 = await insertSandboxRuntime(db, {
+      workspaceId: s1.workspaceId,
+      sessionId: s1.sessionId,
+      adapter: "cubesandbox",
+      state: "active",
+      resourceId: "vm-blocked-1",
+    })
+    // (b) blocked session + host/resident (resource_id='') → excluded.
+    const s2 = await seedSession(db)
+    await sql`UPDATE sessions SET status = 'blocked' WHERE id = ${s2.sessionId}`.execute(
+      db
+    )
+    await insertSandboxRuntime(db, {
+      workspaceId: s2.workspaceId,
+      sessionId: s2.sessionId,
+      adapter: "local",
+      state: "active",
+      resourceId: "", // host → no provider TTL to renew
+    })
+    // (c) RUNNING session + off-box → excluded (not blocked).
+    const s3 = await seedSession(db)
+    const r3 = await insertSandboxRuntime(db, {
+      workspaceId: s3.workspaceId,
+      sessionId: s3.sessionId,
+      adapter: "cubesandbox",
+      state: "active",
+      resourceId: "vm-running-3",
+    })
+
+    const rows = await listBlockedSessionLiveSandboxes(db as any)
+    const ids = rows.map((r) => r.runtimeId)
+    assert.ok(ids.includes(r1), "a blocked-session off-box sandbox is returned")
+    assert.ok(
+      !ids.some((id) => id === r3),
+      "a running-session sandbox is not returned"
+    )
+    // The host row (s2) has resource_id='' → pre-filtered out.
+    assert.equal(
+      rows.filter((r) => r.sessionId === s2.sessionId).length,
+      0,
+      "a host/resident blocked-session sandbox (resource_id='') is excluded"
+    )
+    // The returned row carries the adapter/mode the caller uses for the off-box gate.
+    const got = rows.find((r) => r.runtimeId === r1)
+    assert.equal(got?.adapter, "cubesandbox")
   })
 })

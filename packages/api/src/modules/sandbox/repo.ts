@@ -181,7 +181,8 @@ export async function hasDockerMountHistory(
       EXISTS(SELECT 1 FROM sandboxes WHERE adapter = 'docker')
       OR EXISTS(
         SELECT 1 FROM file_mounts
-        WHERE sandbox_id IS NULL AND status NOT IN ('closed', 'failed')
+        WHERE sandbox_id IS NULL
+          AND status NOT IN ('closed', 'failed', 'recovering')
       )
     ) AS ok`.execute(run)
   return Boolean(row.rows[0]?.ok)
@@ -971,26 +972,73 @@ export async function listKeepAliveSandboxResourceIds(
   //     ~180s, so an updated_at window would slide forever — the original #4 bug.)
   //   • updated_at within the window — a secondary "recently re-driven" filter that
   //     also stops keepalive once the reaper GIVES UP re-driving the row.
-  // Provisioning/active are always refreshed (in use).
+  // Provisioning/active are refreshed (in use) — EXCEPT (R6 H-5) when the owning
+  // session is 'closed': a crash+restart can leave an off-box sandbox 'active' while
+  // its session is terminal, and an unbounded prov/active keepalive would renew its
+  // provider TTL forever. The LEFT JOIN + session-status guard applies to the
+  // prov/active arm ONLY — NEVER the closing+failed-recoverable arm, which must keep
+  // the sole-source VM alive for recovery regardless of session status.
   const rows = await sql<{ resourceId: string }>`
     SELECT sb.resource_id AS "resourceId"
       FROM sandboxes sb
       JOIN runtimes_live r ON r.id = sb.id
+      LEFT JOIN sessions se ON se.id = sb.session_id
       WHERE sb.adapter = ${adapter}
         AND sb.resource_id <> ''
         AND (
-          sb.state IN ('provisioning', 'active')
+          (
+            sb.state IN ('provisioning', 'active')
+            AND (sb.session_id IS NULL OR se.status <> 'closed')
+          )
           OR (
             sb.state = 'closing'
             AND sb.teardown_epoch < ${maxRecoveryAttempts}
             AND sb.updated_at > NOW() - make_interval(secs => ${recoveryWindowSeconds})
             AND EXISTS (
               SELECT 1 FROM file_mounts m
-                WHERE m.sandbox_id = sb.id AND m.status = 'failed'
+                WHERE m.sandbox_id = sb.id
+                  AND m.status IN ('failed', 'recovering')
             )
           )
         )`.execute(run)
   return rows.rows.map((x) => x.resourceId)
+}
+
+/**
+ * (R6 H-5) LIVE (provisioning/active) provider-backed sandboxes whose owning session
+ * is 'blocked' — the crash+restart shape recoverInterruptedExecutions leaves behind
+ * (turn interrupted → session 'blocked') but never tears down. reconcile SHIELDS a
+ * healthy off-box VM, so its provider TTL would be renewed forever. The startup path
+ * tears each down (best-effort) so its unpulled work commits + the VM is released.
+ * `resource_id <> ''` pre-narrows to provider-backed rows (host/resident carry ''); the
+ * caller confirms off-box via the adapter before acting (docker is provider-backed but
+ * reconcile already reaps its container).
+ */
+export async function listBlockedSessionLiveSandboxes(
+  run: Executor = db
+): Promise<
+  {
+    runtimeId: string
+    sessionId: string
+    adapter: string
+    mode: "resident" | "bare"
+  }[]
+> {
+  const rows = await sql<{
+    runtimeId: string
+    sessionId: string
+    adapter: string
+    mode: "resident" | "bare"
+  }>`
+    SELECT sb.id AS "runtimeId", sb.session_id AS "sessionId",
+           sb.adapter AS "adapter", sb.mode AS "mode"
+      FROM sandboxes sb
+      JOIN runtimes_live r ON r.id = sb.id
+      JOIN sessions se ON se.id = sb.session_id
+      WHERE sb.state IN ('provisioning', 'active')
+        AND sb.resource_id <> ''
+        AND se.status = 'blocked'`.execute(run)
+  return rows.rows
 }
 
 /**

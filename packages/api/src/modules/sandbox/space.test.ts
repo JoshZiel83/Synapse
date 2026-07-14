@@ -4,6 +4,7 @@ import crypto from "node:crypto"
 import { actorRef, conversationRef } from "@synapse/shared"
 import type { Kysely } from "kysely"
 import { withTestDbAndClient } from "../../test/helpers/db.js"
+import { sql } from "kysely"
 import {
   ensureFileSpace,
   insertFileMount,
@@ -11,6 +12,10 @@ import {
   appendSnapshot,
   ensureContentBlob,
   getActiveMountsForSession,
+  claimFailedRecoverableMounts,
+  releaseRecoveryClaims,
+  sessionHasFailedRecoverableMounts,
+  sandboxHasFailedRecoverableMounts,
   getFileSpace,
   SandboxSpaceError,
 } from "./space.js"
@@ -281,5 +286,171 @@ test("space.ts: active partial-unique forbids two live mounts for one subpath", 
         baseSnapshotId: null,
       })
     )
+  })
+})
+
+// ── R6 H-2: 'recovering' is a durable recovery LEASE ────────────────────────────
+
+/** Minimal sandbox runtime (runtimes + sandboxes) so a mount's sandbox_id FK resolves.
+ *  State/adapter are arbitrary for the repo-space predicate tests (which query
+ *  file_mounts by sandbox_id, not the sandbox state); the deferred mode<->service
+ *  trigger never fires in a rolled-back test txn. */
+async function insertSandboxRow(
+  db: Kysely<any>,
+  workspaceId: string,
+  sessionId: string
+): Promise<string> {
+  const id = crypto.randomUUID()
+  await db
+    .insertInto("runtimes")
+    .values({ id, workspace_id: workspaceId, kind: "sandbox" } as any)
+    .execute()
+  await sql`
+    INSERT INTO sandboxes (id, workspace_id, session_id, mode, adapter, state, resource_id, platform, arch)
+    VALUES (${id}, ${workspaceId}, ${sessionId}, 'bare', 'cubesandbox', 'active'::sandboxes_state, 'vm-x', 'linux', 'x64')`.execute(
+    db
+  )
+  return id
+}
+
+test("space.ts (R6 H-2): claim leases failed→recovering — excluded from live mounts, still failed-recoverable; release resets it", async () => {
+  await withTestDbAndClient(async ({ db }) => {
+    const { workspaceId, actorId, sessionId } = await seedWorkspace(db)
+    const space = await ensureFileSpace(db, {
+      workspaceId,
+      owner: actorRef(actorId),
+    })
+    const sandboxId = await insertSandboxRow(db, workspaceId, sessionId)
+    const mount = await insertFileMount(db, {
+      workspaceId,
+      sessionId,
+      fileSpaceId: space.id,
+      mountSubpath: "actor",
+      baseSnapshotId: null,
+      materializedDir: "/tmp/preserved",
+    })
+    await updateFileMount(db, mount.id, { status: "failed", sandboxId })
+
+    // CLAIM: failed → recovering, returned.
+    const claimed = await claimFailedRecoverableMounts(db, 600)
+    assert.equal(claimed.length, 1)
+    assert.equal(claimed[0].id, mount.id)
+    assert.equal(claimed[0].status, "recovering")
+
+    // A leased mount is NOT a live mount (teardown/commit must not also grab it) ...
+    const active = await getActiveMountsForSession(db, sessionId)
+    assert.equal(
+      active.length,
+      0,
+      "a 'recovering' lease is excluded from active mounts"
+    )
+    // ... but IS still failed-recoverable (its sole-source VM must be kept alive, and
+    // the #4 data-free defer must keep deferring while it is mid-lease).
+    assert.equal(await sessionHasFailedRecoverableMounts(db, sessionId), true)
+    assert.equal(await sandboxHasFailedRecoverableMounts(db, sandboxId), true)
+
+    // A second claim under the same TTL does NOT re-pick the fresh lease (no double-
+    // recovery across replicas / the racing periodic sweep).
+    const again = await claimFailedRecoverableMounts(db, 600)
+    assert.equal(
+      again.length,
+      0,
+      "a fresh lease is not re-claimed under the TTL"
+    )
+
+    // RELEASE (a clean, non-crash failure): recovering → failed, re-claimable at once.
+    await releaseRecoveryClaims(db, [mount.id])
+    const afterRelease = await claimFailedRecoverableMounts(db, 600)
+    assert.equal(afterRelease.length, 1, "a released lease is re-claimable")
+    assert.equal(afterRelease[0].id, mount.id)
+  })
+})
+
+test("space.ts (R6 H-2): a crashed worker's stale 'recovering' lease is reclaimed once it ages past the TTL", async () => {
+  await withTestDbAndClient(async ({ db }) => {
+    const { workspaceId, actorId, sessionId } = await seedWorkspace(db)
+    const space = await ensureFileSpace(db, {
+      workspaceId,
+      owner: actorRef(actorId),
+    })
+    const mount = await insertFileMount(db, {
+      workspaceId,
+      sessionId,
+      fileSpaceId: space.id,
+      mountSubpath: "actor",
+      baseSnapshotId: null,
+      materializedDir: "/tmp/preserved",
+    })
+    await updateFileMount(db, mount.id, { status: "failed" })
+
+    const claimed = await claimFailedRecoverableMounts(db, 600)
+    assert.equal(claimed.length, 1) // now 'recovering', updated_at = NOW()
+
+    // A worker that crashed never released the lease. Under a POSITIVE TTL it stays held
+    // (updated_at == the frozen txn NOW(), not yet older than the window).
+    assert.equal((await claimFailedRecoverableMounts(db, 600)).length, 0)
+
+    // Age the lease: backdate updated_at an hour into the past. The touch trigger stamps
+    // updated_at=NOW() on every UPDATE, and the test txn freezes NOW(), so we disable the
+    // trigger + write a real clock_timestamp() to genuinely age the row (not a time hack).
+    await sql`ALTER TABLE file_mounts DISABLE TRIGGER trg_touch_updated_at__file_mounts`.execute(
+      db
+    )
+    await sql`UPDATE file_mounts SET updated_at = clock_timestamp() - interval '1 hour' WHERE id = ${mount.id}`.execute(
+      db
+    )
+    await sql`ALTER TABLE file_mounts ENABLE TRIGGER trg_touch_updated_at__file_mounts`.execute(
+      db
+    )
+
+    // The stale lease (updated_at now < NOW() - 600s) is reclaimed by the next sweep.
+    const reclaimed = await claimFailedRecoverableMounts(db, 600)
+    assert.equal(reclaimed.length, 1, "a stale lease past the TTL is reclaimed")
+    assert.equal(reclaimed[0].id, mount.id)
+  })
+})
+
+test("space.ts (R6 H-2): a failed→recovering CAS never collides with a re-provisioned live mount for the same (session, space)", async () => {
+  await withTestDbAndClient(async ({ db }) => {
+    const { workspaceId, actorId, sessionId } = await seedWorkspace(db)
+    const space = await ensureFileSpace(db, {
+      workspaceId,
+      owner: actorRef(actorId),
+    })
+
+    // Generation 1: a FAILED mount whose VM still holds unpulled bytes (excluded from
+    // the active partial-unique because 'failed' is excluded).
+    const failed = await insertFileMount(db, {
+      workspaceId,
+      sessionId,
+      fileSpaceId: space.id,
+      mountSubpath: "actor",
+      baseSnapshotId: null,
+      materializedDir: "/tmp/preserved",
+    })
+    await updateFileMount(db, failed.id, { status: "failed" })
+    // Generation 2: the session was re-provisioned → a NEW live mount for the SAME
+    // (session, space/subpath). A naive failed→recovering flip would re-enter the live
+    // set and collide with THIS row on uq_file_mounts_active_session_subpath.
+    const active = await insertFileMount(db, {
+      workspaceId,
+      sessionId,
+      fileSpaceId: space.id,
+      mountSubpath: "actor",
+      baseSnapshotId: null,
+      materializedDir: "/tmp/live",
+    })
+    await updateFileMount(db, active.id, { status: "active" })
+
+    // The claim must NOT throw a unique violation — 'recovering' is excluded from the
+    // active partial-unique, exactly like 'failed'.
+    const claimed = await claimFailedRecoverableMounts(db, 600)
+    assert.equal(claimed.length, 1)
+    assert.equal(claimed[0].id, failed.id)
+    assert.equal(claimed[0].status, "recovering")
+    // The live generation-2 mount is untouched + still the only active mount.
+    const stillActive = await getActiveMountsForSession(db, sessionId)
+    assert.equal(stillActive.length, 1)
+    assert.equal(stillActive[0].id, active.id)
   })
 })

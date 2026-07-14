@@ -23,7 +23,13 @@ CREATE TYPE file_parse_output_kind AS ENUM ('text', 'structured_json', 'derived_
 CREATE TYPE file_snapshot_reason AS ENUM ('session_commit', 'manual', 'import', 'gc_root');
 CREATE TYPE file_permission AS ENUM ('read', 'write', 'admin');
 CREATE TYPE file_access_grants_status AS ENUM ('active', 'revoked', 'superseded');
-CREATE TYPE file_mount_status AS ENUM ('provisioning', 'active', 'closed', 'failed');
+-- 'recovering' is a durable LEASE (R6 H-2): a 'failed' recoverable mount a recovery
+-- sweep has CLAIMED (CAS 'failed'→'recovering' under FOR UPDATE SKIP LOCKED) so only
+-- one worker/replica re-pulls its VM. It is NOT a live mount (excluded from the active
+-- partial-unique + live-sandbox indexes, like 'failed'/'closed') but IS still failed-
+-- recoverable (keepalive + the #4 defer keep its sole-source VM alive). A crashed
+-- worker's stale 'recovering' lease is re-claimed once updated_at ages past the TTL.
+CREATE TYPE file_mount_status AS ENUM ('provisioning', 'active', 'closed', 'failed', 'recovering');
 -- NOTE: content_blobs.backend is plain TEXT (no per-backend CHECK) — the backend
 -- set is deployment config, validated at the app write boundary (see the table
 -- def + content-storage-multi-backend-plan §7). key = f(sha), so no per-blob locator.
@@ -5950,16 +5956,19 @@ CREATE TABLE file_mounts (
 -- One active mount per (session, space) AND per (session, mount_subpath) so a
 -- session never has two live mounts competing for the same path (resolver
 -- ambiguity) or the same space.
+-- 'recovering' is a leased FAILED mount (never a live mount) → excluded here alongside
+-- 'closed'/'failed' so a failed→recovering CAS can never collide with a re-provisioned
+-- generation's live mount for the same (session, space/subpath).
 CREATE UNIQUE INDEX uq_file_mounts_active_session_space
   ON file_mounts(session_id, file_space_id)
-  WHERE status NOT IN ('closed', 'failed');
+  WHERE status NOT IN ('closed', 'failed', 'recovering');
 CREATE UNIQUE INDEX uq_file_mounts_active_session_subpath
   ON file_mounts(session_id, mount_subpath)
-  WHERE status NOT IN ('closed', 'failed');
+  WHERE status NOT IN ('closed', 'failed', 'recovering');
 -- Live mounts by owning CTI sandbox detail id (the sole mount→runtime identity).
 CREATE INDEX idx_file_mounts_live_sandbox
   ON file_mounts(sandbox_id)
-  WHERE sandbox_id IS NOT NULL AND status NOT IN ('closed', 'failed');
+  WHERE sandbox_id IS NOT NULL AND status NOT IN ('closed', 'failed', 'recovering');
 CREATE INDEX idx_file_mounts_status ON file_mounts(status, created_at DESC);
 CREATE INDEX idx_file_mounts_space ON file_mounts(file_space_id);
 

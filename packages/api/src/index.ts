@@ -76,6 +76,7 @@ import {
 import { recoverInterruptedExecutions } from "./modules/execution/service.js"
 import {
   recoverFailedSandboxMounts,
+  teardownBlockedSessionOffBoxSandboxes,
   reconcileSandboxes,
   reapStuckProvisioningSandboxes,
   retryStuckClosingSandboxes,
@@ -384,6 +385,20 @@ async function main() {
   // Recover sandbox mounts whose teardown commit failed earlier (live dirs were
   // preserved). Opt-in with the sandbox feature; best-effort.
   if (config.sandbox.provider !== "none") {
+    // (R6 H-5) Tear down the off-box sandbox of every session recoverInterruptedExecutions
+    // just marked 'blocked' — reconcile would SHIELD its healthy VM and the provider
+    // keepalive would renew its TTL forever. Runs BEFORE the mount recovery below so a
+    // teardown that leaves a mount 'failed' is re-pulled by the same startup sweep.
+    try {
+      const b = await teardownBlockedSessionOffBoxSandboxes()
+      if (b.tornDown > 0) {
+        log.warn(
+          `Tore down ${b.tornDown} off-box sandbox(es) for crash-blocked session(s)`
+        )
+      }
+    } catch (err) {
+      log.error({ err }, "Failed to tear down blocked-session sandboxes")
+    }
     try {
       const r = await recoverFailedSandboxMounts()
       if (r.attempted > 0) {

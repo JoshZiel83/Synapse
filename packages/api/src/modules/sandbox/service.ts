@@ -28,7 +28,8 @@ import {
   insertFileMount,
   updateFileMount,
   getActiveMountsForSession,
-  getFailedRecoverableMounts,
+  claimFailedRecoverableMounts,
+  releaseRecoveryClaims,
   sessionHasFailedRecoverableMounts,
   sandboxHasFailedRecoverableMounts,
   closeSessionFailedMounts,
@@ -704,6 +705,12 @@ const RECOVERY_KEEPALIVE_WINDOW_SECONDS = 1800
  *  alerts). ~20 re-drives keeps provider spend under a bounded window per stuck VM,
  *  rather than the infinite renew an updated_at-only window allowed. */
 const MAX_OFFBOX_RECOVERY_ATTEMPTS = 20
+
+/** (R6 H-2) How long a recovery LEASE ('recovering' status) is honored before a
+ *  crashed worker's claim is reclaimable by another sweep. Sized well above a normal
+ *  reconnect+pull+commit (which the 600s envd stream timeout already bounds per file)
+ *  so a healthy in-flight recovery is never stolen mid-pull. */
+const RECOVERY_LEASE_TTL_SECONDS = 600
 
 /** Resolve the CURRENTLY-configured adapter when it is off-box, else null. Shared
  *  by the off-box sweep + keepalive so both target the same provider. Injectable.
@@ -3271,85 +3278,146 @@ export interface RecoverFailedMountsResult {
  * hand. Best-effort and idempotent: safe to call on every API startup.
  */
 export async function recoverFailedSandboxMounts(): Promise<RecoverFailedMountsResult> {
-  const mounts = await getFailedRecoverableMounts(repo.defaultDbh())
-  // (R6 #4/#5) Group by SANDBOX_ID — each sandbox is an INDEPENDENT VM. #4 keeps a
-  // superseded straggler + its VM alive while it owns failed-recoverable mounts, so
-  // two generations' failed mounts can coexist for ONE session; a single session-
-  // resolved ref would pull the WRONG VM into another generation's mirror. Grouping by
-  // sandbox_id + pinning the ref to that runtime pulls each mount from its OWN VM. A
-  // mount with no sandbox_id (should not occur for a failed recoverable mount) falls
-  // back to a session-keyed group resolved by-session (host path).
-  const bySandbox = new Map<string, FileMountRow[]>()
-  for (const mount of mounts) {
-    const key =
-      (mount.sandboxId as string | null) ?? `session:${mount.sessionId}`
-    const list = bySandbox.get(key)
-    if (list) list.push(mount)
-    else bySandbox.set(key, [mount])
-  }
+  const run = repo.defaultDbh()
+  // (R6 H-2) CLAIM a durable lease on each failed-recoverable mount BEFORE touching its
+  // VM: CAS 'failed'→'recovering' under FOR UPDATE SKIP LOCKED so a second replica / the
+  // racing periodic sweep can't double-recover the same VM+dir. Claimed rows stay
+  // failed-recoverable (keepalive + #4 defer keep the VM) but are not live mounts. Any
+  // claim that does NOT reach 'closed' this sweep is released back to 'failed' in the
+  // finally; a crash skips the release and the TTL reclaims the stale lease.
+  const claimed = await claimFailedRecoverableMounts(
+    run,
+    RECOVERY_LEASE_TTL_SECONDS
+  )
+  const claimedIds = claimed.map((m) => m.id as string)
 
   let recovered = 0
   let stillFailed = 0
-  for (const [groupKey, sessionMounts] of bySandbox) {
-    const sessionId = sessionMounts[0]!.sessionId as string
-    const pinnedRuntimeId = groupKey.startsWith("session:")
-      ? undefined
-      : groupKey
-    // (R4 §6.5, F2) OFF-BOX recovery fork. An off-box VM whose bytes are UNPULLED
-    // must be RECONNECTED + PULLED + committed BEFORE it is killed — never the
-    // host "confirm-dead then commit the host dir" path (which would commit a
-    // never-pulled empty mirror and lose all VM work). Resolve the owning adapter
-    // row-driven (pinned to THIS sandbox); when off-box, hand off to recoverOffBoxSession.
-    const recoveryRef = await buildSandboxRefFromSandboxRow(
-      sessionMounts,
-      repo.defaultDbh(),
-      sessionId,
-      pinnedRuntimeId
-    )
-    if (recoveryRef) {
-      let recoveryAdapter: SandboxAdapter | null = null
-      try {
-        recoveryAdapter = adapterForRow(recoveryRef.adapter, recoveryRef.mode)
-      } catch {
-        recoveryAdapter = null
-      }
-      if (recoveryAdapter && isOffBoxAdapter(recoveryAdapter)) {
-        const res = await recoverOffBoxSession(
-          sessionId,
-          sessionMounts,
-          recoveryRef,
-          recoveryAdapter
-        )
-        recovered += res.recovered
-        stillFailed += res.stillFailed
-        continue
-      }
+  try {
+    // (R6 #4/#5) Group by SANDBOX_ID — each sandbox is an INDEPENDENT VM. #4 keeps a
+    // superseded straggler + its VM alive while it owns failed-recoverable mounts, so
+    // two generations' failed mounts can coexist for ONE session; a single session-
+    // resolved ref would pull the WRONG VM into another generation's mirror. Grouping by
+    // sandbox_id + pinning the ref to that runtime pulls each mount from its OWN VM. A
+    // mount with no sandbox_id (should not occur for a failed recoverable mount) falls
+    // back to a session-keyed group resolved by-session (host path).
+    const bySandbox = new Map<string, FileMountRow[]>()
+    for (const mount of claimed) {
+      const key =
+        (mount.sandboxId as string | null) ?? `session:${mount.sessionId}`
+      const list = bySandbox.get(key)
+      if (list) list.push(mount)
+      else bySandbox.set(key, [mount])
     }
 
-    // Confirm the runtime is stopped before snapshotting. If it's still alive
-    // (teardown's kill was swallowed), make ONE more attempt to stop it via the
-    // persisted ref, then re-check. A runtime that survives both is left for the
-    // next sweep — never committed under it.
-    const stopped = await ensureRuntimeStoppedForRecovery(
-      sessionId,
-      sessionMounts
-    )
-    if (!stopped) {
-      stillFailed += sessionMounts.length
-      console.error(
-        `[sandbox] recovery: runtime for session ${sessionId} is still alive after a kill attempt; ` +
-          `leaving ${sessionMounts.length} mount(s) 'failed' rather than snapshot a live dir`
+    for (const [groupKey, sessionMounts] of bySandbox) {
+      const sessionId = sessionMounts[0]!.sessionId as string
+      const pinnedRuntimeId = groupKey.startsWith("session:")
+        ? undefined
+        : groupKey
+      // (R4 §6.5, F2) OFF-BOX recovery fork. An off-box VM whose bytes are UNPULLED
+      // must be RECONNECTED + PULLED + committed BEFORE it is killed — never the
+      // host "confirm-dead then commit the host dir" path (which would commit a
+      // never-pulled empty mirror and lose all VM work). Resolve the owning adapter
+      // row-driven (pinned to THIS sandbox); when off-box, hand off to recoverOffBoxSession.
+      const recoveryRef = await buildSandboxRefFromSandboxRow(
+        sessionMounts,
+        repo.defaultDbh(),
+        sessionId,
+        pinnedRuntimeId
       )
-      continue
+      if (recoveryRef) {
+        let recoveryAdapter: SandboxAdapter | null = null
+        try {
+          recoveryAdapter = adapterForRow(recoveryRef.adapter, recoveryRef.mode)
+        } catch {
+          recoveryAdapter = null
+        }
+        if (recoveryAdapter && isOffBoxAdapter(recoveryAdapter)) {
+          const res = await recoverOffBoxSession(
+            sessionId,
+            sessionMounts,
+            recoveryRef,
+            recoveryAdapter
+          )
+          recovered += res.recovered
+          stillFailed += res.stillFailed
+          continue
+        }
+      }
+
+      // Confirm the runtime is stopped before snapshotting. If it's still alive
+      // (teardown's kill was swallowed), make ONE more attempt to stop it via the
+      // persisted ref, then re-check. A runtime that survives both is left for the
+      // next sweep — never committed under it.
+      const stopped = await ensureRuntimeStoppedForRecovery(
+        sessionId,
+        sessionMounts
+      )
+      if (!stopped) {
+        stillFailed += sessionMounts.length
+        console.error(
+          `[sandbox] recovery: runtime for session ${sessionId} is still alive after a kill attempt; ` +
+            `leaving ${sessionMounts.length} mount(s) 'failed' rather than snapshot a live dir`
+        )
+        continue
+      }
+      for (const mount of sessionMounts) {
+        const outcome = await recoverOneFailedMount(mount)
+        if (outcome === "recovered") recovered++
+        else if (outcome === "stillFailed") stillFailed++
+        // "skipped" (live dir already gone) counts as neither — it's a clean close.
+      }
     }
-    for (const mount of sessionMounts) {
-      const outcome = await recoverOneFailedMount(mount)
-      if (outcome === "recovered") recovered++
-      else if (outcome === "stillFailed") stillFailed++
-      // "skipped" (live dir already gone) counts as neither — it's a clean close.
+  } finally {
+    // (R6 H-2) release every lease that did NOT reach 'closed' this sweep back to
+    // 'failed', so the next sweep re-claims it immediately (a clean, non-crash failure).
+    // A worker that CRASHED skips this — its 'recovering' rows are reclaimed via the TTL.
+    await releaseRecoveryClaims(run, claimedIds).catch(() => {})
+  }
+  return { attempted: claimed.length, recovered, stillFailed }
+}
+
+/**
+ * (R6 H-5) Tear down the off-box sandbox of every crash-'blocked' session. On restart
+ * recoverInterruptedExecutions marks each interrupted session 'blocked' but does NOT
+ * tear down its sandbox; reconcile then SHIELDS a healthy off-box VM, so the provider
+ * keepalive renews its TTL forever (the infinite-renew leak). Tear each down
+ * best-effort (a pinned-runtime teardown → pull the VM into the mirror, commit, delete)
+ * so the work commits and the VM is released. Off-box ONLY: host/resident sandboxes
+ * have no provider TTL (resource_id='') and their dead process is reaped by reconcile;
+ * docker is provider-backed but not off-box, so the adapter check skips it. Runs BEFORE
+ * recoverFailedSandboxMounts so a teardown that leaves a mount 'failed' is re-pulled by
+ * the same startup sweep.
+ */
+export async function teardownBlockedSessionOffBoxSandboxes(): Promise<{
+  tornDown: number
+}> {
+  const run = repo.defaultDbh()
+  const candidates = await repo.listBlockedSessionLiveSandboxes(run)
+  let tornDown = 0
+  for (const c of candidates) {
+    let offBox = false
+    try {
+      const adapter = adapterForRow(c.adapter, c.mode)
+      offBox = isOffBoxAdapter(adapter)
+    } catch {
+      offBox = false // unknown/legacy tag → not off-box, leave to reconcile
+    }
+    if (!offBox) continue
+    try {
+      // Pin the runtime so the teardown targets exactly this blocked sandbox (never a
+      // resolver-picked sibling), and pull-before-delete preserves its unpulled work.
+      await teardownSandbox(c.sessionId, { runtimeId: c.runtimeId })
+      tornDown++
+    } catch (err) {
+      log.error(
+        { sessionId: c.sessionId, runtimeId: c.runtimeId, err },
+        "H-5: blocked-session off-box teardown failed (keepalive TTL + reaper backstop)"
+      )
     }
   }
-  return { attempted: mounts.length, recovered, stillFailed }
+  return { tornDown }
 }
 
 /**

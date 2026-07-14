@@ -10,6 +10,7 @@ export {
   commitSpaces,
   teardownSandbox,
   recoverFailedSandboxMounts,
+  teardownBlockedSessionOffBoxSandboxes,
   reconcileSandboxes,
   reapStuckProvisioningSandboxes,
   retryStuckClosingSandboxes,

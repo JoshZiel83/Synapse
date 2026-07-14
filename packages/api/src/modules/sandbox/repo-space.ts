@@ -65,7 +65,7 @@ export interface FileMountRow {
   baseSnapshotId: string | null
   resultSnapshotId: string | null
   refreshPolicy: "per_turn" | "on_teardown"
-  status: "provisioning" | "active" | "closed" | "failed"
+  status: "provisioning" | "active" | "closed" | "failed" | "recovering"
   materializedDir: string | null
   errorMessage: string | null
 }
@@ -232,7 +232,12 @@ export async function updateFileMount(
   )
 }
 
-/** Active (non-closed/failed) mounts for a session. */
+/**
+ * Active (LIVE) mounts for a session. 'recovering' is EXCLUDED alongside
+ * 'closed'/'failed' (R6 H-2): a failed mount a recovery sweep has LEASED is owned by
+ * that sweep, not a live mount of the current turn — teardown/commit must not also
+ * grab it (the recovery re-pull owns its VM + mirror).
+ */
 export async function getActiveMountsForSession(
   client: Executor,
   sessionId: string
@@ -242,37 +247,77 @@ export async function getActiveMountsForSession(
            sandbox_id, base_snapshot_id, result_snapshot_id,
            refresh_policy, status, materialized_dir, error_message
     FROM file_mounts
-    WHERE session_id = ${sessionId} AND status NOT IN ('closed', 'failed')
+    WHERE session_id = ${sessionId} AND status NOT IN ('closed', 'failed', 'recovering')
     ORDER BY mount_subpath`.execute(client)
   return result.rows
 }
 
 /**
- * Mounts left in 'failed' state with a preserved live dir — the teardown
- * commit failed and the materialized_dir was kept for recovery. Grouped by
- * session for the startup reconciler to retry. `limit` bounds a single sweep.
+ * (R6 H-2) CLAIM a batch of failed-recoverable mounts as a durable recovery LEASE:
+ * atomically CAS 'failed'→'recovering' under FOR UPDATE SKIP LOCKED and RETURN the
+ * claimed rows. Two API replicas (or the startup sweep racing the periodic one) get
+ * DISJOINT sets — SKIP LOCKED hands each contended row to exactly one claimer, and the
+ * flip to 'recovering' fences the rest. A crashed worker's lease is reclaimed once the
+ * row's updated_at ages past `leaseTtlSeconds` (the touch trigger stamps updated_at at
+ * claim time). 'recovering' stays failed-recoverable (keepalive + the #4 defer keep its
+ * VM) but is NOT a live mount (excluded from the active/live partial indexes), so the
+ * flip can never collide with a re-provisioned generation's mount. `limit` bounds one
+ * sweep. Callers MUST release un-finished claims (see releaseRecoveryClaims).
  */
-export async function getFailedRecoverableMounts(
+export async function claimFailedRecoverableMounts(
   client: Executor,
+  leaseTtlSeconds: number,
   limit = 200
 ): Promise<FileMountRow[]> {
   const result = await sql<FileMountRow>`
-    SELECT id, workspace_id, session_id, file_space_id, mount_subpath,
-           sandbox_id, base_snapshot_id, result_snapshot_id,
-           refresh_policy, status, materialized_dir, error_message
-    FROM file_mounts
-    WHERE status = 'failed' AND materialized_dir IS NOT NULL
-    ORDER BY updated_at ASC
-    LIMIT ${limit}`.execute(client)
+    UPDATE file_mounts
+       SET status = 'recovering'
+     WHERE id IN (
+       SELECT id FROM file_mounts
+        WHERE materialized_dir IS NOT NULL
+          AND (
+            status = 'failed'
+            OR (status = 'recovering'
+                AND updated_at < NOW() - make_interval(secs => ${leaseTtlSeconds}))
+          )
+        ORDER BY updated_at ASC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+     )
+    RETURNING id, workspace_id, session_id, file_space_id, mount_subpath,
+              sandbox_id, base_snapshot_id, result_snapshot_id,
+              refresh_policy, status, materialized_dir, error_message`.execute(
+    client
+  )
   return result.rows
 }
 
 /**
- * (R4 §6.3/§6.5) Does this session have any 'failed' recoverable mount (a
+ * (R6 H-2) RELEASE recovery leases that did NOT reach a terminal state this sweep:
+ * flip any still-'recovering' mount in `mountIds` back to 'failed' so the next sweep
+ * re-claims it immediately (a clean, non-crash failure). Mounts already advanced to
+ * 'closed' (recovered) or 'failed' (reset elsewhere) are left untouched. A worker that
+ * CRASHES skips this release — its rows stay 'recovering' and are reclaimed by the TTL.
+ */
+export async function releaseRecoveryClaims(
+  client: Executor,
+  mountIds: string[]
+): Promise<void> {
+  if (mountIds.length === 0) return
+  await sql`
+    UPDATE file_mounts
+       SET status = 'failed'
+     WHERE id = ANY(${mountIds}::uuid[])
+       AND status = 'recovering'`.execute(client)
+}
+
+/**
+ * (R4 §6.3/§6.5) Does this session have any failed-recoverable mount (a
  * materialized_dir preserved by a teardown pull/commit failure)? The off-box
  * closing reaper re-drive uses this: a 'closing' off-box row with NO active mounts
- * but pending FAILED mounts must NOT DELETE the VM (+ rm the preserved dirs) — that
- * unrecovered work belongs to recoverFailedSandboxMounts' re-pull.
+ * but pending failed/recovering mounts must NOT DELETE the VM (+ rm the preserved
+ * dirs) — that unrecovered work belongs to recoverFailedSandboxMounts' re-pull.
+ * (R6 H-2) Includes 'recovering' — a leased mount is still un-pulled, sole-source VM.
  */
 export async function sessionHasFailedRecoverableMounts(
   client: Executor,
@@ -282,7 +327,7 @@ export async function sessionHasFailedRecoverableMounts(
     SELECT 1 AS one
     FROM file_mounts
     WHERE session_id = ${sessionId}
-      AND status = 'failed'
+      AND status IN ('failed', 'recovering')
       AND materialized_dir IS NOT NULL
     LIMIT 1`.execute(client)
   return result.rows.length > 0
@@ -294,6 +339,8 @@ export async function sessionHasFailedRecoverableMounts(
  * (NOT the session) so the data-free convergence of a superseded straggler never
  * destroys a VM whose OWN failed mounts are still recoverable, and never defers on a
  * DIFFERENT generation's mounts that share the session.
+ * (R6 H-2) Includes 'recovering': the #4 defer must keep the VM alive while a mount is
+ * mid-recovery-lease, not just before it is claimed.
  */
 export async function sandboxHasFailedRecoverableMounts(
   client: Executor,
@@ -303,17 +350,19 @@ export async function sandboxHasFailedRecoverableMounts(
     SELECT 1 AS one
     FROM file_mounts
     WHERE sandbox_id = ${runtimeId}
-      AND status = 'failed'
+      AND status IN ('failed', 'recovering')
       AND materialized_dir IS NOT NULL
     LIMIT 1`.execute(client)
   return result.rows.length > 0
 }
 
 /**
- * (R5 #4 review-fix) Terminally close every FAILED mount of a session — used when
- * off-box recovery is EXHAUSTED (the un-pulled VM is unrecoverable, so its preserved
- * materializedDir is being discarded). Flips 'failed' → 'closed' so the recovery
- * sweep + the keepalive's failed-mount predicate stop matching the row.
+ * (R5 #4 review-fix) Terminally close every failed-recoverable mount of a session —
+ * used when off-box recovery is EXHAUSTED (the un-pulled VM is unrecoverable, so its
+ * preserved materializedDir is being discarded). Flips failed/recovering → 'closed' so
+ * the recovery sweep + the keepalive's failed-mount predicate stop matching the row.
+ * (R6 H-2) Also closes a leased 'recovering' mount — exhaustion overrides an in-flight
+ * lease (the VM is being destroyed regardless).
  */
 export async function closeSessionFailedMounts(
   client: Executor,
@@ -323,7 +372,7 @@ export async function closeSessionFailedMounts(
     UPDATE file_mounts
        SET status = 'closed', closed_at = NOW()
      WHERE session_id = ${sessionId}
-       AND status = 'failed'`.execute(client)
+       AND status IN ('failed', 'recovering')`.execute(client)
 }
 
 /**
