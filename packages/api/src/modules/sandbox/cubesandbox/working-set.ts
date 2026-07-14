@@ -22,8 +22,17 @@
 // root (`${vmRoot}/<subpath>`) and the VFS key prefix (`/<subpath>`) are derived.
 
 import { Buffer } from "node:buffer"
-import { basename, dirname, join, relative } from "node:path"
+import {
+  basename,
+  dirname,
+  join,
+  posix,
+  relative,
+  resolve,
+  sep,
+} from "node:path"
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
+import { createLogger } from "../../../infrastructure/logger/index.js"
 import type { WorkingSetBridge } from "../data-plane.js"
 import {
   createDetachedWorkingSetBridge,
@@ -40,9 +49,77 @@ import {
 } from "./data-plane.js"
 import { CubeEnvdNotFoundError } from "./types.js"
 
-/** Cap on directory-recursion depth (defensive against a symlink-loop / pathological
- *  tree; the mount trees are shallow agent working sets). */
-const MAX_LIST_DEPTH = 64
+const log = createLogger("sandbox.cubesandbox")
+
+/**
+ * (R5 #5) Max directory-recursion depth. A GENUINE on-disk directory cycle (a
+ * bind-mount of a parent into a child) makes recursion unbounded → OOM/hang the
+ * SHARED API, so exceeding this FAILS LOUD (a typed error the pull path surfaces as
+ * a preservation warning), never the old silent `return` that dropped every deeper
+ * file → pruned the mirror → committed spurious deletes. Raised far above any real
+ * agent working set. (Symlink cycles are already safe — listOne never follows a
+ * symlink type.)
+ */
+const MAX_LIST_DEPTH = 4096
+
+/** A working-set transport invariant was violated (path traversal / depth cycle).
+ *  Thrown fail-loud so the pull/push aborts + preserves rather than corrupting. */
+export class WorkingSetTransportError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "WorkingSetTransportError"
+  }
+}
+
+/**
+ * (R5 #1 SECURITY) POSIX-only working-set key normalizer + mount-scope guard.
+ *
+ * The working-set channel maps envd-returned entry paths onto BOTH host (mirror) and
+ * VM filesystem sinks, and envd is UNTRUSTED (the agent runs code inside the VM — the
+ * exact adversary the tool plane's canonicalVfsPath defends against). This is the
+ * working-set channel's equivalent guard. It deliberately does NOT reuse
+ * canonicalVfsPath: that is a DOS/Windows validator that THROWS on legal Linux names
+ * (aux/con/com1/trailing dot or space/`:`/`\`) — using it here would DROP legitimate
+ * base files → prune them from the mirror → commit spurious deletes. Instead this
+ * ONLY collapses `.`/`..` (posix.normalize, which drops `..` past the root) and
+ * REJECTS a key that escapes its mount VFS root. Returns the canonical mount-rooted
+ * key, or null for a non-absolute / escaping key (an attacker-crafted envd path).
+ */
+export function scopeWorkingSetKey(
+  vfsKey: string,
+  mountVfsRoot: string
+): string | null {
+  if (!vfsKey || !vfsKey.startsWith("/")) return null
+  const norm = posix.normalize(vfsKey)
+  if (norm !== mountVfsRoot && !norm.startsWith(`${mountVfsRoot}/`)) return null
+  return norm
+}
+
+/** (R5 #1 belt) Assert a host mirror target resolves UNDER the mirror mount dir
+ *  before any write/read/remove touches it. Fail-loud on an escape. */
+function assertUnderMirror(target: string, mirrorMountDir: string): void {
+  const root = resolve(mirrorMountDir)
+  const abs = resolve(target)
+  if (abs !== root && !abs.startsWith(root + sep)) {
+    throw new WorkingSetTransportError(
+      `working-set mirror write escapes the mount dir (blocked): ${target}`
+    )
+  }
+}
+
+/** (R5 #1 belt) Assert a lowered VM path stays UNDER the VM mount root before the
+ *  raw envd read/write/remove leg (closes the in-VM boundary erosion). */
+function assertUnderVmRoot(vmPath: string, vmMountRoot: string): void {
+  const root = trimTrailingSlash(vmMountRoot)
+  // normalize FIRST — a raw string-prefix check passes "/workspace/../etc" (it
+  // literally starts with "/workspace/"), so collapse `..` before comparing.
+  const norm = posix.normalize(vmPath)
+  if (norm !== root && !norm.startsWith(`${root}/`)) {
+    throw new WorkingSetTransportError(
+      `working-set VM op escapes the mount root (blocked): ${vmPath}`
+    )
+  }
+}
 
 /**
  * (R4 §1.4b / 2b / 2d) The envd WorkingSetTransport. `list` recurses `listDir`
@@ -60,9 +137,14 @@ export function makeEnvdWorkingSetTransport(opts: {
   const listOne = async (
     vmDir: string,
     depth: number,
+    mountVfsRoot: string,
     out: ContainerFileStat[]
   ): Promise<void> => {
-    if (depth > MAX_LIST_DEPTH) return
+    if (depth > MAX_LIST_DEPTH) {
+      throw new WorkingSetTransportError(
+        `working-set list depth ${depth} exceeds ${MAX_LIST_DEPTH} under ${mountVfsRoot} (possible directory cycle)`
+      )
+    }
     let entries
     try {
       entries = await envd.listDir(vmDir)
@@ -73,20 +155,30 @@ export function makeEnvdWorkingSetTransport(opts: {
       throw err
     }
     for (const e of entries) {
+      // (R5 #1 SECURITY) The envd entry path is UNTRUSTED. Normalize + scope-check it
+      // to the mount VFS root BEFORE it is used as a recursion root OR a mirror key.
+      // An escaping key (a malicious/compromised envd injecting `..`) is DROPPED —
+      // never dialed, never a host/VM sink. This is the working-set channel's mirror
+      // of the tool plane's canonicalVfsPath on the same untrusted-VM surface.
+      const key = scopeWorkingSetKey(vmToVfs(e.path, vmRoot, ""), mountVfsRoot)
+      if (key === null) {
+        log.warn(
+          { vmDir, rawPath: e.path, mountVfsRoot },
+          "working-set: dropped an out-of-scope envd entry (path traversal blocked)"
+        )
+        continue
+      }
       if (e.type === "directory") {
-        // Descend ALL subdirs incl dotdirs (find parity — 2b).
-        await listOne(e.path, depth + 1, out)
+        // Descend the RE-DERIVED clean VM path (not the raw envd path) — ALL subdirs
+        // incl dotdirs (find parity — 2b).
+        await listOne(vfsToVm(key, vmRoot), depth + 1, mountVfsRoot, out)
         continue
       }
       // REGULAR files only — symlink/unknown are excluded (find -type f parity).
       if (e.type !== "file") continue
-      // 2d: the mirror/stat-cache key is the VFS path (vmRoot stripped). A path not
-      // under the VM root is skipped rather than leaked as a raw key.
-      const relpath = vmToVfs(e.path, vmRoot, "")
-      if (!relpath || !relpath.startsWith("/")) continue
       const ms = rfc3339ToEpochMs(e.modifiedTime)
       out.push({
-        relpath,
+        relpath: key,
         size: e.size ?? 0,
         // display-only whole-second (docker parity); NOT the reconcile key.
         mtimeSec: ms !== undefined ? Math.trunc(ms / 1000) : 0,
@@ -97,25 +189,41 @@ export function makeEnvdWorkingSetTransport(opts: {
     }
   }
 
+  /** Lower a validated VFS key to the VM path + belt-assert it stays under vmRoot. */
+  const toVm = (relpath: string): string => {
+    const vm = vfsToVm(relpath, vmRoot)
+    assertUnderVmRoot(vm, trimTrailingSlash(vmRoot))
+    return vm
+  }
+
   return {
     async list(mountRoots) {
       const out: ContainerFileStat[] = []
       for (const root of mountRoots) {
-        await listOne(trimTrailingSlash(root), 0, out)
+        const trimmed = trimTrailingSlash(root)
+        // The mount's VFS root (e.g. "/conversation") — the scope every entry key
+        // under this root must stay within.
+        const mountVfsRoot = vmToVfs(trimmed, vmRoot, "")
+        if (!mountVfsRoot.startsWith("/")) {
+          throw new WorkingSetTransportError(
+            `working-set mount root is not under the VM root: ${root}`
+          )
+        }
+        await listOne(trimmed, 0, mountVfsRoot, out)
       }
       return out
     },
     async read(relpath) {
-      return envd.readFile(vfsToVm(relpath, vmRoot))
+      return envd.readFile(toVm(relpath))
     },
     async write(relpath, bytes) {
       // envd writeFile auto-creates parents + is a whole-file replace (NOT atomic;
       // acceptable for the base PUSH — the file is created fresh, no concurrent
       // reader of an unfinished tmp).
-      await envd.writeFile(vfsToVm(relpath, vmRoot), bytes)
+      await envd.writeFile(toVm(relpath), bytes)
     },
     async remove(relpath) {
-      await envd.remove(vfsToVm(relpath, vmRoot))
+      await envd.remove(toVm(relpath))
     },
   }
 }
@@ -177,15 +285,23 @@ export function createCubeEnvdWorkingSetBridge(opts: {
       mountRoots: [vmMountRoot],
       transport,
       statCache: opts.statCache,
-      readMirrorFile: (rel) => readFile(join(sandboxRoot, rel)),
+      readMirrorFile: (rel) => {
+        const target = join(sandboxRoot, rel)
+        assertUnderMirror(target, mirrorMountDir)
+        return readFile(target)
+      },
       writeMirrorFile: async (rel, bytes) => {
         const target = join(sandboxRoot, rel)
+        assertUnderMirror(target, mirrorMountDir) // (#1 belt) never write outside the mount
         await mkdir(dirname(target), { recursive: true })
         await writeFile(target, bytes)
       },
       listMirrorFiles: () => walkMirror(mirrorMountDir, sandboxRoot),
-      removeMirrorFile: (rel) =>
-        rm(join(sandboxRoot, rel), { force: true }).catch(() => {}),
+      removeMirrorFile: (rel) => {
+        const target = join(sandboxRoot, rel)
+        assertUnderMirror(target, mirrorMountDir) // (#1 belt) never delete outside the mount
+        return rm(target, { force: true }).catch(() => {})
+      },
     })
   }
 

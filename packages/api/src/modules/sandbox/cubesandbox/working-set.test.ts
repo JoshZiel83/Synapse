@@ -10,7 +10,11 @@ import {
   makeDockerExecTransport,
   type DockerExecFn,
 } from "../working-set-bridge.js"
-import { makeEnvdWorkingSetTransport } from "./working-set.js"
+import {
+  makeEnvdWorkingSetTransport,
+  scopeWorkingSetKey,
+  WorkingSetTransportError,
+} from "./working-set.js"
 import { CubeEnvdNotFoundError } from "./types.js"
 import type { RemoteEnvdTransport } from "./data-plane.js"
 import type { FileEntry } from "./types.js"
@@ -181,4 +185,107 @@ test("R4 — a not-yet-created mount root lists as EMPTY (fresh VM pre-push), no
   const transport = makeEnvdWorkingSetTransport({ envd, vmRoot: "/workspace" })
   const listing = await transport.list(["/workspace/conversation"])
   assert.deepEqual(listing, [])
+})
+
+// ── (R5 #1 SECURITY) path-traversal guard on the untrusted envd listing ─────────
+
+test("#1 scopeWorkingSetKey: rejects an escaping key, accepts + collapses in-mount", () => {
+  // escape past the mount root → null (dropped)
+  assert.equal(
+    scopeWorkingSetKey("/conversation/../../session-2/pwn", "/conversation"),
+    null
+  )
+  assert.equal(scopeWorkingSetKey("/actor/x", "/conversation"), null)
+  assert.equal(scopeWorkingSetKey("relative/no/slash", "/conversation"), null)
+  // in-mount → canonical key; an in-mount `..` collapses but stays in scope
+  assert.equal(
+    scopeWorkingSetKey("/conversation/sub/x.py", "/conversation"),
+    "/conversation/sub/x.py"
+  )
+  assert.equal(
+    scopeWorkingSetKey("/conversation/a/../b", "/conversation"),
+    "/conversation/b"
+  )
+  assert.equal(
+    scopeWorkingSetKey("/conversation", "/conversation"),
+    "/conversation"
+  )
+})
+
+test("#1 a malicious envd entry with a `..` path is DROPPED from the listing (no cross-session key)", async () => {
+  // Reproduce the reported attack: a compromised envd returns an entry whose path
+  // escapes the mount into a sibling session. It must NEVER surface as a mirror key.
+  const envd = stubEnvd({
+    "/workspace/conversation": [
+      {
+        name: "ok.py",
+        path: "/workspace/conversation/ok.py",
+        type: "file",
+        size: 1,
+        modifiedTime: MT,
+      },
+      {
+        name: "pwn",
+        path: "/workspace/conversation/../../session-2/pwn",
+        type: "file",
+        size: 9,
+        modifiedTime: MT,
+      },
+    ],
+  })
+  const transport = makeEnvdWorkingSetTransport({ envd, vmRoot: "/workspace" })
+  const listing = await transport.list(["/workspace/conversation"])
+  const keys = listing.map((f) => f.relpath)
+  assert.deepEqual(
+    keys,
+    ["/conversation/ok.py"],
+    "the `..`-escaping entry is dropped"
+  )
+  assert.ok(
+    !keys.some((k) => k.includes("..") || k.includes("session-2")),
+    "no traversal key survives"
+  )
+})
+
+test("#1 a malicious DIRECTORY entry with `..` is not recursed into", async () => {
+  const envd = stubEnvd({
+    "/workspace/conversation": [
+      {
+        name: "evil",
+        path: "/workspace/conversation/../../etc",
+        type: "directory",
+      },
+    ],
+    // If the guard failed, listOne would try to descend "/etc":
+    "/etc": [
+      {
+        name: "passwd",
+        path: "/etc/passwd",
+        type: "file",
+        size: 1,
+        modifiedTime: MT,
+      },
+    ],
+  })
+  const transport = makeEnvdWorkingSetTransport({ envd, vmRoot: "/workspace" })
+  const listing = await transport.list(["/workspace/conversation"])
+  assert.deepEqual(
+    listing,
+    [],
+    "the escaping dir is dropped, /etc never enumerated"
+  )
+})
+
+test("#1 read/write/remove belt: a lowered VM path escaping the VM root fails loud", async () => {
+  const envd = stubEnvd({})
+  const transport = makeEnvdWorkingSetTransport({ envd, vmRoot: "/workspace" })
+  // A relpath that lowers outside /workspace must be rejected by the transport belt.
+  await assert.rejects(
+    () => transport.read("/../etc/passwd"),
+    (e: unknown) => e instanceof WorkingSetTransportError
+  )
+  await assert.rejects(
+    () => transport.remove("/../etc/passwd"),
+    (e: unknown) => e instanceof WorkingSetTransportError
+  )
 })
