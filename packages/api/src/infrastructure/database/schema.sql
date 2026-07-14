@@ -3798,6 +3798,14 @@ CREATE TABLE sandboxes (
   -- process hazard. NULL for docker/off-box (no host pid) and non-Linux hosts.
   host_pid_identity TEXT,
   deadline_at TIMESTAMPTZ,
+  -- R5 #6 (multi-replica durable fencing). Monotonic teardown ownership token.
+  -- The teardown that flips active/provisioning→'closing' bumps this and captures
+  -- N; it re-reads it right BEFORE the irreversible cluster (provider VM DELETE →
+  -- dir rm → mount-close → soft-delete) and aborts if it changed (a concurrent
+  -- teardown on another replica took over), and every terminal DB write carries
+  -- WHERE teardown_epoch=N. This fences the destructive side effects across
+  -- processes — the state-CAS alone only makes the final row transition idempotent.
+  teardown_epoch BIGINT NOT NULL DEFAULT 0,
   error_message TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

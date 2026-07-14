@@ -328,6 +328,13 @@ const envObjectSchema = z.object({
     z.coerce.number().int().min(1).default(512)
   ),
   SANDBOX_DOCKER_MEMORY: withDefault(z.string(), "1g"),
+  // R5 #12c — a stable per-DEPLOYMENT id stamped on every provider VM's metadata
+  // (alongside the runtimeId provenance tag) so the orphan sweep only reaps VMs
+  // THIS deployment created. Without it, two Synapse deployments sharing one Cube
+  // account would each classify the other's VMs as orphans and reap them. Empty
+  // default = single-deployment (the sweep then filters on the runtimeId tag alone,
+  // the current behavior); set a unique value per deployment sharing a provider.
+  SANDBOX_DEPLOYMENT_ID: withDefault(z.string(), ""),
   // cubesandbox:bare (Mode-B, OFF-BOX — P4b). The FIRST provider-backed bare
   // substrate: a remote sandbox VM reached over the CubeSandbox wire client
   // (control plane = E2B-compat REST; data plane = envd over CubeProxy). Defaults
@@ -742,6 +749,8 @@ export const config = {
     // the shared transport facts are read under their EXISTING keys.
     provider: resolveSandboxProviderName(env),
     mode: resolveSandboxMode(env),
+    // R5 #12c: per-deployment provenance for the provider orphan sweep.
+    deploymentId: env.SANDBOX_DEPLOYMENT_ID.trim(),
     // Origin the LOCAL sandbox device-runtime dials back to (loopback for a
     // containerized local deploy); falls back to app.baseUrl when unset.
     serverOrigin:

@@ -2382,6 +2382,7 @@ export interface Sandboxes {
   sessionId: string | null;
   stashManifestId: string | null;
   state: Generated<SandboxesState>;
+  teardownEpoch: Generated<Int8>;
   updatedAt: Generated<Date>;
   workspaceId: string;
 }
@@ -2405,6 +2406,7 @@ export interface SandboxesLive {
   sessionId: string | null;
   stashManifestId: string | null;
   state: SandboxesState | null;
+  teardownEpoch: Int8 | null;
   updatedAt: Date | null;
   workspaceId: string | null;
 }
