@@ -33,10 +33,10 @@ export interface AdapterConfigContract {
   /** boot validation — issues pushed onto the superRefine ctx when selected. */
   validate(env: RawEnv): ConfigIssue[]
   /**
-   * Production fail-closed (#6): https scheme, non-loopback, non-empty key.
-   * R4 Phase 3: currently INERT ([]) — the CURRENT validation lives in
-   * `validate`; the production hardening lands in a later sub-phase. Wired now so
-   * the seam exists (called when NODE_ENV==='production').
+   * Production fail-closed (called only when NODE_ENV==='production'). The off-box
+   * cube adapter enforces https + non-loopback + a non-empty API key here (#10); the
+   * host adapters (local/docker) have no production-only network hardening, so they
+   * return [].
    */
   validateProduction(env: RawEnv, nodeEnv: string): ConfigIssue[]
 }
@@ -73,8 +73,6 @@ export interface AdapterEndpointContract {
 export interface SandboxAdapterMeta {
   /** persisted adapter tag (== provider); written to sandboxes.adapter. */
   readonly tag: string
-  /** whether create()/rebuild need an async token exchange (off-box: true). */
-  readonly credentialed: boolean
   /** off-box = the VM is the store; drives working-set + teardown ordering. */
   readonly offBox: boolean
   /** env keys this adapter reads + a validate() the boot superRefine dispatches to. */
@@ -213,7 +211,6 @@ export const SANDBOX_ADAPTER_METADATA: readonly SandboxAdapterMetadataEntry[] =
       mode: "resident",
       meta: {
         tag: "local",
-        credentialed: false,
         offBox: false,
         config: {
           envKeys: [],
@@ -229,7 +226,6 @@ export const SANDBOX_ADAPTER_METADATA: readonly SandboxAdapterMetadataEntry[] =
       mode: "resident",
       meta: {
         tag: "docker",
-        credentialed: false,
         offBox: false,
         config: {
           envKeys: [
@@ -312,7 +308,6 @@ export const SANDBOX_ADAPTER_METADATA: readonly SandboxAdapterMetadataEntry[] =
       mode: "bare",
       meta: {
         tag: "local",
-        credentialed: false,
         offBox: false,
         config: {
           envKeys: [],
@@ -328,7 +323,6 @@ export const SANDBOX_ADAPTER_METADATA: readonly SandboxAdapterMetadataEntry[] =
       mode: "bare",
       meta: {
         tag: "docker",
-        credentialed: false,
         offBox: false,
         config: {
           envKeys: [
@@ -405,7 +399,6 @@ export const SANDBOX_ADAPTER_METADATA: readonly SandboxAdapterMetadataEntry[] =
         tag: "cubesandbox",
         // OFF-BOX: a genuinely remote VM — the data plane carries an envd/traffic
         // token secret captured at create and re-minted at reconnect (Phase 1b).
-        credentialed: true,
         offBox: true,
         config: {
           envKeys: [

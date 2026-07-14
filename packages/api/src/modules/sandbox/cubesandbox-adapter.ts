@@ -292,7 +292,6 @@ export function makeCubesandboxBareAdapter(
     provider: "cubesandbox",
     mode: "bare",
     kind: "offBoxBare",
-    catalogSource: "api_authored",
     capabilities: descriptor,
     meta: metaEntry.meta,
     endpoint: metaEntry.endpoint,

@@ -1,7 +1,7 @@
 // Sandbox ADAPTER registry (§4.1 / §4.7.2). Supersedes the P2 `selectSandboxBackend`
 // (which forked ONLY on provider and never on mode — so SANDBOX_MODE=bare was
 // inert). An adapter is keyed `${provider}:${mode}` and carries the metadata the
-// provision spine forks on (catalogSource, capabilities) plus the lifecycle
+// provision spine forks on (capabilities, meta.offBox / kind) plus the lifecycle
 // (create/connect). The bare data plane is rebuilt lazily by bare-dispatch on a
 // registry miss (adapter-bound endpoint scheme, P1.3); it is NOT carried on the
 // adapter (the dead `dataPlane?()` method was removed in P1.2). P1.2 INVARIANT
@@ -154,7 +154,6 @@ export interface SandboxAdapter {
   readonly mode: "resident" | "bare"
   /** (#13) discriminant for off-box narrowing; derived from mode + meta.offBox. */
   readonly kind: SandboxAdapterKind
-  readonly catalogSource: "control_plane" | "api_authored"
   /** Frozen descriptor for a bare adapter; null for a resident adapter. */
   readonly capabilities: SandboxCapabilityDescriptor | null
   /**
@@ -364,7 +363,6 @@ function makeLocalResidentAdapter(deps?: {
     provider: "local",
     mode: "resident",
     kind,
-    catalogSource: "control_plane",
     capabilities: null,
     meta,
     endpoint,
@@ -395,7 +393,6 @@ function makeDockerResidentAdapter(deps?: {
     provider: "docker",
     mode: "resident",
     kind,
-    catalogSource: "control_plane",
     capabilities: null,
     meta,
     endpoint,
@@ -472,7 +469,6 @@ export function makeLocalBareAdapter(
     provider: "local",
     mode: "bare",
     kind,
-    catalogSource: "api_authored",
     capabilities: descriptor,
     meta,
     endpoint,
@@ -758,7 +754,6 @@ export function makeDockerBareAdapter(
     provider: "docker",
     mode: "bare",
     kind,
-    catalogSource: "api_authored",
     capabilities: descriptor,
     meta,
     endpoint,
