@@ -36,7 +36,11 @@ import {
 } from "../devices/repo.js"
 import { validateTunnelInternalUrl } from "../devices/control-plane.js"
 import { reapDockerSandboxOrphans } from "./docker-sandbox-backend.js"
-import { isSandboxRuntimeAlive, reconcileSandboxes } from "./service.js"
+import {
+  isSandboxRuntimeAlive,
+  reconcileSandboxes,
+  teardownSandbox,
+} from "./service.js"
 
 function rid(): string {
   return Math.random().toString(36).slice(2, 10)
@@ -723,6 +727,70 @@ test("R5 #4 (review-fix): keepalive INCLUDES a failed-recoverable 'closing' off-
     assert.ok(
       !beyond.includes("vm-c3"),
       "keepalive STOPS once the recovery attempt cap is reached (no infinite renew)"
+    )
+  })
+})
+
+test("R6 #4: data-free convergence of an off-box straggler DEFERS destroy when it still owns failed-recoverable mounts", async () => {
+  await withTestDb(async (db) => {
+    const seed = await seedSession(db)
+    // Insert an OFF-BOX (cubesandbox, mode=bare) STRAGGLER in 'closing', plus a NEWER
+    // active runtime that owns the session → the reaper takes the data-free path.
+    const insertOffBox = async (state: string, resourceId: string) => {
+      const id = randomUUID()
+      await db
+        .insertInto("runtimes")
+        .values({ id, workspaceId: seed.workspaceId, kind: "sandbox" } as any)
+        .execute()
+      await sql`
+        INSERT INTO sandboxes (id, workspace_id, session_id, mode, adapter, state, resource_id, host_pid, platform, arch)
+        VALUES (${id}, ${seed.workspaceId}, ${seed.sessionId}, 'bare', 'cubesandbox', ${state}::sandboxes_state, ${resourceId}, NULL, 'linux', 'x64')`.execute(
+        db
+      )
+      return id
+    }
+    const rOld = await insertOffBox("closing", "vm-old")
+    await insertOffBox("active", "vm-new")
+
+    // A failed-recoverable mount OWNED BY the straggler (sandbox_id = rOld).
+    const mount = await insertFileMount(db as any, {
+      workspaceId: seed.workspaceId,
+      sessionId: seed.sessionId,
+      fileSpaceId: seed.fileSpaceId,
+      mountSubpath: "conversation",
+      baseSnapshotId: null,
+      materializedDir: "/tmp/preserved-old",
+    })
+    await updateFileMount(db as any, mount.id, {
+      status: "failed",
+      sandboxId: rOld,
+    })
+
+    // The reaper targets the stale straggler by id.
+    await teardownSandbox(seed.sessionId, { runtimeId: rOld, executor: db })
+
+    // #4: because the straggler still owns un-pulled failed-recoverable bytes, its VM
+    // is the sole copy → the data-free convergence DEFERS (does NOT destroy) — the row
+    // stays 'closing' for the recovery sweep, instead of being converged 'closed'.
+    const oldRow = await db
+      .selectFrom("sandboxes")
+      .select(["state"])
+      .where("id", "=", rOld)
+      .executeTakeFirstOrThrow()
+    assert.equal(
+      oldRow.state,
+      "closing",
+      "the straggler is DEFERRED (not destroyed) while it owns recoverable bytes"
+    )
+    const oldRuntime = await db
+      .selectFrom("runtimes")
+      .select(["deletedAt"])
+      .where("id", "=", rOld)
+      .executeTakeFirstOrThrow()
+    assert.equal(
+      oldRuntime.deletedAt,
+      null,
+      "the straggler runtime is NOT soft-deleted while deferred"
     )
   })
 })

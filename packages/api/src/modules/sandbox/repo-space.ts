@@ -289,6 +289,27 @@ export async function sessionHasFailedRecoverableMounts(
 }
 
 /**
+ * (R6 #4) Whether a SPECIFIC runtime (sandbox_id) still owns a failed-recoverable
+ * mount — un-pulled bytes whose sole copy is that runtime's VM. Scoped to the runtime
+ * (NOT the session) so the data-free convergence of a superseded straggler never
+ * destroys a VM whose OWN failed mounts are still recoverable, and never defers on a
+ * DIFFERENT generation's mounts that share the session.
+ */
+export async function sandboxHasFailedRecoverableMounts(
+  client: Executor,
+  runtimeId: string
+): Promise<boolean> {
+  const result = await sql<{ one: number }>`
+    SELECT 1 AS one
+    FROM file_mounts
+    WHERE sandbox_id = ${runtimeId}
+      AND status = 'failed'
+      AND materialized_dir IS NOT NULL
+    LIMIT 1`.execute(client)
+  return result.rows.length > 0
+}
+
+/**
  * (R5 #4 review-fix) Terminally close every FAILED mount of a session — used when
  * off-box recovery is EXHAUSTED (the un-pulled VM is unrecoverable, so its preserved
  * materializedDir is being discarded). Flips 'failed' → 'closed' so the recovery

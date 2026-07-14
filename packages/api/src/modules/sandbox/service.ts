@@ -30,6 +30,7 @@ import {
   getActiveMountsForSession,
   getFailedRecoverableMounts,
   sessionHasFailedRecoverableMounts,
+  sandboxHasFailedRecoverableMounts,
   closeSessionFailedMounts,
   getFileSpace,
   ensureContentBlob,
@@ -243,16 +244,25 @@ async function buildSandboxRefFromSandboxRow(
   run: Executor = repo.defaultDbh(),
   // R3.5(D): an explicit sessionId lets a MOUNT-LESS teardown still resolve its
   // owning sandbox by-session (the mounts-derived sessionId is "" with no mounts).
-  explicitSessionId?: string
+  explicitSessionId?: string,
+  // (R6 #5): when a runtime is PINNED (teardown/recovery by explicit runtimeId),
+  // resolve the ref from THAT exact row — never the mounts/createdAt-DESC session
+  // resolver — so the reconnect/kill always targets the runtime the caller flipped.
+  explicitRuntimeId?: string
 ): Promise<SandboxRef | null> {
   const sessionId = explicitSessionId ?? mounts[0]?.sessionId ?? ""
-  const mountSandboxId = mounts.find((m) => m.sandboxId)?.sandboxId ?? null
   let row: repo.SandboxRow | null = null
-  if (mountSandboxId) {
-    row = await repo.getSandboxById(mountSandboxId, run)
-  }
-  if (!row && sessionId) {
-    row = await repo.getSandboxBySessionForControl(sessionId, run)
+  if (explicitRuntimeId) {
+    row = await repo.getSandboxById(explicitRuntimeId, run)
+    if (!row) return null // the pinned runtime is gone → nothing to target
+  } else {
+    const mountSandboxId = mounts.find((m) => m.sandboxId)?.sandboxId ?? null
+    if (mountSandboxId) {
+      row = await repo.getSandboxById(mountSandboxId, run)
+    }
+    if (!row && sessionId) {
+      row = await repo.getSandboxBySessionForControl(sessionId, run)
+    }
   }
   if (row) {
     return {
@@ -2444,6 +2454,24 @@ async function teardownStaleRuntimeDataFree(
       )
       return
     }
+    // (R6 #4) If THIS straggler still owns un-pulled failed-recoverable bytes, its VM
+    // is the SOLE copy — DEFER destruction while recovery attempts remain (the failed-
+    // mount recovery sweep re-pulls from its OWN VM, resolved by sandbox_id). Only
+    // converge (destroy + accept loss) once the epoch attempt-cap is exhausted. Scoped
+    // to sandbox_id=runtimeId, never the session, so a sibling generation's mounts
+    // neither block this convergence nor get pulled from the wrong VM.
+    if (
+      epoch < BigInt(MAX_OFFBOX_RECOVERY_ATTEMPTS) &&
+      adapter &&
+      isOffBoxAdapter(adapter) &&
+      (await sandboxHasFailedRecoverableMounts(run, runtimeId))
+    ) {
+      log.warn(
+        { sessionId, runtimeId, attempt: epoch.toString() },
+        "data-free teardown: straggler still owns failed-recoverable mounts — deferring destroy for recovery re-pull"
+      )
+      return
+    }
     // Kill the stale runtime's OWN provider resource by its own resource_id — an
     // off-box VM via destroyResource; a host resource is left to the docker/reconcile
     // orphan reaper (a stray host child/container is cheap + swept). NEVER the session
@@ -2473,12 +2501,18 @@ async function teardownStaleRuntimeDataFree(
         )
       )
     }
-    await repo
+    // (R6 #5) Soft-delete the runtime ONLY when the epoch-fenced terminal write WON —
+    // i.e. we still hold the lease. If a concurrent teardown took the lease in the
+    // window, casClose no-ops and we must NOT soft-delete (the winner owns it), closing
+    // the re-check→CAS TOCTOU.
+    const closed = await repo
       .casCloseSandboxAtEpoch(runtimeId, epoch, { state: "closed" }, run)
       .catch(() => false)
-    await deleteRuntime(row.workspaceId, runtimeId, run).catch((err) =>
-      log.error({ runtimeId, err }, "data-free teardown: soft-delete failed")
-    )
+    if (closed) {
+      await deleteRuntime(row.workspaceId, runtimeId, run).catch((err) =>
+        log.error({ runtimeId, err }, "data-free teardown: soft-delete failed")
+      )
+    }
     unregisterBareDataPlane(runtimeId)
     log.info(
       { sessionId, runtimeId },
@@ -2748,12 +2782,15 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
           conversationId: ctx.conversationId,
           executor: run,
         }).catch((err) => log.error({ sessionId, err }, "revoke grants failed"))
-        await repo
+        const closed = await repo
           .casCloseSandboxAtEpoch(runtimeId, epoch, { state: "failed" }, run)
           .catch(() => false)
-        await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
-          log.error({ sessionId, err }, "soft-delete runtime failed")
-        )
+        // (R6 #5) soft-delete only when the terminal CAS won (still hold the lease).
+        if (closed) {
+          await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
+            log.error({ sessionId, err }, "soft-delete runtime failed")
+          )
+        }
       }
       return
     }
@@ -2815,12 +2852,17 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
         // (#6) epoch-fenced terminal write — no-ops if a concurrent teardown took the
         // lease in the window since the re-check (row then stays 'closing' for the
         // reaper to converge; the VM is already gone, so kill is idempotent).
-        await repo
+        const closed = await repo
           .casCloseSandboxAtEpoch(runtimeId, epoch, { state: "closed" }, run)
           .catch(() => false)
-        await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
-          log.error({ sessionId, err }, "soft-delete runtime failed")
-        )
+        // (R6 #5) soft-delete ONLY when the terminal CAS WON (we still hold the lease)
+        // — closes the re-check→CAS TOCTOU so a superseded teardown can't soft-delete
+        // a runtime the current owner is mid-teardown on.
+        if (closed) {
+          await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
+            log.error({ sessionId, err }, "soft-delete runtime failed")
+          )
+        }
       }
     } else {
       // ⑦-fail: PULL/COMMIT FAILED → KEEP the VM alive (its unpulled bytes are the
@@ -2918,10 +2960,13 @@ export async function teardownSandbox(
   // adapterForRow is wrapped so an unknown/legacy tag can't throw — it falls
   // through to the host path (which resolves its own connect-only backend).
   if (runtimeId) {
+    // (R6 #5) resolve the ref from the PINNED runtime so the reconnect/PULL/DELETE
+    // targets exactly the runtime we flipped, never a newer session sandbox.
     const offBoxRef = await buildSandboxRefFromSandboxRow(
       mounts,
       run,
-      sessionId
+      sessionId,
+      runtimeId
     )
     if (offBoxRef) {
       let offBoxAdapter: SandboxAdapter | null = null
@@ -3005,7 +3050,13 @@ export async function teardownSandbox(
       stillAlive = live !== "dead"
       if (!stillAlive) liveSandboxHandles.delete(sessionId)
     } else {
-      const ref = await buildSandboxRefFromSandboxRow(mounts, run, sessionId)
+      // (R6 #5) target the PINNED runtime (runtimeId is authoritative here).
+      const ref = await buildSandboxRefFromSandboxRow(
+        mounts,
+        run,
+        sessionId,
+        runtimeId ?? undefined
+      )
       if (ref) {
         try {
           const backend = backendForKind(ref)
@@ -3149,8 +3200,12 @@ export async function teardownSandbox(
       // the re-check above → the row stays 'closing' for that owner to converge,
       // instead of this teardown stamping a stale terminal state.
       const terminalState = commitOk ? "closed" : "failed"
+      // (R6 #5) soft-delete only when the terminal write LANDED under our lease. With a
+      // lease, that is the epoch CAS winning; without one (a runtime-less orphan lays no
+      // lease), the plain write always lands.
+      let terminalWon = true
       if (teardownEpoch !== null) {
-        await repo
+        terminalWon = await repo
           .casCloseSandboxAtEpoch(
             runtimeId,
             teardownEpoch,
@@ -3163,9 +3218,11 @@ export async function teardownSandbox(
           .updateSandboxRow(runtimeId, { state: terminalState }, run)
           .catch(() => {})
       }
-      await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
-        log.error({ sessionId, err }, "soft-delete runtime failed")
-      )
+      if (terminalWon) {
+        await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
+          log.error({ sessionId, err }, "soft-delete runtime failed")
+        )
+      }
     }
   } finally {
     // R3.7: always clear the in-process close-gate tombstone (both the preserve
@@ -3215,25 +3272,40 @@ export interface RecoverFailedMountsResult {
  */
 export async function recoverFailedSandboxMounts(): Promise<RecoverFailedMountsResult> {
   const mounts = await getFailedRecoverableMounts(repo.defaultDbh())
-  // Group by session so we make the live-runtime decision ONCE per runtime (the
-  // runtime is per-session, not per-mount) before touching any of its dirs.
-  const bySession = new Map<string, FileMountRow[]>()
+  // (R6 #4/#5) Group by SANDBOX_ID — each sandbox is an INDEPENDENT VM. #4 keeps a
+  // superseded straggler + its VM alive while it owns failed-recoverable mounts, so
+  // two generations' failed mounts can coexist for ONE session; a single session-
+  // resolved ref would pull the WRONG VM into another generation's mirror. Grouping by
+  // sandbox_id + pinning the ref to that runtime pulls each mount from its OWN VM. A
+  // mount with no sandbox_id (should not occur for a failed recoverable mount) falls
+  // back to a session-keyed group resolved by-session (host path).
+  const bySandbox = new Map<string, FileMountRow[]>()
   for (const mount of mounts) {
-    const sid = mount.sessionId as string
-    const list = bySession.get(sid)
+    const key =
+      (mount.sandboxId as string | null) ?? `session:${mount.sessionId}`
+    const list = bySandbox.get(key)
     if (list) list.push(mount)
-    else bySession.set(sid, [mount])
+    else bySandbox.set(key, [mount])
   }
 
   let recovered = 0
   let stillFailed = 0
-  for (const [sessionId, sessionMounts] of bySession) {
+  for (const [groupKey, sessionMounts] of bySandbox) {
+    const sessionId = sessionMounts[0]!.sessionId as string
+    const pinnedRuntimeId = groupKey.startsWith("session:")
+      ? undefined
+      : groupKey
     // (R4 §6.5, F2) OFF-BOX recovery fork. An off-box VM whose bytes are UNPULLED
     // must be RECONNECTED + PULLED + committed BEFORE it is killed — never the
     // host "confirm-dead then commit the host dir" path (which would commit a
     // never-pulled empty mirror and lose all VM work). Resolve the owning adapter
-    // row-driven; when off-box, hand off to recoverOffBoxSession.
-    const recoveryRef = await buildSandboxRefFromSandboxRow(sessionMounts)
+    // row-driven (pinned to THIS sandbox); when off-box, hand off to recoverOffBoxSession.
+    const recoveryRef = await buildSandboxRefFromSandboxRow(
+      sessionMounts,
+      repo.defaultDbh(),
+      sessionId,
+      pinnedRuntimeId
+    )
     if (recoveryRef) {
       let recoveryAdapter: SandboxAdapter | null = null
       try {

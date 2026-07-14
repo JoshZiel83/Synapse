@@ -8,6 +8,7 @@ export {
   getActiveMountsForSession,
   getFailedRecoverableMounts,
   sessionHasFailedRecoverableMounts,
+  sandboxHasFailedRecoverableMounts,
   closeSessionFailedMounts,
   appendSnapshot,
   getSnapshotManifestSha,
