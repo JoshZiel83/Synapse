@@ -32,11 +32,13 @@ import {
   sep,
 } from "node:path"
 import {
+  lstat,
   mkdir,
   readFile,
   readdir,
   rm,
   rmdir,
+  unlink,
   writeFile,
 } from "node:fs/promises"
 import { createLogger } from "../../../infrastructure/logger/index.js"
@@ -110,6 +112,82 @@ function assertUnderMirror(target: string, mirrorMountDir: string): void {
   if (abs !== root && !abs.startsWith(root + sep)) {
     throw new WorkingSetTransportError(
       `working-set mirror write escapes the mount dir (blocked): ${target}`
+    )
+  }
+}
+
+/**
+ * (R6 #1 SECURITY) Walk `target`'s path components UNDER the mirror mount, NO-FOLLOW,
+ * and return the first component that is a symlink (leaf or ancestor), else null.
+ *
+ * `lstat` only refuses to follow its LAST component, so we must check each component
+ * top-down and STOP at the first symlink — never `lstat` a path whose ancestor is a
+ * symlink (that would follow it). Because we return at the first symlink, every path
+ * we lstat has only real-dir ancestors, so this correctly detects a symlink at ANY
+ * depth without ever following one. The mount root itself is trusted (it is created by
+ * the spine under STORAGE_DIR, not from a snapshot), so the walk starts BELOW it.
+ */
+async function firstSymlinkComponentUnderMirror(
+  target: string,
+  mirrorMountDir: string
+): Promise<string | null> {
+  const root = resolve(mirrorMountDir)
+  const rel = relative(root, resolve(target))
+  if (rel === "" || rel.startsWith("..")) return null // == mount root or outside (assertUnderMirror covers outside)
+  let cur = root
+  for (const part of rel.split(sep)) {
+    if (!part) continue
+    cur = join(cur, part)
+    let st
+    try {
+      st = await lstat(cur)
+    } catch {
+      return null // component absent → nothing below it to follow
+    }
+    if (st.isSymbolicLink()) return cur
+  }
+  return null
+}
+
+/**
+ * (R6 #1 SECURITY) Neutralize a symlink on the WRITE path. CAS materializes a base
+ * snapshot symlink as a REAL host symlink in the off-box mirror; a lexical
+ * assertUnderMirror cannot see it, so mkdir/writeFile would FOLLOW it and write
+ * OUTSIDE the mirror as the shared API process. Before creating the real node, UNLINK
+ * the first symlink component so the subsequent mkdir/writeFile lands on a REAL path
+ * inside the mount — the actor's bytes stay inside the mount (no legit data loss) and
+ * the weaponized symlink is dropped (off-box can't round-trip symlinks anyway, H-7).
+ * The one symlink is the only one on the path (everything below it lived under its
+ * target, outside the mirror), so a single unlink suffices.
+ */
+async function neutralizeMirrorSymlink(
+  target: string,
+  mirrorMountDir: string
+): Promise<void> {
+  const sym = await firstSymlinkComponentUnderMirror(target, mirrorMountDir)
+  if (sym !== null) {
+    log.warn(
+      { symlink: sym, mount: mirrorMountDir, target },
+      "working-set: unlinked a mirror symlink on the write path (off-box escape blocked)"
+    )
+    await unlink(sym).catch(() => {})
+  }
+}
+
+/**
+ * (R6 #1 SECURITY) Refuse a READ whose mirror path traverses a symlink — reading
+ * THROUGH a host symlink would exfiltrate an arbitrary host file INTO the VM/CAS.
+ * (In practice `walkMirror` never emits a symlink-traversing path, so this is a
+ * fail-loud belt for a corrupt/hostile mirror.)
+ */
+async function assertNoSymlinkOnReadPath(
+  target: string,
+  mirrorMountDir: string
+): Promise<void> {
+  const sym = await firstSymlinkComponentUnderMirror(target, mirrorMountDir)
+  if (sym !== null) {
+    throw new WorkingSetTransportError(
+      `working-set read path traverses a symlink (blocked): ${sym}`
     )
   }
 }
@@ -352,14 +430,19 @@ export function createCubeEnvdWorkingSetBridge(opts: {
       mountRoots: [vmMountRoot],
       transport,
       statCache: opts.statCache,
-      readMirrorFile: (rel) => {
+      readMirrorFile: async (rel) => {
         const target = join(sandboxRoot, rel)
         assertUnderMirror(target, mirrorMountDir)
+        // (#1) never READ through a symlink (would exfil a host file into the VM/CAS).
+        await assertNoSymlinkOnReadPath(target, mirrorMountDir)
         return readFile(target)
       },
       writeMirrorFile: async (rel, bytes) => {
         const target = join(sandboxRoot, rel)
-        assertUnderMirror(target, mirrorMountDir) // (#1 belt) never write outside the mount
+        assertUnderMirror(target, mirrorMountDir) // lexical belt (never OUTSIDE the mount)
+        // (#1) NO-FOLLOW: unlink any symlink component so writeFile lands on a REAL
+        // node inside the mount, never followed outside it.
+        await neutralizeMirrorSymlink(target, mirrorMountDir)
         await mkdir(dirname(target), { recursive: true })
         await writeFile(target, bytes)
       },
@@ -367,6 +450,8 @@ export function createCubeEnvdWorkingSetBridge(opts: {
       removeMirrorFile: (rel) => {
         const target = join(sandboxRoot, rel)
         assertUnderMirror(target, mirrorMountDir) // (#1 belt) never delete outside the mount
+        // rm removes the LEAF (symlink or file) without following it; walkMirror never
+        // emits a symlink-ancestor path, so no ancestor-follow can occur here.
         return rm(target, { force: true }).catch(() => {})
       },
       // (#5) empty-dir round-trip: create/list/remove empty mirror directories, each
@@ -374,6 +459,8 @@ export function createCubeEnvdWorkingSetBridge(opts: {
       makeMirrorDir: async (rel) => {
         const target = join(sandboxRoot, rel)
         assertUnderMirror(target, mirrorMountDir)
+        // (#1) NO-FOLLOW: unlink any symlink component so the dir is created REAL.
+        await neutralizeMirrorSymlink(target, mirrorMountDir)
         await mkdir(target, { recursive: true })
       },
       listMirrorEmptyDirs: () =>

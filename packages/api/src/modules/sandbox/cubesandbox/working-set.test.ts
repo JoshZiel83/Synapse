@@ -7,11 +7,24 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { Buffer } from "node:buffer"
 import {
+  mkdtemp,
+  mkdir,
+  symlink,
+  stat,
+  readFile,
+  rm,
+  writeFile as fsWriteFile,
+} from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import {
   makeDockerExecTransport,
   type DockerExecFn,
 } from "../working-set-bridge.js"
 import {
   makeEnvdWorkingSetTransport,
+  createCubeEnvdWorkingSetBridge,
   scopeWorkingSetKey,
   WorkingSetTransportError,
 } from "./working-set.js"
@@ -325,4 +338,167 @@ test("#1 read/write/remove belt: a lowered VM path escaping the VM root fails lo
     () => transport.remove("/../etc/passwd"),
     (e: unknown) => e instanceof WorkingSetTransportError
   )
+})
+
+// ── R6 #1: off-box mirror symlink escape is neutralized (no host write) ─────────
+
+/** A stub envd whose tree lists `evil/escaped.txt` and returns bytes for it. */
+function stubEnvdWithFile(
+  dirs: Record<string, FileEntry[]>,
+  files: Record<string, string>
+): RemoteEnvdTransport {
+  return {
+    async listDir(path) {
+      const key = path.replace(/\/+$/, "") || "/"
+      const entries = dirs[key]
+      if (!entries) throw new CubeEnvdNotFoundError(`no such dir: ${key}`)
+      return entries
+    },
+    async readFile(path) {
+      const b = files[path]
+      if (b === undefined)
+        throw new CubeEnvdNotFoundError(`no such file: ${path}`)
+      return Buffer.from(b)
+    },
+    async writeFile() {
+      return []
+    },
+    async remove() {},
+    async stat() {
+      throw new Error("not implemented")
+    },
+    async exec() {
+      throw new Error("not implemented")
+    },
+    async makeDir() {
+      throw new Error("not implemented")
+    },
+    async move() {
+      throw new Error("not implemented")
+    },
+    async close() {},
+  }
+}
+
+test("#1 SECURITY — a base-materialized mirror symlink is NEUTRALIZED on PULL; the VM file lands INSIDE the mirror, never at the symlink target", async () => {
+  const sandboxRoot = await mkdtemp(join(tmpdir(), "ws-symlink-"))
+  const outside = await mkdtemp(join(tmpdir(), "ws-OUTSIDE-"))
+  const mountDir = join(sandboxRoot, "conversation")
+  await mkdir(mountDir, { recursive: true })
+  // CAS materialized `evil` as a REAL host symlink pointing OUTSIDE the mirror.
+  await symlink(outside, join(mountDir, "evil"))
+
+  // The VM has a real dir `evil` (agent did `mkdir evil && echo PWN > evil/escaped.txt`).
+  const tree: Record<string, FileEntry[]> = {
+    "/workspace/conversation": [
+      {
+        name: "evil",
+        path: "/workspace/conversation/evil",
+        type: "directory",
+      },
+    ],
+    "/workspace/conversation/evil": [
+      {
+        name: "escaped.txt",
+        path: "/workspace/conversation/evil/escaped.txt",
+        type: "file",
+        size: 3,
+        modifiedTime: MT,
+      },
+    ],
+  }
+  const bridge = createCubeEnvdWorkingSetBridge({
+    envd: stubEnvdWithFile(tree, {
+      "/workspace/conversation/evil/escaped.txt": "PWN",
+    }),
+    vmRoot: "/workspace",
+    statCache: new Map(),
+  }) as unknown as { pull(input: { dir: string }): Promise<void> }
+
+  await bridge.pull({ dir: mountDir })
+
+  // The escape file must NOT have been written through the symlink to OUTSIDE.
+  assert.ok(
+    !existsSync(join(outside, "escaped.txt")),
+    "no write escaped to the symlink target (host write blocked)"
+  )
+  // It lands INSIDE the mirror as a real file, with the symlink replaced by a real dir.
+  assert.ok(
+    (await stat(join(mountDir, "evil"))).isDirectory(),
+    "the mirror symlink was replaced by a real directory"
+  )
+  assert.equal(
+    (await readFile(join(mountDir, "evil", "escaped.txt"))).toString(),
+    "PWN"
+  )
+
+  await rm(sandboxRoot, { recursive: true, force: true })
+  await rm(outside, { recursive: true, force: true })
+})
+
+test("#1 SECURITY — PUSH never reads THROUGH a mirror symlink (no host-file exfil into the VM)", async () => {
+  const sandboxRoot = await mkdtemp(join(tmpdir(), "ws-symread-"))
+  const outside = await mkdtemp(join(tmpdir(), "ws-SECRET-"))
+  await fsWriteFile(join(outside, "secret"), "TOPSECRET")
+  const mountDir = join(sandboxRoot, "conversation")
+  await mkdir(mountDir, { recursive: true })
+  // A real file (legit) + a symlink pointing at a host secret dir.
+  await fsWriteFile(join(mountDir, "a.txt"), "legit")
+  await symlink(outside, join(mountDir, "link"))
+
+  // Spy envd: record every writeFile path the PUSH sends to the VM.
+  const pushed: Array<{ path: string; body: string }> = []
+  const spy: RemoteEnvdTransport = {
+    async listDir() {
+      return []
+    },
+    async readFile() {
+      throw new CubeEnvdNotFoundError("n/a")
+    },
+    async writeFile(path, bytes) {
+      pushed.push({ path, body: Buffer.from(bytes).toString() })
+      return []
+    },
+    async remove() {},
+    async stat() {
+      throw new Error("n/a")
+    },
+    async exec() {
+      throw new Error("n/a")
+    },
+    async makeDir() {
+      throw new Error("n/a")
+    },
+    async move() {
+      throw new Error("n/a")
+    },
+    async close() {},
+  }
+  const bridge = createCubeEnvdWorkingSetBridge({
+    envd: spy,
+    vmRoot: "/workspace",
+    statCache: new Map(),
+  }) as unknown as {
+    applyManifest(input: {
+      manifestSha256?: string
+      targetDir: string
+    }): Promise<void>
+  }
+  await bridge.applyManifest({ manifestSha256: undefined, targetDir: mountDir })
+
+  // Only the real file was pushed; the symlink (and the host secret behind it) never
+  // reached the VM — walkMirror skips symlink dirents, so readMirrorFile is never even
+  // called on the symlinked path.
+  assert.deepEqual(
+    pushed.map((p) => p.body).sort(),
+    ["legit"],
+    "only the legit file's bytes were pushed"
+  )
+  assert.ok(
+    !pushed.some((p) => p.body.includes("TOPSECRET")),
+    "the host secret behind the symlink was NEVER pushed to the VM"
+  )
+
+  await rm(sandboxRoot, { recursive: true, force: true })
+  await rm(outside, { recursive: true, force: true })
 })
