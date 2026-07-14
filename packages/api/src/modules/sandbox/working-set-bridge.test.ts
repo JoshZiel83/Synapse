@@ -173,6 +173,42 @@ test("S12 — fetchChangedIntoMirror cats ONLY the stat-cache-mismatched file (t
   assert.equal(written["/conversation/changed.py"], "new-bytes")
 })
 
+test("#14 — an oversize file is PRESERVED-and-EXCLUDED (never read), the rest are fetched", async () => {
+  const { exec, calls } = recordingExec({
+    // small.py (3 bytes) is under the cap; big.py (999999 bytes) is over it.
+    find: "3 100 /conversation/small.py\n999999 200 /conversation/big.py\n",
+    cat: { "/conversation/small.py": "abc" }, // big.py intentionally absent
+  })
+  const written: Record<string, string> = {}
+  const pruned: string[] = []
+  const bridge = createDetachedWorkingSetBridge({
+    mirrorDir: "/tmp/mirror",
+    mountRoots: ["/conversation"],
+    transport: makeDockerExecTransport({ containerId: "cid", exec }),
+    statCache: new Map(),
+    writeMirrorFile: async (rel, bytes) => {
+      written[rel] = bytes.toString("binary")
+    },
+    // The mirror already holds big.py (e.g. a base copy); the prune must NOT remove
+    // it — it is present in the VM listing, just not fetched.
+    listMirrorFiles: async () => ["/conversation/big.py"],
+    removeMirrorFile: async (rel) => {
+      pruned.push(rel)
+    },
+    maxReadBytes: 1000,
+  })
+  const res = await bridge.fetchChangedIntoMirror()
+  assert.deepEqual(res.fetched, ["/conversation/small.py"])
+  assert.deepEqual(res.preserved, ["/conversation/big.py"])
+  // big.py was NEVER cat'd (no whole-body buffer → no OOM).
+  const cats = calls.filter((c) => c.argv[2] === "cat").map((c) => c.argv[3])
+  assert.deepEqual(cats, ["/conversation/small.py"])
+  // The oversize file is in the VM listing's present set → it is NOT pruned.
+  assert.deepEqual(pruned, [])
+  // Its mirror bytes were left untouched (only small.py was written).
+  assert.deepEqual(Object.keys(written), ["/conversation/small.py"])
+})
+
 // ─────────────────────── S12 forced-commit-failure stash ──────────────────────
 
 test("S12 — stashUncommittedWorkingSet exfiltrates + records the stash manifest (commit-failure recovery WRITE contract)", async () => {

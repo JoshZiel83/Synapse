@@ -526,6 +526,9 @@ export function makeCubesandboxBareAdapter(
         envd,
         vmRoot: runOpts.vmRoot,
         statCache,
+        // (#14) cap the PULL at the same per-read budget the tool plane enforces —
+        // an oversize VM file is preserved-and-excluded, never buffered whole.
+        maxReadBytes: descriptor.core.maxReadBytes,
       })
     },
     // §1.8 seam: reconstruct the REMOTE plane from the PERSISTED row — resource_id

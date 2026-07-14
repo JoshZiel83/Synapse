@@ -180,6 +180,17 @@ export interface DetachedBridgeOptions {
   writeMirrorFile?: (relpath: string, bytes: Buffer) => Promise<void>
   /** (F1) Injected: remove a mirror file the VM no longer has (delete-prune). */
   removeMirrorFile?: (relpath: string) => Promise<void>
+  /**
+   * (#14) Per-file byte budget for the working-set PULL/PUSH. A single file whose
+   * listed size EXCEEDS this is PRESERVED-and-EXCLUDED: it is NOT read (envd/docker
+   * `read` buffers the WHOLE body → a multi-GB file would OOM the shared API), its
+   * mirror bytes are left untouched, and it is reported in `preserved` so the caller
+   * commits the N that fit and records a preservation marker — the whole PULL never
+   * fails on one big file (which, with keepalive, would strand the VM forever).
+   * Undefined ⇒ no cap (the docker CI-proof + unit tests). Set to caps.maxReadBytes
+   * off-box.
+   */
+  maxReadBytes?: number
 }
 
 /** The plan a host-side diff produces for replicating the mirror into the container. */
@@ -296,6 +307,10 @@ export interface DetachedWorkingSetBridge extends WorkingSetBridge {
     fetched: string[]
     reused: string[]
     pruned: string[]
+    /** (#14) files whose size exceeded `maxReadBytes` — NOT fetched, mirror bytes
+     *  left untouched, excluded from this scan's change-set (the caller surfaces a
+     *  preservation marker). Empty when no cap is set or nothing was oversize. */
+    preserved: string[]
   }>
   /**
    * (R5 #8) Replicate the ALREADY-POPULATED mirror INTO the container/VM — the
@@ -331,14 +346,27 @@ export function createDetachedWorkingSetBridge(
     fetched: string[]
     reused: string[]
     pruned: string[]
+    preserved: string[]
   }> => {
     const listing = await listContainer()
     const { reused, toFetch } = reconcileStatCache(listing, statCache)
     const byPath = new Map(listing.map((f) => [f.relpath, f]))
+    const maxReadBytes = opts.maxReadBytes
+    const fetched: string[] = []
+    const preserved: string[] = []
     for (const rel of toFetch) {
+      const f = byPath.get(rel)
+      // (#14) PRESERVE-and-EXCLUDE an oversize file: never buffer its whole body
+      // (OOM). Leave the mirror bytes as-is (base copy stays → scanCommitDir sees no
+      // change for it → excluded from the change-set) and DON'T touch the stat-cache
+      // (so it re-preserves next scan). It stays in the VM listing's `present` set
+      // below, so it is NOT pruned. The caller commits the files that fit.
+      if (f && maxReadBytes !== undefined && f.size > maxReadBytes) {
+        preserved.push(rel)
+        continue
+      }
       const bytes = await transport.read(rel)
       const sha = sha256Hex(bytes)
-      const f = byPath.get(rel)
       if (f) {
         statCache.set(rel, {
           size: f.size,
@@ -347,6 +375,7 @@ export function createDetachedWorkingSetBridge(
           sha256: sha,
         })
       }
+      fetched.push(rel)
       // write current bytes into the mirror so scanCommitDir sees them.
       await opts.writeMirrorFile?.(rel, bytes)
     }
@@ -366,9 +395,10 @@ export function createDetachedWorkingSetBridge(
       }
     }
     return {
-      fetched: toFetch,
+      fetched,
       reused: reused.map((r) => r.relpath),
       pruned,
+      preserved,
     }
   }
 

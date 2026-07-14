@@ -270,6 +270,9 @@ export function createCubeEnvdWorkingSetBridge(opts: {
   envd: RemoteEnvdTransport
   vmRoot: string
   statCache: StatCache
+  /** (#14) per-file PULL byte budget (= caps.maxReadBytes). An oversize VM file is
+   *  preserved-and-excluded rather than buffered whole (OOM). */
+  maxReadBytes?: number
 }): WorkingSetBridge & { pull(input: { dir: string }): Promise<void> } {
   const transport = makeEnvdWorkingSetTransport({
     envd: opts.envd,
@@ -302,6 +305,7 @@ export function createCubeEnvdWorkingSetBridge(opts: {
         assertUnderMirror(target, mirrorMountDir) // (#1 belt) never delete outside the mount
         return rm(target, { force: true }).catch(() => {})
       },
+      maxReadBytes: opts.maxReadBytes,
     })
   }
 
@@ -318,7 +322,16 @@ export function createCubeEnvdWorkingSetBridge(opts: {
     // PULL-only (teardown/recovery): reconcile VM → mirror with delete-prune (F1),
     // leaving the commit scan to the spine's commitSpaces on the same mirror dir.
     async pull(input) {
-      await scopedBridge(input.dir).fetchChangedIntoMirror()
+      const res = await scopedBridge(input.dir).fetchChangedIntoMirror()
+      if (res.preserved.length > 0) {
+        // (#14) preservation marker: an oversize VM file was NOT pulled (would OOM
+        // the shared API). It stays in the VM; its mirror bytes (base, if any) are
+        // untouched → it is excluded from this turn's commit rather than truncated.
+        log.warn(
+          { dir: input.dir, preserved: res.preserved },
+          "working-set PULL preserved-and-excluded oversize file(s) (> maxReadBytes) — not committed this turn"
+        )
+      }
     },
     // (R4 review fix) Release the per-bridge envd client's undici Agent — the spine
     // calls this after each push/pull so the keep-alive socket pool to CubeProxy is
