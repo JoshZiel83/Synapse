@@ -44,9 +44,9 @@ import { createCubeEnvdWorkingSetBridge } from "./cubesandbox/working-set.js"
 import { sandboxAdapterMetadata } from "./adapter-metadata.js"
 import type {
   AdapterReadyOptions,
+  OffBoxSandboxAdapter,
   OrphanResource,
   ReadinessReport,
-  SandboxAdapter,
   SandboxReconnectOptions,
 } from "./adapter-registry.js"
 import {
@@ -274,7 +274,7 @@ export interface MakeCubesandboxBareAdapterDeps {
 
 export function makeCubesandboxBareAdapter(
   deps: MakeCubesandboxBareAdapterDeps = {}
-): SandboxAdapter {
+): OffBoxSandboxAdapter {
   const mint = deps.mintRuntime ?? mintBareSandboxRuntime
   const runOpts = deps.optionsOverride ?? cubesandboxBareOptionsFromEnv()
   const descriptor = deps.descriptorOverride ?? buildCubesandboxBareDescriptor()
@@ -291,6 +291,7 @@ export function makeCubesandboxBareAdapter(
     key: "cubesandbox:bare",
     provider: "cubesandbox",
     mode: "bare",
+    kind: "offBoxBare",
     catalogSource: "api_authored",
     capabilities: descriptor,
     meta: metaEntry.meta,

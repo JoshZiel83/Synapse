@@ -23,11 +23,14 @@ function offBoxAdapter(overrides: {
   destroyResource?: SandboxAdapter["destroyResource"]
   refreshResourceDeadline?: SandboxAdapter["refreshResourceDeadline"]
 }): SandboxAdapter {
+  const offBox = overrides.offBox ?? true
   return {
     key: `${overrides.tag ?? "cubesandbox"}:bare`,
+    // (#13) the discriminant configuredOffBoxAdapter now narrows on.
+    kind: offBox ? "offBoxBare" : "hostBare",
     meta: {
       tag: overrides.tag ?? "cubesandbox",
-      offBox: overrides.offBox ?? true,
+      offBox,
     },
     listOrphans: overrides.listOrphans,
     destroyResource: overrides.destroyResource,

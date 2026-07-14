@@ -135,11 +135,25 @@ export interface SandboxReconnectOptions {
   workspaceId?: string
 }
 
+/**
+ * (#13) The adapter's discriminant — derived from mode + meta.offBox at
+ * construction (ONE source of truth: the config-free metadata leaf). It type-narrows
+ * the off-box-only lifecycle methods so the teardown/recovery/reap paths call them
+ * WITHOUT a `!` non-null assertion or a runtime truthiness guard (see
+ * {@link OffBoxSandboxAdapter} / {@link isOffBoxAdapter}).
+ *   - 'resident'   → Mode-A (local/docker resident); no bare data plane.
+ *   - 'hostBare'   → Mode-B on THIS host (local/docker bare); a rebuildable plane.
+ *   - 'offBoxBare' → a remote-VM provider (cubesandbox); the off-box lifecycle.
+ */
+export type SandboxAdapterKind = "resident" | "hostBare" | "offBoxBare"
+
 export interface SandboxAdapter {
   // ── identity / metadata ────────────────────────────────────────────────────
   readonly key: string
   readonly provider: string
   readonly mode: "resident" | "bare"
+  /** (#13) discriminant for off-box narrowing; derived from mode + meta.offBox. */
+  readonly kind: SandboxAdapterKind
   readonly catalogSource: "control_plane" | "api_authored"
   /** Frozen descriptor for a bare adapter; null for a resident adapter. */
   readonly capabilities: SandboxCapabilityDescriptor | null
@@ -231,6 +245,41 @@ export interface SandboxAdapter {
 }
 
 /**
+ * (#13) An OFF-BOX adapter (a remote-VM provider — cubesandbox) with the off-box
+ * lifecycle methods TYPE-REQUIRED. The teardown/recovery/reap/keepalive paths accept
+ * this narrower type (via {@link isOffBoxAdapter}), so they call reconnectDataPlane /
+ * rebuildDataPlane / listOrphans / destroyResource / refreshResourceDeadline with NO
+ * `!` non-null assertion or runtime truthiness guard — the compiler now enforces what
+ * the `meta.offBox` gate proved. A host/resident adapter can never be passed there.
+ */
+export interface OffBoxSandboxAdapter extends SandboxAdapter {
+  readonly kind: "offBoxBare"
+  rebuildDataPlane(row: BareDataPlaneRebuildRow): Promise<SandboxDataPlane>
+  reconnectDataPlane(
+    ref: SandboxRef,
+    opts?: SandboxReconnectOptions
+  ): Promise<{
+    plane: SandboxDataPlane
+    credentials: SandboxDataPlaneCredentials | null
+  }>
+  listOrphans(opts: {
+    activeResourceIds: ReadonlySet<string>
+    minAgeMs?: number
+  }): Promise<OrphanResource[]>
+  destroyResource(resourceId: string): Promise<void>
+  refreshResourceDeadline(resourceId: string): Promise<void>
+}
+
+/** (#13) Narrow a SandboxAdapter to {@link OffBoxSandboxAdapter} on its discriminant.
+ *  Replaces the scattered `adapter.meta.offBox` checks that TS could not connect to
+ *  the optional off-box methods. */
+export function isOffBoxAdapter(
+  adapter: SandboxAdapter
+): adapter is OffBoxSandboxAdapter {
+  return adapter.kind === "offBoxBare"
+}
+
+/**
  * Fetch the metadata leaf for an adapter key (the registration invariant: every
  * factory key is in the leaf table). Throws on a drift so a mis-registered
  * adapter fails loud at construction, not silently at dispatch.
@@ -241,6 +290,7 @@ function metaFor(
 ): {
   meta: SandboxAdapterMeta
   endpoint: AdapterEndpointContract | null
+  kind: SandboxAdapterKind
 } {
   const entry = sandboxAdapterMetadata(provider, mode)
   if (!entry) {
@@ -248,7 +298,12 @@ function metaFor(
       `no adapter-metadata leaf for '${provider}:${mode}' (registry/metadata drift)`
     )
   }
-  return { meta: entry.meta, endpoint: entry.endpoint }
+  // (#13) derive the discriminant from the leaf — the SINGLE source of off-box truth.
+  let kind: SandboxAdapterKind
+  if (mode === "resident") kind = "resident"
+  else if (entry.meta.offBox) kind = "offBoxBare"
+  else kind = "hostBare"
+  return { meta: entry.meta, endpoint: entry.endpoint, kind }
 }
 
 /** Build the docker backend options from the validated config.sandbox namespace.
@@ -303,11 +358,12 @@ function makeLocalResidentAdapter(deps?: {
 }): SandboxAdapter {
   const hostProvider = deps?.hostProvider ?? createLocalHostProvider()
   const backend: SandboxBackend = createLocalSandboxBackend({ hostProvider })
-  const { meta, endpoint } = metaFor("local", "resident")
+  const { meta, endpoint, kind } = metaFor("local", "resident")
   return {
     key: "local:resident",
     provider: "local",
     mode: "resident",
+    kind,
     catalogSource: "control_plane",
     capabilities: null,
     meta,
@@ -333,11 +389,12 @@ function makeDockerResidentAdapter(deps?: {
   const reconnect = createDockerReconnectBackend({
     spawnImpl: deps?.dockerSpawnImpl,
   })
-  const { meta, endpoint } = metaFor("docker", "resident")
+  const { meta, endpoint, kind } = metaFor("docker", "resident")
   return {
     key: "docker:resident",
     provider: "docker",
     mode: "resident",
+    kind,
     catalogSource: "control_plane",
     capabilities: null,
     meta,
@@ -409,11 +466,12 @@ export function makeLocalBareAdapter(
 ): SandboxAdapter {
   const mint = deps.mintRuntime ?? mintBareSandboxRuntime
   const descriptor = deps.descriptorOverride ?? buildLocalBareDescriptor()
-  const { meta, endpoint } = metaFor("local", "bare")
+  const { meta, endpoint, kind } = metaFor("local", "bare")
   return {
     key: "local:bare",
     provider: "local",
     mode: "bare",
+    kind,
     catalogSource: "api_authored",
     capabilities: descriptor,
     meta,
@@ -694,11 +752,12 @@ export function makeDockerBareAdapter(
     buildDockerBareDescriptor({
       egress: runOpts.pureNetwork ? "named" : "none",
     })
-  const { meta, endpoint } = metaFor("docker", "bare")
+  const { meta, endpoint, kind } = metaFor("docker", "bare")
   return {
     key: "docker:bare",
     provider: "docker",
     mode: "bare",
+    kind,
     catalogSource: "api_authored",
     capabilities: descriptor,
     meta,

@@ -70,7 +70,9 @@ import {
 import {
   resolveSandboxAdapter,
   adapterForRow,
+  isOffBoxAdapter,
   type SandboxAdapter,
+  type OffBoxSandboxAdapter,
 } from "./adapter-registry.js"
 import {
   resolveRuntimeBuiltinIds,
@@ -684,15 +686,17 @@ const OFFBOX_ORPHAN_MIN_AGE_MS = 600_000
 const RECOVERY_KEEPALIVE_WINDOW_SECONDS = 1800
 
 /** Resolve the CURRENTLY-configured adapter when it is off-box, else null. Shared
- *  by the off-box sweep + keepalive so both target the same provider. Injectable. */
+ *  by the off-box sweep + keepalive so both target the same provider. Injectable.
+ *  (#13) Returns the NARROWED OffBoxSandboxAdapter so the sweep/keepalive call the
+ *  off-box lifecycle methods without a truthiness guard. */
 function configuredOffBoxAdapter(
   injected?: SandboxAdapter | null
-): SandboxAdapter | null {
+): OffBoxSandboxAdapter | null {
   const adapter =
     injected !== undefined
       ? injected
       : resolveSandboxAdapter(config.sandbox.provider, config.sandbox.mode)
-  return adapter && adapter.meta.offBox ? adapter : null
+  return adapter && isOffBoxAdapter(adapter) ? adapter : null
 }
 
 export interface OffBoxOrphanSweepResult {
@@ -723,7 +727,9 @@ export async function reapOffBoxSandboxOrphans(
   } = {}
 ): Promise<OffBoxOrphanSweepResult> {
   const adapter = configuredOffBoxAdapter(deps.adapter)
-  if (!adapter?.listOrphans || !adapter.destroyResource) {
+  // (#13) off-box narrowed by configuredOffBoxAdapter → listOrphans/destroyResource
+  // are type-guaranteed; only the "no off-box provider configured" null remains.
+  if (!adapter) {
     return { scanned: 0, reaped: 0 }
   }
   const run = deps.executor ?? repo.defaultDbh()
@@ -779,7 +785,8 @@ export async function keepAliveOffBoxSandboxes(
   } = {}
 ): Promise<OffBoxKeepAliveResult> {
   const adapter = configuredOffBoxAdapter(deps.adapter)
-  if (!adapter?.refreshResourceDeadline) {
+  // (#13) refreshResourceDeadline is type-guaranteed on the narrowed off-box adapter.
+  if (!adapter) {
     return { refreshed: 0, failed: 0 }
   }
   const run = deps.executor ?? repo.defaultDbh()
@@ -2394,7 +2401,7 @@ async function teardownStaleRuntimeDataFree(
     // off-box VM via destroyResource; a host resource is left to the docker/reconcile
     // orphan reaper (a stray host child/container is cheap + swept). NEVER the session
     // mirror or the newer runtime's mounts.
-    if (adapter?.meta.offBox && adapter.destroyResource && row.resourceId) {
+    if (adapter && isOffBoxAdapter(adapter) && row.resourceId) {
       await adapter
         .destroyResource(row.resourceId)
         .catch((err) =>
@@ -2527,7 +2534,8 @@ interface TeardownOffBoxArgs {
   mounts: FileMountRow[]
   runtimeId: string
   ref: SandboxRef
-  adapter: SandboxAdapter
+  // (#13) narrowed off-box adapter → reconnectDataPlane is called without a `!`.
+  adapter: OffBoxSandboxAdapter
   options: TeardownSandboxOptions
 }
 
@@ -2583,7 +2591,7 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
         const persisted =
           (await repo.getBareSandboxForDispatch(runtimeId, run))?.credentials ??
           null
-        const rc = await adapter.reconnectDataPlane!(ref, {
+        const rc = await adapter.reconnectDataPlane(ref, {
           persistedCredentials: persisted,
           executor: run,
           workspaceId: ctx?.workspaceId,
@@ -2826,7 +2834,7 @@ export async function teardownSandbox(
       } catch {
         offBoxAdapter = null
       }
-      if (offBoxAdapter?.meta.offBox) {
+      if (offBoxAdapter && isOffBoxAdapter(offBoxAdapter)) {
         await teardownOffBoxSandbox({
           sessionId,
           run,
@@ -3137,7 +3145,7 @@ export async function recoverFailedSandboxMounts(): Promise<RecoverFailedMountsR
       } catch {
         recoveryAdapter = null
       }
-      if (recoveryAdapter?.meta.offBox) {
+      if (recoveryAdapter && isOffBoxAdapter(recoveryAdapter)) {
         const res = await recoverOffBoxSession(
           sessionId,
           sessionMounts,
@@ -3189,7 +3197,8 @@ async function recoverOffBoxSession(
   sessionId: string,
   sessionMounts: FileMountRow[],
   ref: SandboxRef,
-  adapter: SandboxAdapter
+  // (#13) narrowed off-box adapter → reconnectDataPlane is called without a `!`.
+  adapter: OffBoxSandboxAdapter
 ): Promise<{ recovered: number; stillFailed: number }> {
   const run = repo.defaultDbh()
   const runtimeId = ref.runtimeId
