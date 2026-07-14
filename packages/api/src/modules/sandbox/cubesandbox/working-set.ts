@@ -31,7 +31,14 @@ import {
   resolve,
   sep,
 } from "node:path"
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  rmdir,
+  writeFile,
+} from "node:fs/promises"
 import { createLogger } from "../../../infrastructure/logger/index.js"
 import type { WorkingSetBridge } from "../data-plane.js"
 import {
@@ -47,7 +54,7 @@ import {
   vmToVfs,
   type RemoteEnvdTransport,
 } from "./data-plane.js"
-import { CubeEnvdNotFoundError } from "./types.js"
+import { CubeEnvdError, CubeEnvdNotFoundError } from "./types.js"
 
 const log = createLogger("sandbox.cubesandbox")
 
@@ -138,7 +145,11 @@ export function makeEnvdWorkingSetTransport(opts: {
     vmDir: string,
     depth: number,
     mountVfsRoot: string,
-    out: ContainerFileStat[]
+    out: ContainerFileStat[],
+    // (#5) The current directory's own VFS key (null for the mount root, which is
+    // never emitted as an entry). When this dir turns out EMPTY, it is emitted as a
+    // 'dir' entry so an empty directory round-trips (create/delete survives a turn).
+    currentKey: string | null
   ): Promise<void> => {
     if (depth > MAX_LIST_DEPTH) {
       throw new WorkingSetTransportError(
@@ -153,6 +164,13 @@ export function makeEnvdWorkingSetTransport(opts: {
       // error. Any other transport error propagates (fail-loud on the pull path).
       if (err instanceof CubeEnvdNotFoundError) return
       throw err
+    }
+    // (#5) An EMPTY nested directory has no file to imply it → emit an explicit
+    // 'dir' entry so it round-trips. The mount root itself (currentKey===null) is
+    // never emitted (it always exists as the mount; an empty mount = empty manifest).
+    if (entries.length === 0 && currentKey !== null) {
+      out.push({ relpath: currentKey, kind: "dir", size: 0, mtimeSec: 0 })
+      return
     }
     for (const e of entries) {
       // (R5 #1 SECURITY) The envd entry path is UNTRUSTED. Normalize + scope-check it
@@ -170,8 +188,9 @@ export function makeEnvdWorkingSetTransport(opts: {
       }
       if (e.type === "directory") {
         // Descend the RE-DERIVED clean VM path (not the raw envd path) — ALL subdirs
-        // incl dotdirs (find parity — 2b).
-        await listOne(vfsToVm(key, vmRoot), depth + 1, mountVfsRoot, out)
+        // incl dotdirs (find parity — 2b). Pass the child's key so an EMPTY subdir
+        // emits its own 'dir' entry (#5).
+        await listOne(vfsToVm(key, vmRoot), depth + 1, mountVfsRoot, out, key)
         continue
       }
       // REGULAR files only — symlink/unknown are excluded (find -type f parity).
@@ -179,6 +198,7 @@ export function makeEnvdWorkingSetTransport(opts: {
       const ms = rfc3339ToEpochMs(e.modifiedTime)
       out.push({
         relpath: key,
+        kind: "file",
         size: e.size ?? 0,
         // display-only whole-second (docker parity); NOT the reconcile key.
         mtimeSec: ms !== undefined ? Math.trunc(ms / 1000) : 0,
@@ -209,7 +229,7 @@ export function makeEnvdWorkingSetTransport(opts: {
             `working-set mount root is not under the VM root: ${root}`
           )
         }
-        await listOne(trimmed, 0, mountVfsRoot, out)
+        await listOne(trimmed, 0, mountVfsRoot, out, null)
       }
       return out
     },
@@ -224,6 +244,21 @@ export function makeEnvdWorkingSetTransport(opts: {
     },
     async remove(relpath) {
       await envd.remove(toVm(relpath))
+    },
+    async makeDir(relpath) {
+      // envd MakeDir is recursive (creates parents). A pre-existing dir is a 409
+      // already_exists — success for our idempotent makeDir (#5).
+      try {
+        await envd.makeDir(toVm(relpath))
+      } catch (err) {
+        if (
+          err instanceof CubeEnvdError &&
+          (err.status === 409 || err.code === "already_exists")
+        ) {
+          return
+        }
+        throw err
+      }
     },
   }
 }
@@ -252,6 +287,35 @@ async function walkMirror(
         out.push(`/${relative(sandboxRoot, full).split(/[\\/]/).join("/")}`)
       }
       // symlinks/other: excluded (find -type f parity on the mirror side too).
+    }
+  }
+  await recurse(mountDir)
+  return out
+}
+
+/** (#5) Walk the mirror mount dir, returning VFS keys for EMPTY directories (never
+ *  the mount root itself — it always exists as the mount). Mirrors the transport's
+ *  listOne empty-dir emission so the PULL prune + the PUSH replicate the same set. */
+async function walkMirrorEmptyDirs(
+  mountDir: string,
+  sandboxRoot: string
+): Promise<string[]> {
+  const out: string[] = []
+  const recurse = async (dir: string): Promise<void> => {
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return // dir absent → nothing to list
+    }
+    if (entries.length === 0) {
+      if (dir !== mountDir) {
+        out.push(`/${relative(sandboxRoot, dir).split(/[\\/]/).join("/")}`)
+      }
+      return
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) await recurse(join(dir, e.name))
     }
   }
   await recurse(mountDir)
@@ -304,6 +368,22 @@ export function createCubeEnvdWorkingSetBridge(opts: {
         const target = join(sandboxRoot, rel)
         assertUnderMirror(target, mirrorMountDir) // (#1 belt) never delete outside the mount
         return rm(target, { force: true }).catch(() => {})
+      },
+      // (#5) empty-dir round-trip: create/list/remove empty mirror directories, each
+      // belt-asserted under the mount (never escape it — the same #1 guard as files).
+      makeMirrorDir: async (rel) => {
+        const target = join(sandboxRoot, rel)
+        assertUnderMirror(target, mirrorMountDir)
+        await mkdir(target, { recursive: true })
+      },
+      listMirrorEmptyDirs: () =>
+        walkMirrorEmptyDirs(mirrorMountDir, sandboxRoot),
+      removeMirrorDir: (rel) => {
+        const target = join(sandboxRoot, rel)
+        assertUnderMirror(target, mirrorMountDir)
+        // rmdir removes ONLY an empty dir (fails loud if a race left it non-empty);
+        // best-effort like removeMirrorFile (a concurrent delete is not an error).
+        return rmdir(target).catch(() => {})
       },
       maxReadBytes: opts.maxReadBytes,
     })

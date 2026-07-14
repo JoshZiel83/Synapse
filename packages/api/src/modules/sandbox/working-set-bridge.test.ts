@@ -50,9 +50,9 @@ test("S12 — reconcileStatCache reuses a (size,mtime) match, fetches a mismatch
   ])
   const { reused, toFetch } = reconcileStatCache(
     [
-      { relpath: "/c/a", size: 10, mtimeSec: 100 }, // exact match → reuse
-      { relpath: "/c/b", size: 20, mtimeSec: 201 }, // mtime changed → fetch
-      { relpath: "/c/new", size: 5, mtimeSec: 5 }, // miss → fetch
+      { relpath: "/c/a", kind: "file", size: 10, mtimeSec: 100 }, // exact match → reuse
+      { relpath: "/c/b", kind: "file", size: 20, mtimeSec: 201 }, // mtime changed → fetch
+      { relpath: "/c/new", kind: "file", size: 5, mtimeSec: 5 }, // miss → fetch
     ],
     cache
   )
@@ -68,8 +68,13 @@ test("S12 — parseFindListing parses `%s %T@ %p` rows (truncated mtime)", () =>
     "12 1700000000.5 /conversation/x.py\n34 1700000009.9 /actor/y.txt\n\n"
   )
   assert.deepEqual(rows, [
-    { relpath: "/conversation/x.py", size: 12, mtimeSec: 1700000000 },
-    { relpath: "/actor/y.txt", size: 34, mtimeSec: 1700000009 },
+    {
+      relpath: "/conversation/x.py",
+      kind: "file",
+      size: 12,
+      mtimeSec: 1700000000,
+    },
+    { relpath: "/actor/y.txt", kind: "file", size: 34, mtimeSec: 1700000009 },
   ])
 })
 
@@ -209,6 +214,79 @@ test("#14 — an oversize file is PRESERVED-and-EXCLUDED (never read), the rest 
   assert.deepEqual(Object.keys(written), ["/conversation/small.py"])
 })
 
+test("#5 — empty directories round-trip: PULL mkdirs into the mirror, PUSH mkdirs into the VM, prune rmdirs a removed one", async () => {
+  // A dir-aware fake transport (files + empty dirs).
+  const vmFiles = new Map<string, Buffer>()
+  const vmDirs = new Set<string>(["/conversation/keep"]) // one empty VM dir
+  const transport: WorkingSetTransport = {
+    async list() {
+      const out: ContainerFileStat[] = []
+      for (const [rel, b] of vmFiles) {
+        out.push({ relpath: rel, kind: "file", size: b.length, mtimeSec: 1 })
+      }
+      for (const d of vmDirs)
+        out.push({ relpath: d, kind: "dir", size: 0, mtimeSec: 0 })
+      return out
+    },
+    async read(rel) {
+      return vmFiles.get(rel) ?? Buffer.alloc(0)
+    },
+    async write(rel, bytes) {
+      vmFiles.set(rel, bytes)
+    },
+    async remove(rel) {
+      vmFiles.delete(rel)
+    },
+    async makeDir(rel) {
+      vmDirs.add(rel)
+    },
+  }
+  // A dir-aware in-memory mirror.
+  const mirrorFiles = new Set<string>()
+  const mirrorDirs = new Set<string>(["/conversation/stale"]) // an empty dir the VM lacks
+  const bridge = createDetachedWorkingSetBridge({
+    mirrorDir: "/tmp/mirror",
+    mountRoots: ["/conversation"],
+    transport,
+    statCache: new Map(),
+    writeMirrorFile: async (rel) => {
+      mirrorFiles.add(rel)
+    },
+    listMirrorFiles: async () => [...mirrorFiles],
+    removeMirrorFile: async (rel) => {
+      mirrorFiles.delete(rel)
+    },
+    makeMirrorDir: async (rel) => {
+      mirrorDirs.add(rel)
+    },
+    listMirrorEmptyDirs: async () => [...mirrorDirs],
+    removeMirrorDir: async (rel) => {
+      mirrorDirs.delete(rel)
+    },
+  })
+
+  // PULL: the VM's empty dir is mkdir'd into the mirror; the mirror's stale empty
+  // dir (absent from the VM) is pruned (rmdir).
+  const res = await bridge.fetchChangedIntoMirror()
+  assert.ok(
+    mirrorDirs.has("/conversation/keep"),
+    "VM empty dir pulled into mirror"
+  )
+  assert.ok(
+    !mirrorDirs.has("/conversation/stale"),
+    "stale mirror empty dir pruned"
+  )
+  assert.deepEqual(res.pruned, ["/conversation/stale"])
+
+  // PUSH: an empty dir in the mirror is mkdir'd into the VM.
+  mirrorDirs.add("/conversation/newdir")
+  await bridge.pushMirrorToContainer()
+  assert.ok(
+    vmDirs.has("/conversation/newdir"),
+    "mirror empty dir pushed into VM"
+  )
+})
+
 // ─────────────────────── S12 forced-commit-failure stash ──────────────────────
 
 test("S12 — stashUncommittedWorkingSet exfiltrates + records the stash manifest (commit-failure recovery WRITE contract)", async () => {
@@ -288,6 +366,7 @@ function inMemoryVm(
           continue
         out.push({
           relpath: rel,
+          kind: "file",
           size: v.bytes.length,
           mtimeSec: Math.trunc(Number(v.mtimeKey) / 1000),
           mtimeKey: v.mtimeKey,
@@ -303,6 +382,9 @@ function inMemoryVm(
     },
     async remove(rel) {
       vm.delete(rel)
+    },
+    async makeDir() {
+      // This in-memory VM models files only (no empty dirs) — makeDir is a no-op.
     },
   }
   return { transport, vm }
@@ -389,6 +471,7 @@ test("R4 F6 — a same-size same-SECOND in-place edit is NOT a false cache hit (
     [
       {
         relpath: "/conversation/x.py",
+        kind: "file",
         size: 5,
         mtimeSec: 1700000000, // SAME truncated second as the cache
         mtimeKey: "1700000000900", // DIFFERENT full-ms → must fetch
@@ -409,7 +492,7 @@ test("R4 F6 — docker (no mtimeKey) keeps its (size, second) key unchanged", ()
     ["/c/a", { size: 10, mtimeSec: 100, sha256: "sha-a" }],
   ])
   const { reused, toFetch } = reconcileStatCache(
-    [{ relpath: "/c/a", size: 10, mtimeSec: 100 }], // no mtimeKey → second-key path
+    [{ relpath: "/c/a", kind: "file", size: 10, mtimeSec: 100 }], // no mtimeKey → second-key path
     cache
   )
   assert.deepEqual(

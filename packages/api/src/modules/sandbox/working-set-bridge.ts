@@ -59,6 +59,14 @@ export function createProductWorkingSetBridge(): WorkingSetBridge {
 export interface ContainerFileStat {
   /** Canonicalized in-container relpath (POSIX, no leading slash, mount-rooted). */
   relpath: string
+  /**
+   * (#5) 'file' (a regular file — has bytes + a hash) or 'dir' (a directory — no
+   * bytes). Only EMPTY directories are emitted as 'dir' entries: a non-empty dir is
+   * implied by its files' parents (materialize/writeMirrorFile create them), but an
+   * empty dir has no file to imply it, so it must round-trip explicitly or it is
+   * lost on PULL/PUSH. A 'dir' entry is never read/hashed and its size is 0.
+   */
+  kind: "file" | "dir"
   size: number
   /** mtime in whole seconds (docker `find %T@` truncated — the docker-transport
    *  granularity). For the envd transport this is Math.trunc(ms/1000) and is NOT
@@ -107,6 +115,9 @@ export interface WorkingSetTransport {
   write(relpath: string, bytes: Buffer): Promise<void>
   /** Remove a file (docker: `rm -f`; envd: remove). Idempotent. */
   remove(relpath: string): Promise<void>
+  /** (#5) Create an (empty) directory + parents (docker: `mkdir -p`; envd: makeDir,
+   *  already-exists = success). Idempotent — round-trips an empty dir into the VM. */
+  makeDir(relpath: string): Promise<void>
 }
 
 /**
@@ -159,6 +170,9 @@ export function makeDockerExecTransport(opts: {
     async remove(relpath) {
       await exec(["exec", containerId, "rm", "-f", relpath])
     },
+    async makeDir(relpath) {
+      await exec(["exec", containerId, "mkdir", "-p", relpath])
+    },
   }
 }
 
@@ -180,6 +194,14 @@ export interface DetachedBridgeOptions {
   writeMirrorFile?: (relpath: string, bytes: Buffer) => Promise<void>
   /** (F1) Injected: remove a mirror file the VM no longer has (delete-prune). */
   removeMirrorFile?: (relpath: string) => Promise<void>
+  /** (#5) Injected: create an (empty) directory + parents in the mirror (mkdir -p).
+   *  Used to round-trip an empty VM dir into the mirror so scanCommitDir commits it. */
+  makeMirrorDir?: (relpath: string) => Promise<void>
+  /** (#5) Injected: list the mirror's EMPTY directories as canonical relpaths
+   *  (default = []). Drives the empty-dir prune (delete-propagation) + the PUSH. */
+  listMirrorEmptyDirs?: () => Promise<string[]>
+  /** (#5) Injected: remove an (empty) mirror directory the VM no longer has. */
+  removeMirrorDir?: (relpath: string) => Promise<void>
   /**
    * (#14) Per-file byte budget for the working-set PULL/PUSH. A single file whose
    * listed size EXCEEDS this is PRESERVED-and-EXCLUDED: it is NOT read (envd/docker
@@ -276,7 +298,10 @@ export function parseFindListing(stdout: string): ContainerFileStat[] {
     // "/conversation/x.py"). Canonical + stable across scans. No mtimeKey — `find
     // %T@` carries no sub-second precision, so docker keeps its (size, sec) key.
     if (!Number.isFinite(size) || !Number.isFinite(mtime)) continue
-    out.push({ relpath: abs, size, mtimeSec: mtime })
+    // `find -type f` yields only regular files → kind:'file'. (The detached docker
+    // transport is the CI proof of the FILE algorithm; off-box empty-dir round-trip
+    // is exercised over the envd transport, which emits 'dir' entries.)
+    out.push({ relpath: abs, kind: "file", size, mtimeSec: mtime })
   }
   return out
 }
@@ -330,15 +355,19 @@ export function createDetachedWorkingSetBridge(
   const { mirrorDir, mountRoots, transport, statCache } = opts
   const readMirrorFile = opts.readMirrorFile ?? (async () => Buffer.alloc(0))
   const listMirrorFiles = opts.listMirrorFiles ?? (async () => [])
+  const listMirrorEmptyDirs = opts.listMirrorEmptyDirs ?? (async () => [])
 
   const listContainer = (): Promise<ContainerFileStat[]> =>
     transport.list(mountRoots)
 
   const planFor = async (mirrorFiles: string[]): Promise<ReplicationPlan> => {
     const container = await listContainer()
+    // (#5) The FILE replication plan diffs FILES only — a container 'dir' entry must
+    // never land in `removes` (that would rm an empty VM dir the mirror doesn't
+    // separately list). Empty-dir push is handled explicitly in pushMirrorToContainer.
     return planReplication(
       mirrorFiles,
-      container.map((c) => c.relpath)
+      container.filter((c) => c.kind === "file").map((c) => c.relpath)
     )
   }
 
@@ -349,8 +378,14 @@ export function createDetachedWorkingSetBridge(
     preserved: string[]
   }> => {
     const listing = await listContainer()
-    const { reused, toFetch } = reconcileStatCache(listing, statCache)
-    const byPath = new Map(listing.map((f) => [f.relpath, f]))
+    // (#5) Split the listing: only FILES go through the stat-cache reconcile + fetch
+    // (a 'dir' entry has no bytes to read/hash). 'dir' entries are the EMPTY
+    // directories the VM carries — they are mkdir'd into the mirror below so
+    // scanCommitDir commits them.
+    const fileListing = listing.filter((f) => f.kind === "file")
+    const dirListing = listing.filter((f) => f.kind === "dir")
+    const { reused, toFetch } = reconcileStatCache(fileListing, statCache)
+    const byPath = new Map(fileListing.map((f) => [f.relpath, f]))
     const maxReadBytes = opts.maxReadBytes
     const fetched: string[] = []
     const preserved: string[] = []
@@ -379,18 +414,37 @@ export function createDetachedWorkingSetBridge(
       // write current bytes into the mirror so scanCommitDir sees them.
       await opts.writeMirrorFile?.(rel, bytes)
     }
+    // (#5) Round-trip EMPTY directories: mkdir every VM 'dir' entry into the mirror
+    // so the following scanCommitDir commits it. (A non-empty dir already exists via
+    // its files' writeMirrorFile parent-mkdir, so this only materially adds the empty
+    // ones; mkdir -p is idempotent.)
+    for (const rel of dirListing) {
+      await opts.makeMirrorDir?.(rel.relpath)
+    }
     // (F1 / §6.4) PULL-side delete-propagation: rebuild the mirror to EXACTLY the
     // listing. Every mirror file absent from the VM listing is a file the agent
     // deleted upstream — REMOVE it from the mirror (and drop its stat-cache entry)
     // so the following scanCommitDir sees the delete instead of resurrecting the
     // stale base copy. This is the pull-side twin of planReplication.removes.
-    const present = new Set(listing.map((f) => f.relpath))
+    const presentFiles = new Set(fileListing.map((f) => f.relpath))
     const mirrorFiles = await listMirrorFiles()
     const pruned: string[] = []
     for (const rel of mirrorFiles) {
-      if (!present.has(rel)) {
+      if (!presentFiles.has(rel)) {
         await opts.removeMirrorFile?.(rel)
         statCache.delete(rel)
+        pruned.push(rel)
+      }
+    }
+    // (#5) EMPTY-dir delete-propagation: an empty mirror dir absent from the VM's
+    // dir set is one the agent deleted upstream — rmdir it. Runs AFTER the file
+    // prune (removing files can leave a dir empty). A dir the VM still carries (in
+    // dirListing) is kept; a non-empty mirror dir is not in listMirrorEmptyDirs, so
+    // it is never rmdir'd here.
+    const presentDirs = new Set(dirListing.map((f) => f.relpath))
+    for (const rel of await listMirrorEmptyDirs()) {
+      if (!presentDirs.has(rel)) {
+        await opts.removeMirrorDir?.(rel)
         pruned.push(rel)
       }
     }
@@ -413,6 +467,12 @@ export function createDetachedWorkingSetBridge(
     }
     for (const rel of plan.removes) {
       await transport.remove(rel)
+    }
+    // (#5) Replicate EMPTY directories the mirror carries into the VM — a non-empty
+    // dir is created by its files' write above, but an empty base dir has no file to
+    // imply it, so it must be mkdir'd explicitly or it never reaches the VM.
+    for (const rel of await listMirrorEmptyDirs()) {
+      await transport.makeDir(rel)
     }
   }
 

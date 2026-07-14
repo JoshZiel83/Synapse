@@ -113,6 +113,43 @@ function conversationTree(): Record<string, FileEntry[]> {
   }
 }
 
+test("#5 — an EMPTY nested directory is emitted as a kind:'dir' entry (round-trips); the mount root is not", async () => {
+  // conversation/ has one file + one EMPTY subdir. The empty subdir has no file to
+  // imply it, so it must surface as its own 'dir' entry or it is lost.
+  const tree: Record<string, FileEntry[]> = {
+    "/workspace/conversation": [
+      {
+        name: "a.py",
+        path: "/workspace/conversation/a.py",
+        type: "file",
+        size: 1,
+        modifiedTime: MT,
+      },
+      {
+        name: "empty",
+        path: "/workspace/conversation/empty",
+        type: "directory",
+      },
+    ],
+    "/workspace/conversation/empty": [], // the empty dir
+  }
+  const transport = makeEnvdWorkingSetTransport({
+    envd: stubEnvd(tree),
+    vmRoot: "/workspace",
+  })
+  const listing = await transport.list(["/workspace/conversation"])
+  const dirs = listing.filter((e) => e.kind === "dir").map((e) => e.relpath)
+  const files = listing.filter((e) => e.kind === "file").map((e) => e.relpath)
+  assert.deepEqual(
+    dirs,
+    ["/conversation/empty"],
+    "the empty subdir round-trips"
+  )
+  assert.deepEqual(files, ["/conversation/a.py"], "the file is a 'file' entry")
+  // The mount root itself is NEVER emitted (it always exists as the mount).
+  assert.ok(!listing.some((e) => e.relpath === "/conversation"))
+})
+
 test("R4 2d — envd list is VFS-mount-rooted (vmRoot stripped), files-only, dotdirs descended, symlink excluded", async () => {
   const envd = stubEnvd(conversationTree())
   const transport = makeEnvdWorkingSetTransport({ envd, vmRoot: "/workspace" })
