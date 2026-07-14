@@ -2198,6 +2198,12 @@ export async function mintBareSandboxRuntimeTx(args: {
         // R4 §1.7/3c: real provider resource id in the SAME insert (not '' then
         // backfilled) — closes the crash-between-mint-and-backfill orphan window.
         resourceId: args.resourceId ?? "",
+        // R5 #7: write the provision DEADLINE in the mint tx — BEFORE create()
+        // returns — so a provision that HANGS after mint (VM up, readiness never
+        // completes) is still visible to reapStuckProvisioningSandboxes (which reaps
+        // 'provisioning' past deadline_at). The post-create back-fill refreshes it.
+        // The normal path flips to 'active' in seconds, well under the budget.
+        deadlineAt: sql`NOW() + interval '5 minutes'`,
         // R4 §1.3/3c: encrypted data-plane creds atomic with the row (NULL for
         // host/resident + the unauthenticated local cube).
         dataPlaneCredentialsEncrypted: args.credentialsEncrypted ?? null,

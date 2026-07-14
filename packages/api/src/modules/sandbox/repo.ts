@@ -631,6 +631,8 @@ export interface SandboxRow {
    * dispatch/rebuild path (getBareSandboxForDispatch), never the generic reader.
    */
   dataPlaneCredentialsEncrypted: string | null
+  /** (R5 #7) provision budget — the reaper reaps a 'provisioning' row past this. */
+  deadlineAt: Date | null
 }
 
 const SANDBOX_ROW_COLUMNS = [
@@ -645,6 +647,7 @@ const SANDBOX_ROW_COLUMNS = [
   "hostPidIdentity",
   "pairingSessionId",
   "dataPlaneCredentialsEncrypted",
+  "deadlineAt",
 ] as const
 
 const SANDBOX_ROW_COLUMNS_PREFIXED = [
@@ -659,6 +662,7 @@ const SANDBOX_ROW_COLUMNS_PREFIXED = [
   "sb.hostPidIdentity",
   "sb.pairingSessionId",
   "sb.dataPlaneCredentialsEncrypted",
+  "sb.deadlineAt",
 ] as const
 
 function toSandboxRow(row: Record<string, unknown>): SandboxRow {
@@ -675,6 +679,7 @@ function toSandboxRow(row: Record<string, unknown>): SandboxRow {
     pairingSessionId: (row.pairingSessionId as string | null) ?? null,
     dataPlaneCredentialsEncrypted:
       (row.dataPlaneCredentialsEncrypted as string | null) ?? null,
+    deadlineAt: (row.deadlineAt as Date | null) ?? null,
   }
 }
 

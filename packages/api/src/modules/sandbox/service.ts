@@ -969,14 +969,31 @@ export async function provisionSandbox(
       ? await repo.getSandboxById(runtimeIdForEndpoint)
       : null
     if (sandboxRow?.state === "active") {
-      // Mode gates the endpoint probe: 'bare' has no device_runtime service to
-      // resolve (P4), 'resident' must wait for its tunnel endpoint.
-      fastPathOk = await fastPathEndpointReady({
-        sessionId,
-        runtimeId: runtimeIdForEndpoint,
-        mode: sandboxRow.mode,
-        tunnelTimeoutMs: options.tunnelTimeoutMs ?? 30_000,
-      })
+      // (R5 #2 = Option B) OFF-BOX sandboxes are NOT reused across turns. A reused
+      // cube VM diverges from the host mirror between turns (background writers +
+      // no host-side conflict detection), and the per-turn refresh/commit only touch
+      // the host mirror — so a naive per-turn PUSH/PULL would clobber uncommitted VM
+      // work. Instead each off-box turn does a clean teardown (PULL VM→mirror +
+      // commit) + cold reprovision (re-materialize head + replicate-only PUSH), which
+      // round-trips through CAS with the existing primitives. So DECLINE the fast path
+      // for off-box → fall through to the stale-mount teardown + cold provision below.
+      // Host bare/resident keep VM/process reuse (their plane IS the host mirror).
+      let offBox = false
+      try {
+        offBox = adapterForRow(sandboxRow.adapter, sandboxRow.mode).meta.offBox
+      } catch {
+        offBox = false
+      }
+      if (!offBox) {
+        // Mode gates the endpoint probe: 'bare' has no device_runtime service to
+        // resolve (P4), 'resident' must wait for its tunnel endpoint.
+        fastPathOk = await fastPathEndpointReady({
+          sessionId,
+          runtimeId: runtimeIdForEndpoint,
+          mode: sandboxRow.mode,
+          tunnelTimeoutMs: options.tunnelTimeoutMs ?? 30_000,
+        })
+      }
     }
   }
   if (fastPathOk) {
@@ -1059,6 +1076,29 @@ export async function provisionSandbox(
   // Live dirs are preserved by teardown's commit path; their content is
   // re-materialized from CAS on re-provision.
   if (existing.length > 0) {
+    // (R5 #7) BACK-OFF guard against the double-create race. provisionSandbox is
+    // called inside the Redis session lock; the only same-session overlap is a
+    // lock-expiry window where a SECOND worker enters while the first's provision is
+    // still in flight. The first leaves fresh 'provisioning' mounts + a young sandbox
+    // row within its deadline. Tearing those down here would KILL the first's fresh
+    // VM (orphan) and fail it. So when the existing mounts belong to a genuinely
+    // in-flight provision (a 'provisioning' row still within its deadline), do NOT
+    // tear it down — fail retryable and let it complete. A crashed/stale provision
+    // (past deadline) or an 'active' prior turn falls through to the teardown below.
+    if (existing.some((m) => m.status === "provisioning")) {
+      const rid = runtimeIdFromMounts(existing)
+      const row = rid ? await repo.getSandboxById(rid) : null
+      if (
+        row?.state === "provisioning" &&
+        row.deadlineAt &&
+        row.deadlineAt.getTime() > Date.now()
+      ) {
+        throw new SandboxServiceError(
+          `session ${sessionId}: a provision is already in progress (retry)`,
+          409
+        )
+      }
+    }
     console.warn(
       `[sandbox] session ${sessionId} has ${existing.length} stale/dead mount(s); tearing down before re-provision`
     )
