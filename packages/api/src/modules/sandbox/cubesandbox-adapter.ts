@@ -37,7 +37,7 @@ import {
 import type {
   BareDataPlaneRebuildRow,
   SandboxDataPlane,
-  WorkingSetBridge,
+  OffBoxWorkingSetBridge,
 } from "./data-plane.js"
 import type { StatCache } from "./working-set-bridge.js"
 import { createCubeEnvdWorkingSetBridge } from "./cubesandbox/working-set.js"
@@ -403,6 +403,12 @@ export function makeCubesandboxBareAdapter(
           descriptor,
           vmRoot: runOpts.vmRoot,
           envd,
+          // (R6 H-8) confirm a 502/503/504 is a genuinely-gone VM (control getInfo →
+          // dead) before the terminal gone mapping — a transient blip stays retryable.
+          confirmGone: () =>
+            probeCubesandboxLiveness(control, sandboxID).then(
+              (l) => l === "dead"
+            ),
         })
         envdOwnedByPlane = true // dispose(plane) now closes envd
         // (#5-B) off-box=true → the HIT re-check fails CLOSED for this remote VM on a
@@ -518,7 +524,7 @@ export function makeCubesandboxBareAdapter(
     // recovery PULL VM→mirror, delete-pruned) + scanManifest. A fresh stat-cache
     // per bridge (leak-free; the pull re-fetches on a cold cache — always correct;
     // F6 full-ms keying prevents a same-second false hit on any warm entry).
-    workingSet: (handle): WorkingSetBridge => {
+    workingSet: (handle): OffBoxWorkingSetBridge => {
       const envd = envdFactory(
         runOpts,
         handle.resourceId,
@@ -554,6 +560,13 @@ export function makeCubesandboxBareAdapter(
         descriptor: row.descriptor,
         vmRoot: runOpts.vmRoot,
         envd,
+        // (R6 H-8) LAZY control probe (built only if a 502/503/504 actually fires) so
+        // the DB-read-only fast path never eagerly opens a control client, yet a
+        // gateway blip is still confirmed against getInfo before being called gone.
+        confirmGone: () =>
+          probeCubesandboxLiveness(controlFactory(runOpts), sandboxID).then(
+            (l) => l === "dead"
+          ),
       })
     },
     // Token-bearing off-box reconnect (§6.2), for teardown/recovery pull (wired
@@ -595,6 +608,12 @@ export function makeCubesandboxBareAdapter(
         descriptor,
         vmRoot: runOpts.vmRoot,
         envd,
+        // (R6 H-8) reuse this reconnect's control client to confirm a 502/503/504 is a
+        // genuinely-gone VM before the terminal mapping.
+        confirmGone: () =>
+          probeCubesandboxLiveness(control, sandboxID).then(
+            (l) => l === "dead"
+          ),
       })
       const credentials = chosen ? brandRedactedCredentials(chosen) : null
       // Re-persist ONLY when connect actually re-minted a token that DIFFERS from

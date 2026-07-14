@@ -355,6 +355,19 @@ export interface WorkingSetBridge {
   dispose?(): Promise<void>
 }
 
+/**
+ * (R6 #6) The OFF-BOX working-set bridge NARROWS {@link WorkingSetBridge} so `pull`
+ * is REQUIRED (not the optional host-bridge shape): an off-box VM is the SOLE store of
+ * the turn's bytes, so teardown/recovery MUST pull it into the mirror before the VM is
+ * deleted, and MUST branch on the {@link PullOutcome} durability result. Returned by
+ * {@link OffBoxSandboxAdapter.workingSet}, so the spine calls `pull()` unconditionally
+ * — the "did the adapter forget to implement pull?" hole is closed at the type level,
+ * not by a runtime `if (bridge.pull)` guard.
+ */
+export interface OffBoxWorkingSetBridge extends WorkingSetBridge {
+  pull(input: { dir: string }): Promise<PullOutcome>
+}
+
 // ─────────────────────────── local:bare reference plane ──────────────────────
 
 export interface LocalBareDataPlaneOptions {

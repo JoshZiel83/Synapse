@@ -248,3 +248,52 @@ test("#10: a public non-loopback https config is NOT a false positive", () => {
     []
   )
 })
+
+// ── R6 H-6: deployment-id fail-closed on an authenticated (shared) Cube account ──
+
+const cubeValidate = SANDBOX_ADAPTER_METADATA.find(
+  (m) => m.key === "cubesandbox:bare"
+)!.meta.config.validate
+
+function cubeIssues(over: Record<string, string>): string[] {
+  const env = {
+    SANDBOX_CUBESANDBOX_API_URL: "https://cube.example.com:13000",
+    SANDBOX_CUBESANDBOX_PROXY_URL: "https://proxy.example.com:11080",
+    SANDBOX_CUBESANDBOX_TEMPLATE: "base",
+    ...over,
+  } as never
+  return cubeValidate(env).map((i) => i.path.join("."))
+}
+
+test("R6 H-6: an api key with NO SANDBOX_DEPLOYMENT_ID is rejected (cross-reap guard)", () => {
+  assert.ok(
+    cubeIssues({ SANDBOX_CUBESANDBOX_API_KEY: "a-real-key" }).includes(
+      "SANDBOX_DEPLOYMENT_ID"
+    ),
+    "an authenticated Cube account must carry a non-empty deployment id"
+  )
+  // whitespace-only id is treated as empty
+  assert.ok(
+    cubeIssues({
+      SANDBOX_CUBESANDBOX_API_KEY: "a-real-key",
+      SANDBOX_DEPLOYMENT_ID: "   ",
+    }).includes("SANDBOX_DEPLOYMENT_ID"),
+    "a whitespace-only deployment id is treated as empty"
+  )
+})
+
+test("R6 H-6: an api key WITH a deployment id raises no deployment-id issue", () => {
+  assert.ok(
+    !cubeIssues({
+      SANDBOX_CUBESANDBOX_API_KEY: "a-real-key",
+      SANDBOX_DEPLOYMENT_ID: "prod-eu-1",
+    }).includes("SANDBOX_DEPLOYMENT_ID")
+  )
+})
+
+test("R6 H-6: an UNAUTHENTICATED self-hosted deploy (no api key) needs no deployment id", () => {
+  assert.ok(
+    !cubeIssues({}).includes("SANDBOX_DEPLOYMENT_ID"),
+    "a single-tenant unauthenticated deploy may leave the deployment id empty"
+  )
+})

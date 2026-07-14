@@ -115,6 +115,15 @@ export interface RemoteBareDataPlaneOptions {
   vmRoot: string
   /** The envd data-plane transport (a CubeEnvdClient in prod; a stub in tests). */
   envd: RemoteEnvdTransport
+  /**
+   * (R6 H-8) Control-plane confirmation that the VM is genuinely DEAD. On a CubeProxy
+   * gateway 502/503/504 the proxy could not reach envd — but that is AMBIGUOUS (a
+   * transient proxy hiccup vs a vanished VM). The gone-mapper calls this before
+   * declaring the resource gone; it must resolve `true` ONLY on a control-plane
+   * getInfo confirming the sandbox is absent/dead (a live/unknown/unreachable control
+   * probe → `false` ⇒ the original 502 is re-thrown as a transient, retryable error).
+   */
+  confirmGone: () => Promise<boolean>
   /** Default remote exec timeout when the caller supplies none (ms). */
   defaultExecTimeoutMs?: number
 }
@@ -309,27 +318,33 @@ function isCubeProxyGoneStatus(status: number | undefined): boolean {
   return status === 502 || status === 503 || status === 504
 }
 
-/** (#12b) Translate a CubeProxy-unreachable error to the CANONICAL
- *  SandboxResourceGoneError so EVERY plane consumer (dispatch → resource_gone,
- *  teardown, liveness) converges the same way, instead of a cube-specific error
- *  only the dispatch mapper would recognize. Any other error passes through. */
-function toGoneIfProxyUnreachable(err: unknown): unknown {
-  if (err instanceof CubeEnvdError && isCubeProxyGoneStatus(err.status)) {
-    return new SandboxResourceGoneError(
-      `cubesandbox VM unreachable via CubeProxy (HTTP ${err.status}) — treating the sandbox as gone`
-    )
-  }
-  return err
-}
-
-/** Wrap a transport so every DATA op maps a CubeProxy-unreachable error to the
- *  uniform gone error. close()/destroy() pass through unchanged (a gone VM during
- *  teardown is already the desired end state); destroy stays optional so a stub
- *  without it is unaffected and the plane's `if (envd.destroy)` check still holds. */
-function wrapEnvdGoneMapping(envd: RemoteEnvdTransport): RemoteEnvdTransport {
+/** Wrap a transport so every DATA op maps a CONFIRMED CubeProxy-unreachable error to
+ *  the CANONICAL SandboxResourceGoneError, so EVERY plane consumer (dispatch →
+ *  resource_gone, teardown, liveness) converges the same way. (R6 H-8) A gateway
+ *  502/503/504 is AMBIGUOUS — the mapper `confirmGone()`s via the control plane before
+ *  declaring gone; a live/unknown/unconfirmable VM re-throws the ORIGINAL transient
+ *  (retryable) error instead of forcing an irreversible teardown. close()/destroy()
+ *  pass through unchanged (a gone VM during teardown is already the desired end state);
+ *  destroy stays optional so a stub without it is unaffected and the plane's
+ *  `if (envd.destroy)` check still holds. */
+function wrapEnvdGoneMapping(
+  envd: RemoteEnvdTransport,
+  confirmGone: () => Promise<boolean>
+): RemoteEnvdTransport {
   const mapRejection = <T>(p: Promise<T>): Promise<T> =>
-    p.catch((err: unknown) => {
-      throw toGoneIfProxyUnreachable(err)
+    p.catch(async (err: unknown): Promise<T> => {
+      if (err instanceof CubeEnvdError && isCubeProxyGoneStatus(err.status)) {
+        // (R6 H-8) confirm the VM is genuinely gone before the terminal mapping; a
+        // transient gateway blip must NOT reap a live VM. An unconfirmable probe
+        // (control transport error → not 'dead') fails toward RETRY, never gone.
+        const gone = await confirmGone().catch(() => false)
+        if (gone) {
+          throw new SandboxResourceGoneError(
+            `cubesandbox VM unreachable via CubeProxy (HTTP ${err.status}); control-plane confirms it is gone`
+          )
+        }
+      }
+      throw err
     })
   return {
     exec: (request, options) => mapRejection(envd.exec(request, options)),
@@ -355,8 +370,9 @@ export function createRemoteBareDataPlane(
   opts: RemoteBareDataPlaneOptions
 ): SandboxDataPlane {
   const { vmRoot } = opts
-  // (#12b) every plane op speaks through the gone-mapping wrapper.
-  const envd = wrapEnvdGoneMapping(opts.envd)
+  // (#12b) every plane op speaks through the gone-mapping wrapper; (R6 H-8) it
+  // confirms a 502/503/504 via the control plane before declaring the VM gone.
+  const envd = wrapEnvdGoneMapping(opts.envd, opts.confirmGone)
   const caps = opts.descriptor.core
   const execTimeoutDefault =
     opts.defaultExecTimeoutMs ?? DEFAULT_REMOTE_EXEC_TIMEOUT_MS

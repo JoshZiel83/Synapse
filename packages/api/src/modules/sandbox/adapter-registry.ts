@@ -59,6 +59,7 @@ import {
   type SandboxDataPlane,
   type BareDataPlaneRebuildRow,
   type WorkingSetBridge,
+  type OffBoxWorkingSetBridge,
 } from "./data-plane.js"
 import { createProductWorkingSetBridge } from "./working-set-bridge.js"
 import type { Executor } from "./repo.js"
@@ -253,6 +254,9 @@ export interface SandboxAdapter {
  */
 export interface OffBoxSandboxAdapter extends SandboxAdapter {
   readonly kind: "offBoxBare"
+  // (R6 #6) narrow the working-set bridge to the off-box shape where `pull` is REQUIRED
+  // — teardown/recovery call it unconditionally + branch on the PullOutcome.
+  workingSet(handle: SandboxHandle): OffBoxWorkingSetBridge
   rebuildDataPlane(row: BareDataPlaneRebuildRow): Promise<SandboxDataPlane>
   reconnectDataPlane(
     ref: SandboxRef,

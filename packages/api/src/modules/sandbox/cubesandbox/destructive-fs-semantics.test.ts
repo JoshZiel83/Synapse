@@ -91,6 +91,7 @@ function makePlane(envd: RemoteEnvdTransport) {
     descriptor,
     vmRoot: VM_ROOT,
     envd,
+    confirmGone: async () => true,
   })
 }
 

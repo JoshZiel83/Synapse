@@ -417,6 +417,7 @@ export const SANDBOX_ADAPTER_METADATA: readonly SandboxAdapterMetadataEntry[] =
             "SANDBOX_CUBESANDBOX_PROXY_URL",
             "SANDBOX_CUBESANDBOX_TEMPLATE",
             "SANDBOX_CUBESANDBOX_API_KEY",
+            "SANDBOX_DEPLOYMENT_ID",
           ],
           validate: (env) => {
             // A remote sandbox provider is unreachable without its control/data-plane
@@ -444,6 +445,27 @@ export const SANDBOX_ADAPTER_METADATA: readonly SandboxAdapterMetadataEntry[] =
                 issue(
                   ["SANDBOX_CUBESANDBOX_TEMPLATE"],
                   "SANDBOX_CUBESANDBOX_TEMPLATE is required when SANDBOX_PROVIDER=cubesandbox (the sandbox template to instantiate)"
+                )
+              )
+            }
+            // (R6 H-6) On an AUTHENTICATED (shared) Cube account, the orphan sweep reaps
+            // VMs by THIS deployment's provenance marker. A DEFAULT-EMPTY
+            // SANDBOX_DEPLOYMENT_ID makes this deployment the "empty-id owner" — it would
+            // reap every un-marked VM, and two deployments both defaulting to empty would
+            // CROSS-REAP each other's LIVE VMs. Require a non-empty deployment id whenever
+            // an api key is set. (An unauthenticated self-hosted dev deployment is
+            // single-tenant, so an empty id stays safe there.)
+            if (
+              env.SANDBOX_CUBESANDBOX_API_KEY?.trim() &&
+              !env.SANDBOX_DEPLOYMENT_ID?.trim()
+            ) {
+              issues.push(
+                issue(
+                  ["SANDBOX_DEPLOYMENT_ID"],
+                  "SANDBOX_DEPLOYMENT_ID is required when SANDBOX_CUBESANDBOX_API_KEY is set — " +
+                    "on a shared/authenticated Cube account the orphan sweep reaps by this " +
+                    "deployment's provenance marker, and a default-empty id would cross-reap a " +
+                    "sibling deployment's live VMs"
                 )
               )
             }

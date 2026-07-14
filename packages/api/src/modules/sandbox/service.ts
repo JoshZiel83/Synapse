@@ -60,7 +60,7 @@ import {
   type SandboxRef,
   type SandboxSpec,
 } from "./sandbox-backend.js"
-import type { WorkingSetBridge } from "./data-plane.js"
+import type { OffBoxWorkingSetBridge } from "./data-plane.js"
 import {
   reapDockerSandboxOrphans,
   type SpawnImpl,
@@ -1133,12 +1133,18 @@ export async function provisionSandbox(
     // tear it down — fail retryable and let it complete. A crashed/stale provision
     // (past deadline) or an 'active' prior turn falls through to the teardown below.
     if (existing.some((m) => m.status === "provisioning")) {
-      const rid = runtimeIdFromMounts(existing)
-      const row = rid ? await repo.getSandboxById(rid) : null
+      // (R6 H-3) Resolve the in-flight row by SESSION_ID, NOT via runtimeIdFromMounts
+      // (mount.sandbox_id). sandbox_id is back-filled onto the mount only AFTER the
+      // sandboxes row is minted inside backend.create(); during that window
+      // runtimeIdFromMounts(existing) is null, so the old guard saw no in-flight row and
+      // fell through to teardownSandbox — killing the first worker's fresh VM (the
+      // double-create → unsandboxed turn). A session-scoped lookup sees the
+      // 'provisioning' row the instant it exists.
+      const inflight = await repo.getSandboxBySessionForControl(sessionId)
       if (
-        row?.state === "provisioning" &&
-        row.deadlineAt &&
-        row.deadlineAt.getTime() > Date.now()
+        inflight?.state === "provisioning" &&
+        inflight.deadlineAt &&
+        inflight.deadlineAt.getTime() > Date.now()
       ) {
         throw new SandboxServiceError(
           `session ${sessionId}: a provision is already in progress (retry)`,
@@ -2634,12 +2640,17 @@ interface TeardownOffBoxArgs {
  * KEPT (state left 'closing' for the closing reaper's recovery re-pull, §6.5).
  *
  * Ordering rationale (see report): the ORIGINAL live plane is DRAINED (dispose,
- * which awaits in-flight fs/exec) WITHOUT control.kill — that settles writers that
- * passed the close-gate. `control.pause` is SKIPPED: this deployment's control
- * client exposes no pause, and pausing a microVM risks suspending envd itself
- * (making the pull unreachable); placed after the pull it is a no-op before the
- * immediate DELETE. So the drain is the writer-freeze we guarantee; a detached
- * background writer (`nohup &`) is a documented residual. The PULL then runs on a
+ * which awaits our in-flight fs/exec REMOTE CALLS to settle) WITHOUT control.kill.
+ * (R6 H-1) The drain is NOT a VM writer-freeze — it bounds only the calls WE issued,
+ * not VM-side execution. This deployment's control client exposes no pause/suspend
+ * (and pausing a microVM risks suspending envd itself, making the pull unreachable),
+ * so a VM process that OUTLIVES its exec call — a detached `nohup &`, or a slow
+ * background child — may still write during the PULL. The PULL is therefore a
+ * point-in-time snapshot, not a frozen one: a write racing the scan is captured-or-not
+ * atomically per file and reconciled by the commit's 3-way merge (never torn), and a
+ * write landing after the scan is simply not captured this turn. This residual is
+ * bounded by how briefly a teardown runs; there is no cheap active-kill (no
+ * selective-signal API — only DELETE, which must follow the pull). The PULL runs on a
  * freshly-RECONNECTED token-bearing transport (never the disposed plane, never a
  * token-less connect).
  */
@@ -2672,7 +2683,7 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
     let pullOk = true
     let commitOk = true
     if (mounts.length > 0) {
-      let wsBridge: WorkingSetBridge | null = null
+      let wsBridge: OffBoxWorkingSetBridge | null = null
       try {
         // Decrypt the persisted creds so reconnect can FALL BACK to them when the
         // deployment's connect does not re-mint (§6.2).
@@ -2690,9 +2701,10 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
         wsBridge = adapter.workingSet(
           workingSetHandleFromRef(ref, rc.credentials)
         )
-        // ⑤ PULL each mount VM→mirror(materializedDir) with delete-prune (F1).
+        // ⑤ PULL each mount VM→mirror(materializedDir) with delete-prune (F1). The
+        // off-box bridge's `pull` is type-REQUIRED (#6) — no optional guard.
         for (const mount of mounts) {
-          if (mount.materializedDir && wsBridge.pull) {
+          if (mount.materializedDir) {
             const outcome = await wsBridge.pull({ dir: mount.materializedDir })
             // (R6 #3) DURABILITY: if any file could not be read/streamed, the pull did
             // NOT capture the VM's bytes — treat it as a FAILED pull so the ⑦ gate
@@ -3439,7 +3451,7 @@ async function recoverOffBoxSession(
   const run = repo.defaultDbh()
   const runtimeId = ref.runtimeId
   // ① reconnect a token-bearing transport + PULL each mount VM→mirror (VM alive).
-  let wsBridge: WorkingSetBridge | null = null
+  let wsBridge: OffBoxWorkingSetBridge | null = null
   try {
     const persisted =
       (await repo.getBareSandboxForDispatch(runtimeId, run))?.credentials ??
@@ -3452,7 +3464,8 @@ async function recoverOffBoxSession(
     await rc.plane.dispose().catch(() => {})
     wsBridge = adapter.workingSet(workingSetHandleFromRef(ref, rc.credentials))
     for (const mount of sessionMounts) {
-      if (mount.materializedDir && wsBridge.pull) {
+      // (#6) off-box `pull` is type-REQUIRED — no optional guard.
+      if (mount.materializedDir) {
         const outcome = await wsBridge.pull({ dir: mount.materializedDir })
         // (R6 #3) an unreadable file means the recovery pull is NOT durable — throw so
         // the catch leaves the mounts 'failed' + the VM preserved for a later re-pull,

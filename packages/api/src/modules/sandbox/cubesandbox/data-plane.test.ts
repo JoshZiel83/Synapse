@@ -20,6 +20,7 @@ import {
   type RemoteEnvdTransport,
 } from "./data-plane.js"
 import { CubeEnvdError, type ExecResult, type FileEntry } from "./types.js"
+import { SandboxResourceGoneError } from "../docker-sandbox-backend.js"
 
 const descriptor = buildCubesandboxBareDescriptor()
 const VM_ROOT = "/workspace"
@@ -95,12 +96,16 @@ class StubEnvd implements RemoteEnvdTransport {
   async close(): Promise<void> {}
 }
 
-function makePlane(envd: RemoteEnvdTransport) {
+function makePlane(
+  envd: RemoteEnvdTransport,
+  confirmGone: () => Promise<boolean> = async () => true
+) {
   return createRemoteBareDataPlane({
     sandboxID: "sbx-test",
     descriptor,
     vmRoot: VM_ROOT,
     envd,
+    confirmGone,
   })
 }
 
@@ -421,5 +426,58 @@ test("m3: a non-404 envd error surfaced from an op does NOT contain the vmRoot",
       )
       return true
     }
+  )
+})
+
+// ── R6 H-8: a CubeProxy gateway 502/503/504 is confirmed via the control plane ──
+// before the terminal SandboxResourceGoneError mapping — a transient blip stays
+// retryable, only a CONFIRMED-gone VM maps to gone.
+
+for (const status of [502, 503, 504]) {
+  test(`R6 H-8: a ${status} whose control-plane confirmGone=false re-throws the ORIGINAL transient error (not gone)`, async () => {
+    const envd = new StubEnvd()
+    envd.readImpl = async () => {
+      throw new CubeEnvdError(`gateway ${status}`, status)
+    }
+    // confirmGone=false ⇒ the control plane says the VM is NOT dead (live/unknown).
+    const plane = makePlane(envd, async () => false)
+    await assert.rejects(
+      () => plane.read("/conversation/x", {}, readCtx(WHOLE_SCOPE)),
+      (err: unknown) =>
+        err instanceof CubeEnvdError &&
+        err.status === status &&
+        !(err instanceof SandboxResourceGoneError),
+      "an unconfirmed gateway blip stays a retryable CubeEnvdError, never gone"
+    )
+  })
+
+  test(`R6 H-8: a ${status} whose control-plane confirmGone=true maps to SandboxResourceGoneError`, async () => {
+    const envd = new StubEnvd()
+    envd.readImpl = async () => {
+      throw new CubeEnvdError(`gateway ${status}`, status)
+    }
+    const plane = makePlane(envd, async () => true)
+    await assert.rejects(
+      () => plane.read("/conversation/x", {}, readCtx(WHOLE_SCOPE)),
+      (err: unknown) => err instanceof SandboxResourceGoneError,
+      "a control-confirmed gone VM maps to the canonical gone error"
+    )
+  })
+}
+
+test("R6 H-8: an envd-level 4xx (VM up, op rejected) is NOT gone regardless of confirmGone", async () => {
+  const envd = new StubEnvd()
+  envd.readImpl = async () => {
+    throw new CubeEnvdError("not found", 404)
+  }
+  // confirmGone would say dead, but a 404 is not a gateway-unreachable status, so the
+  // mapper never even consults it — the original 404 passes through.
+  const plane = makePlane(envd, async () => true)
+  await assert.rejects(
+    () => plane.read("/conversation/x", {}, readCtx(WHOLE_SCOPE)),
+    (err: unknown) =>
+      err instanceof CubeEnvdError &&
+      err.status === 404 &&
+      !(err instanceof SandboxResourceGoneError)
   )
 })

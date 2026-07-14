@@ -47,7 +47,7 @@ import { createHash } from "node:crypto"
 import { Transform, type Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { createLogger } from "../../../infrastructure/logger/index.js"
-import type { PullOutcome, WorkingSetBridge } from "../data-plane.js"
+import type { PullOutcome, OffBoxWorkingSetBridge } from "../data-plane.js"
 import {
   createDetachedWorkingSetBridge,
   type ContainerFileStat,
@@ -418,6 +418,22 @@ async function walkMirrorEmptyDirs(
  * WorkingSetBridge contract PLUS `pull` — the teardown/recovery PULL-only primitive
  * (fetchChangedIntoMirror + F1 prune, WITHOUT scanCommitDir; the spine's separate
  * commitSpaces scan of the same mirror does the commit).
+ *
+ * (R6 H-7) OFF-BOX FIDELITY LIMITATIONS — the working set is REGULAR FILES + empty
+ * dirs only; two POSIX attributes do NOT round-trip a VM→mirror→CAS→push cycle:
+ *   • SYMLINKS: neutralized on the write path + excluded from the walk (find -type f
+ *     parity). This is DELIBERATE and SECURITY-LOAD-BEARING (R6 #1): a VM-controlled
+ *     symlink materialized into the host mirror would let a malicious VM escape the
+ *     mirror on the next write/read (host-file exfil / arbitrary-write). Preserving
+ *     symlinks would reopen that hole, so it is a PERMANENT limitation, not a gap.
+ *   • FILE MODE (the exec bit): the pull writes each mirror file at the host default
+ *     (umask) mode, NOT the VM entry's mode, so an executable authored in the VM loses
+ *     +x across a teardown/re-provision boundary. The CAS manifest itself DOES carry
+ *     mode (fs-helper materialize/scan), so this is fixable by threading the envd
+ *     FileEntry.mode through the working-set transport + chmod-on-write — deferred as a
+ *     documented fidelity gap (a P2 that would touch the security-sensitive write path)
+ *     rather than plumbed here. Host planes (local/docker) are unaffected: their mirror
+ *     IS the live dir, so mode + symlinks are native.
  */
 export function createCubeEnvdWorkingSetBridge(opts: {
   envd: RemoteEnvdTransport
@@ -426,9 +442,7 @@ export function createCubeEnvdWorkingSetBridge(opts: {
   /** (#14) per-file PULL byte budget (= caps.maxReadBytes). An oversize VM file is
    *  preserved-and-excluded rather than buffered whole (OOM). */
   maxReadBytes?: number
-}): WorkingSetBridge & {
-  pull(input: { dir: string }): Promise<PullOutcome>
-} {
+}): OffBoxWorkingSetBridge {
   const transport = makeEnvdWorkingSetTransport({
     envd: opts.envd,
     vmRoot: opts.vmRoot,
