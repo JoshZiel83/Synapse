@@ -1637,12 +1637,48 @@ function defaultRefreshDeps(): RefreshDeps {
  * never discards the already-computed conflict notices of a space that refreshed
  * cleanly (round-8 follow-up + round-9 #2).
  */
+/**
+ * (R6 #2) Whether the session's CURRENT sandbox is off-box (a remote-VM provider).
+ * Resolved from the newest non-deleted sandbox row's adapter; any lookup/resolution
+ * failure ⇒ false (treat as host → refresh runs normally, the pre-R6 behavior).
+ */
+async function sessionSandboxIsOffBox(
+  sessionId: string,
+  run: Executor
+): Promise<boolean> {
+  const sb = await repo
+    .getSandboxBySessionForControl(sessionId, run)
+    .catch(() => null)
+  if (!sb) return false
+  try {
+    return adapterForRow(sb.adapter, sb.mode).meta.offBox
+  } catch {
+    return false
+  }
+}
+
 export async function refreshSpaces(
   sessionId: string,
   depsOverride?: Partial<RefreshDeps>
 ): Promise<PendingRefreshConflicts> {
   const deps: RefreshDeps = { ...defaultRefreshDeps(), ...depsOverride }
   const mounts = await getActiveMountsForSession(deps.dbh, sessionId)
+  // (R6 #2) For an OFF-BOX mount the mirror is a STAGING area — the actor works in the
+  // remote VM, not the mirror, and the VM is pulled ONLY at teardown. Advancing the
+  // mount base to a concurrently-committed head H2 here (without re-pushing the VM)
+  // makes the teardown pull's stale VM bytes look like a LOCAL edit vs H2 and SILENTLY
+  // OVERWRITE the other actor's commit, no conflict. So refresh is a NO-OP for off-box:
+  // leave base = the pushed snapshot; the teardown pull→commit then does a correct
+  // 3-way merge (base=H, latest=Hn, working=VM) that surfaces the concurrent change as
+  // a real conflict + sidecar. (Do NOT re-push the refreshed head into the VM — that
+  // would clobber the actor's uncommitted VM work, the reason Option B avoids it.)
+  if (await sessionSandboxIsOffBox(sessionId, deps.dbh)) {
+    return {
+      deferredConflictsBySubpath: {},
+      sidecarsBySubpath: {},
+      syncFailuresBySubpath: {},
+    }
+  }
   const deferredConflictsBySubpath: Record<string, string[]> = {}
   const sidecarsBySubpath: Record<string, ConflictSidecarRef[]> = {}
   const syncFailuresBySubpath: Record<string, string> = {}

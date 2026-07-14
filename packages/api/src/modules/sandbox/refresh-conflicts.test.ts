@@ -558,3 +558,65 @@ test(
     })
   }
 )
+
+test("refreshSpaces: OFF-BOX session is a NO-OP — base not advanced, sync never called (R6 #2)", async () => {
+  await withTestDbAndClient(async ({ db, client }) => {
+    const { workspaceId, actorId, sessionId } = await seed(db)
+    const space = await ensureFileSpace(db, {
+      workspaceId,
+      owner: actorRef(actorId),
+    })
+    await insertFileMount(db, {
+      workspaceId,
+      sessionId,
+      fileSpaceId: space.id,
+      mountSubpath: "actor",
+      baseSnapshotId: null,
+      materializedDir: "/tmp/offbox-mirror",
+    })
+    await client.query(
+      `UPDATE file_mounts SET status = 'active' WHERE session_id = $1`,
+      [sessionId]
+    )
+    // An OFF-BOX (cubesandbox) sandbox for the session — the gate resolves the
+    // adapter and short-circuits refresh.
+    const rtId = crypto.randomUUID()
+    await db
+      .insertInto("runtimes")
+      .values({ id: rtId, workspaceId, kind: "sandbox" } as any)
+      .execute()
+    await client.query(
+      `INSERT INTO sandboxes (id, workspace_id, session_id, mode, adapter, state, resource_id, host_pid, platform, arch)
+       VALUES ($1, $2, $3, 'bare', 'cubesandbox', 'active', 'vm-off', NULL, 'linux', 'x64')`,
+      [rtId, workspaceId, sessionId]
+    )
+
+    let syncCalled = false
+    const result = await refreshSpaces(sessionId, {
+      dbh: db,
+      runInTx: async (fn) => fn(db),
+      sync: async () => {
+        syncCalled = true
+        return {
+          applied: [],
+          deferred_conflicts: [],
+          conflict_sidecars: [],
+          new_base_manifest_sha256: "",
+        }
+      },
+    })
+
+    // No mirror head-apply / base-advance for off-box — the teardown pull→3-way
+    // merge owns reconciliation. sync is never invoked; the result is empty.
+    assert.equal(
+      syncCalled,
+      false,
+      "off-box refresh must NOT sync the mirror (else it silently overwrites a concurrent head)"
+    )
+    assert.deepEqual(result, {
+      deferredConflictsBySubpath: {},
+      sidecarsBySubpath: {},
+      syncFailuresBySubpath: {},
+    })
+  })
+})
