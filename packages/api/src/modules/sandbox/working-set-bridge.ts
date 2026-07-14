@@ -27,6 +27,7 @@
 // across both — only the transport differs.
 
 import { createHash } from "node:crypto"
+import type { Readable } from "node:stream"
 import { materializeSnapshot, scanCommitDir } from "./materialize.js"
 import type { WorkingSetBridge } from "./data-plane.js"
 
@@ -110,6 +111,11 @@ export interface WorkingSetTransport {
   list(mountRoots: string[]): Promise<ContainerFileStat[]>
   /** Read a file's whole bytes (docker: `cat`; envd: readFile). */
   read(relpath: string): Promise<Buffer>
+  /** (R6 #3) STREAM a file's bytes as a Node Readable — the PULL pipes this into the
+   *  mirror so an arbitrarily large VM file transfers without OOM AND without loss.
+   *  Present on the envd transport; ABSENT on the docker-exec test transport (which
+   *  falls back to the whole-buffer `read`). */
+  readStream?(relpath: string): Promise<Readable>
   /** Write a file's whole bytes, creating parents (docker: tmp-write + `mv -f`;
    *  envd: writeFile whole-file replace). */
   write(relpath: string, bytes: Buffer): Promise<void>
@@ -203,14 +209,22 @@ export interface DetachedBridgeOptions {
   /** (#5) Injected: remove an (empty) mirror directory the VM no longer has. */
   removeMirrorDir?: (relpath: string) => Promise<void>
   /**
-   * (#14) Per-file byte budget for the working-set PULL/PUSH. A single file whose
-   * listed size EXCEEDS this is PRESERVED-and-EXCLUDED: it is NOT read (envd/docker
-   * `read` buffers the WHOLE body → a multi-GB file would OOM the shared API), its
-   * mirror bytes are left untouched, and it is reported in `preserved` so the caller
-   * commits the N that fit and records a preservation marker — the whole PULL never
-   * fails on one big file (which, with keepalive, would strand the VM forever).
-   * Undefined ⇒ no cap (the docker CI-proof + unit tests). Set to caps.maxReadBytes
-   * off-box.
+   * (R6 #3) Injected: STREAM a VM file into the mirror via the transport's readStream,
+   * with a rolling sha256 — writes to a tmp path then renames over the target ATOMICALLY.
+   * Used for files LARGER than `maxReadBytes` so an arbitrarily large file transfers
+   * without a whole-body buffer (no OOM) AND without loss (the R5 preserve-and-skip lost
+   * >10 MiB files). Returns the streamed sha + byte count for the stat-cache.
+   */
+  writeMirrorFileStream?: (
+    relpath: string,
+    source: Readable
+  ) => Promise<{ sha256: string; size: number }>
+  /**
+   * (R6 #3) STREAM THRESHOLD — a file whose listed size EXCEEDS this is STREAMED
+   * (readStream → writeMirrorFileStream) instead of whole-read, so it never buffers
+   * whole. Small files stay whole-read (one round-trip). Undefined / no readStream ⇒
+   * whole-read always (the docker CI-proof + unit tests). Set to caps.maxReadBytes
+   * off-box. (This REPLACES the R5 preserve-and-skip: streamed, never skipped.)
    */
   maxReadBytes?: number
 }
@@ -332,10 +346,10 @@ export interface DetachedWorkingSetBridge extends WorkingSetBridge {
     fetched: string[]
     reused: string[]
     pruned: string[]
-    /** (#14) files whose size exceeded `maxReadBytes` — NOT fetched, mirror bytes
-     *  left untouched, excluded from this scan's change-set (the caller surfaces a
-     *  preservation marker). Empty when no cap is set or nothing was oversize. */
-    preserved: string[]
+    /** (R6 #3) files the transport could NOT read (read/stream error) — NOT captured,
+     *  so the VM's bytes are the sole copy and the caller MUST NOT delete the VM.
+     *  Empty ⇒ the pull captured everything. (A large file is STREAMED, never skipped.) */
+    unreadable: string[]
   }>
   /**
    * (R5 #8) Replicate the ALREADY-POPULATED mirror INTO the container/VM — the
@@ -375,7 +389,7 @@ export function createDetachedWorkingSetBridge(
     fetched: string[]
     reused: string[]
     pruned: string[]
-    preserved: string[]
+    unreadable: string[]
   }> => {
     const listing = await listContainer()
     // (#5) Split the listing: only FILES go through the stat-cache reconcile + fetch
@@ -388,7 +402,7 @@ export function createDetachedWorkingSetBridge(
     const byPath = new Map(fileListing.map((f) => [f.relpath, f]))
     const maxReadBytes = opts.maxReadBytes
     const fetched: string[] = []
-    const preserved: string[] = []
+    const unreadable: string[] = []
 
     // (F1 / §6.4 / #5 collision-fix) PRUNE runs BEFORE the writes. Rebuild the mirror
     // to EXACTLY the VM listing FIRST — every mirror file/empty-dir absent from the
@@ -448,31 +462,55 @@ export function createDetachedWorkingSetBridge(
       }
     }
 
-    // Fetch the changed files INTO the (now-pruned) mirror.
+    // Fetch the changed files INTO the (now-pruned) mirror. A per-file read/stream
+    // FAILURE is caught into `unreadable` (never buffered-and-lost): the pull returns
+    // NOT-durable so the caller keeps the VM (its bytes are the sole copy) — this is
+    // the R6 #3 fix that replaces the R5 preserve-and-SKIP that silently lost >10 MiB
+    // files at teardown.
+    const canStream =
+      typeof transport.readStream === "function" &&
+      typeof opts.writeMirrorFileStream === "function"
     for (const rel of toFetch) {
       const f = byPath.get(rel)
-      // (#14) PRESERVE-and-EXCLUDE an oversize file: never buffer its whole body
-      // (OOM). Leave the mirror bytes as-is (base copy stays → scanCommitDir sees no
-      // change for it → excluded from the change-set) and DON'T touch the stat-cache
-      // (so it re-preserves next scan). It stays in the VM listing's `present` set
-      // above, so it is NOT pruned. The caller commits the files that fit.
-      if (f && maxReadBytes !== undefined && f.size > maxReadBytes) {
-        preserved.push(rel)
-        continue
+      try {
+        // (#3) STREAM a large file (size > threshold) — never a whole-body buffer, so
+        // no OOM AND no loss, any size.
+        if (
+          f &&
+          canStream &&
+          maxReadBytes !== undefined &&
+          f.size > maxReadBytes
+        ) {
+          const src = await transport.readStream!(rel)
+          const { sha256, size } = await opts.writeMirrorFileStream!(rel, src)
+          statCache.set(rel, {
+            size,
+            mtimeSec: f.mtimeSec,
+            mtimeKey: f.mtimeKey,
+            sha256,
+          })
+          fetched.push(rel)
+          continue
+        }
+        // Small file (or the docker CI transport with no readStream): whole-read.
+        const bytes = await transport.read(rel)
+        const sha = sha256Hex(bytes)
+        if (f) {
+          statCache.set(rel, {
+            size: f.size,
+            mtimeSec: f.mtimeSec,
+            mtimeKey: f.mtimeKey,
+            sha256: sha,
+          })
+        }
+        fetched.push(rel)
+        await opts.writeMirrorFile?.(rel, bytes)
+      } catch {
+        // A gone VM surfaces on list() before this loop; a per-file failure here is a
+        // file-level read error. Mark it unreadable (pull NOT durable → VM kept) and
+        // continue so the other files still pull.
+        unreadable.push(rel)
       }
-      const bytes = await transport.read(rel)
-      const sha = sha256Hex(bytes)
-      if (f) {
-        statCache.set(rel, {
-          size: f.size,
-          mtimeSec: f.mtimeSec,
-          mtimeKey: f.mtimeKey,
-          sha256: sha,
-        })
-      }
-      fetched.push(rel)
-      // write current bytes into the mirror so scanCommitDir sees them.
-      await opts.writeMirrorFile?.(rel, bytes)
     }
     // (#5) Round-trip EMPTY directories: mkdir every VM 'dir' entry into the mirror
     // so the following scanCommitDir commits it. (A non-empty dir already exists via
@@ -485,7 +523,7 @@ export function createDetachedWorkingSetBridge(
       fetched,
       reused: reused.map((r) => r.relpath),
       pruned,
-      preserved,
+      unreadable,
     }
   }
 

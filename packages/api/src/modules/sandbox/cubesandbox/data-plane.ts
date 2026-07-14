@@ -29,6 +29,7 @@
 
 import { Buffer } from "node:buffer"
 import { createHash } from "node:crypto"
+import type { Readable } from "node:stream"
 import { SANDBOX_MOUNT_POINTS } from "@synapse/shared"
 import {
   canonicalVfsPath,
@@ -90,6 +91,10 @@ export interface RemoteEnvdTransport {
     options?: WriteFileOptions
   ): Promise<FileEntry[]>
   readFile(path: string, options?: ReadFileOptions): Promise<Buffer>
+  /** (R6 #3) STREAM a file's bytes as a Node Readable (never buffered whole) — the
+   *  working-set PULL pipes this into the mirror so an arbitrarily large VM file
+   *  transfers without OOM AND without loss. Optional so a test stub need not add it. */
+  readFileStream?(path: string, options?: ReadFileOptions): Promise<Readable>
   stat(path: string): Promise<FileEntry>
   listDir(path: string): Promise<FileEntry[]>
   makeDir(path: string): Promise<FileEntry>
@@ -331,6 +336,11 @@ function wrapEnvdGoneMapping(envd: RemoteEnvdTransport): RemoteEnvdTransport {
     writeFile: (path, bytes, options) =>
       mapRejection(envd.writeFile(path, bytes, options)),
     readFile: (path, options) => mapRejection(envd.readFile(path, options)),
+    // (R6 #3) forward the optional streaming read, gone-mapped, when the underlying
+    // transport provides it (the prod CubeEnvdClient does; a test stub may not).
+    readFileStream: envd.readFileStream
+      ? (path, options) => mapRejection(envd.readFileStream!(path, options))
+      : undefined,
     stat: (path) => mapRejection(envd.stat(path)),
     listDir: (path) => mapRejection(envd.listDir(path)),
     makeDir: (path) => mapRejection(envd.makeDir(path)),

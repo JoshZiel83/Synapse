@@ -36,13 +36,18 @@ import {
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   rmdir,
   unlink,
   writeFile,
 } from "node:fs/promises"
+import { createWriteStream } from "node:fs"
+import { createHash } from "node:crypto"
+import { Transform, type Readable } from "node:stream"
+import { pipeline } from "node:stream/promises"
 import { createLogger } from "../../../infrastructure/logger/index.js"
-import type { WorkingSetBridge } from "../data-plane.js"
+import type { PullOutcome, WorkingSetBridge } from "../data-plane.js"
 import {
   createDetachedWorkingSetBridge,
   type ContainerFileStat,
@@ -314,6 +319,12 @@ export function makeEnvdWorkingSetTransport(opts: {
     async read(relpath) {
       return envd.readFile(toVm(relpath))
     },
+    // (R6 #3) STREAM read — present only when the underlying envd supports it (prod
+    // CubeEnvdClient does; a test stub may not). The bridge streams VM→mirror through
+    // this so a large file never buffers whole.
+    readStream: envd.readFileStream
+      ? (relpath) => envd.readFileStream!(toVm(relpath))
+      : undefined,
     async write(relpath, bytes) {
       // envd writeFile auto-creates parents + is a whole-file replace (NOT atomic;
       // acceptable for the base PUSH — the file is created fresh, no concurrent
@@ -415,7 +426,9 @@ export function createCubeEnvdWorkingSetBridge(opts: {
   /** (#14) per-file PULL byte budget (= caps.maxReadBytes). An oversize VM file is
    *  preserved-and-excluded rather than buffered whole (OOM). */
   maxReadBytes?: number
-}): WorkingSetBridge & { pull(input: { dir: string }): Promise<void> } {
+}): WorkingSetBridge & {
+  pull(input: { dir: string }): Promise<PullOutcome>
+} {
   const transport = makeEnvdWorkingSetTransport({
     envd: opts.envd,
     vmRoot: opts.vmRoot,
@@ -445,6 +458,34 @@ export function createCubeEnvdWorkingSetBridge(opts: {
         await neutralizeMirrorSymlink(target, mirrorMountDir)
         await mkdir(dirname(target), { recursive: true })
         await writeFile(target, bytes)
+      },
+      // (R6 #3) STREAM a large VM file into the mirror — pipe the transport Readable
+      // through a rolling sha256 into a tmp file, then rename over the target ATOMICALLY.
+      // Never buffers the whole file (no OOM) and never skips it (no loss). Same #1
+      // symlink-neutralize + lexical belt as writeMirrorFile.
+      writeMirrorFileStream: async (rel, source: Readable) => {
+        const target = join(sandboxRoot, rel)
+        assertUnderMirror(target, mirrorMountDir)
+        await neutralizeMirrorSymlink(target, mirrorMountDir)
+        await mkdir(dirname(target), { recursive: true })
+        const tmp = `${target}.synapse-tmp`
+        const hash = createHash("sha256")
+        let size = 0
+        const meter = new Transform({
+          transform(chunk, _enc, cb) {
+            hash.update(chunk)
+            size += chunk.length
+            cb(null, chunk)
+          },
+        })
+        try {
+          await pipeline(source, meter, createWriteStream(tmp))
+          await rename(tmp, target)
+        } catch (err) {
+          await rm(tmp, { force: true }).catch(() => {})
+          throw err
+        }
+        return { sha256: hash.digest("hex"), size }
       },
       listMirrorFiles: () => walkMirror(mirrorMountDir, sandboxRoot),
       removeMirrorFile: (rel) => {
@@ -488,16 +529,21 @@ export function createCubeEnvdWorkingSetBridge(opts: {
     scanManifest: (input) => scopedBridge(input.dir).scanManifest(input),
     // PULL-only (teardown/recovery): reconcile VM → mirror with delete-prune (F1),
     // leaving the commit scan to the spine's commitSpaces on the same mirror dir.
-    async pull(input) {
+    async pull(input): Promise<PullOutcome> {
       const res = await scopedBridge(input.dir).fetchChangedIntoMirror()
-      if (res.preserved.length > 0) {
-        // (#14) preservation marker: an oversize VM file was NOT pulled (would OOM
-        // the shared API). It stays in the VM; its mirror bytes (base, if any) are
-        // untouched → it is excluded from this turn's commit rather than truncated.
-        log.warn(
-          { dir: input.dir, preserved: res.preserved },
-          "working-set PULL preserved-and-excluded oversize file(s) (> maxReadBytes) — not committed this turn"
+      if (res.unreadable.length > 0) {
+        // (#3) DURABILITY: some file(s) could not be read/streamed, so the pull did
+        // NOT capture them — the VM's bytes are still the sole copy. The caller MUST
+        // treat this pull as NOT durable and keep the VM (never delete it).
+        log.error(
+          { dir: input.dir, unreadable: res.unreadable },
+          "working-set PULL could not read file(s) — pull is NOT durable; the VM must be preserved for recovery"
         )
+      }
+      return {
+        pulled: res.fetched,
+        pruned: res.pruned,
+        unreadable: res.unreadable,
       }
     },
     // (R4 review fix) Release the per-bridge envd client's undici Agent — the spine

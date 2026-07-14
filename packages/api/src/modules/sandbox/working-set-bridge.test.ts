@@ -6,6 +6,8 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
+import { Readable } from "node:stream"
+import { createHash } from "node:crypto"
 import {
   mkdtemp,
   mkdir,
@@ -190,40 +192,103 @@ test("S12 — fetchChangedIntoMirror cats ONLY the stat-cache-mismatched file (t
   assert.equal(written["/conversation/changed.py"], "new-bytes")
 })
 
-test("#14 — an oversize file is PRESERVED-and-EXCLUDED (never read), the rest are fetched", async () => {
-  const { exec, calls } = recordingExec({
-    // small.py (3 bytes) is under the cap; big.py (999999 bytes) is over it.
-    find: "3 100 /conversation/small.py\n999999 200 /conversation/big.py\n",
-    cat: { "/conversation/small.py": "abc" }, // big.py intentionally absent
-  })
+test("#3 — a large file is STREAMED into the mirror (never whole-buffered, never skipped, never lost)", async () => {
+  const bigBody = "X".repeat(5000) // > the 1000-byte stream threshold
+  const transport: WorkingSetTransport = {
+    async list() {
+      return [
+        {
+          relpath: "/conversation/small.py",
+          kind: "file",
+          size: 3,
+          mtimeSec: 1,
+        },
+        {
+          relpath: "/conversation/big.bin",
+          kind: "file",
+          size: bigBody.length,
+          mtimeSec: 1,
+        },
+      ]
+    },
+    async read() {
+      return Buffer.from("abc") // the small file's whole-read
+    },
+    async readStream() {
+      return Readable.from(Buffer.from(bigBody)) // the large file streams
+    },
+    async write() {},
+    async remove() {},
+    async makeDir() {},
+  }
+  const streamed: Record<string, string> = {}
   const written: Record<string, string> = {}
-  const pruned: string[] = []
-  const bridge = createDetachedWorkingSetBridge({
+  const res = await createDetachedWorkingSetBridge({
     mirrorDir: "/tmp/mirror",
     mountRoots: ["/conversation"],
-    transport: makeDockerExecTransport({ containerId: "cid", exec }),
+    transport,
     statCache: new Map(),
     writeMirrorFile: async (rel, bytes) => {
-      written[rel] = bytes.toString("binary")
+      written[rel] = bytes.toString()
     },
-    // The mirror already holds big.py (e.g. a base copy); the prune must NOT remove
-    // it — it is present in the VM listing, just not fetched.
-    listMirrorFiles: async () => ["/conversation/big.py"],
-    removeMirrorFile: async (rel) => {
-      pruned.push(rel)
+    writeMirrorFileStream: async (rel, src) => {
+      const chunks: Buffer[] = []
+      for await (const c of src) chunks.push(c as Buffer)
+      const buf = Buffer.concat(chunks)
+      streamed[rel] = buf.toString()
+      return {
+        sha256: createHash("sha256").update(buf).digest("hex"),
+        size: buf.length,
+      }
     },
     maxReadBytes: 1000,
-  })
-  const res = await bridge.fetchChangedIntoMirror()
-  assert.deepEqual(res.fetched, ["/conversation/small.py"])
-  assert.deepEqual(res.preserved, ["/conversation/big.py"])
-  // big.py was NEVER cat'd (no whole-body buffer → no OOM).
-  const cats = calls.filter((c) => c.argv[2] === "cat").map((c) => c.argv[3])
-  assert.deepEqual(cats, ["/conversation/small.py"])
-  // The oversize file is in the VM listing's present set → it is NOT pruned.
-  assert.deepEqual(pruned, [])
-  // Its mirror bytes were left untouched (only small.py was written).
-  assert.deepEqual(Object.keys(written), ["/conversation/small.py"])
+  }).fetchChangedIntoMirror()
+
+  assert.deepEqual(res.fetched.sort(), [
+    "/conversation/big.bin",
+    "/conversation/small.py",
+  ])
+  assert.deepEqual(res.unreadable, [], "everything was captured")
+  // big.bin was STREAMED into the mirror (not whole-read, not skipped, not lost).
+  assert.equal(streamed["/conversation/big.bin"], bigBody)
+  // the small file took the whole-read path.
+  assert.equal(written["/conversation/small.py"], "abc")
+})
+
+test("#3 — an unreadable file is REPORTED (pull NOT durable), never silently lost", async () => {
+  const transport: WorkingSetTransport = {
+    async list() {
+      return [
+        {
+          relpath: "/conversation/bad.bin",
+          kind: "file",
+          size: 5000,
+          mtimeSec: 1,
+        },
+      ]
+    },
+    async read() {
+      throw new Error("read failed")
+    },
+    async readStream() {
+      throw new Error("stream failed")
+    },
+    async write() {},
+    async remove() {},
+    async makeDir() {},
+  }
+  const res = await createDetachedWorkingSetBridge({
+    mirrorDir: "/tmp/mirror",
+    mountRoots: ["/conversation"],
+    transport,
+    statCache: new Map(),
+    writeMirrorFile: async () => {},
+    writeMirrorFileStream: async () => ({ sha256: "", size: 0 }),
+    maxReadBytes: 1000,
+  }).fetchChangedIntoMirror()
+  // The unreadable file is FLAGGED (so the caller keeps the VM), not silently dropped.
+  assert.deepEqual(res.fetched, [])
+  assert.deepEqual(res.unreadable, ["/conversation/bad.bin"])
 })
 
 test("#5 — empty directories round-trip: PULL mkdirs into the mirror, PUSH mkdirs into the VM, prune rmdirs a removed one", async () => {

@@ -12,6 +12,8 @@
 // and unary filesystem RPCs (stat/list/mkdir/move/remove, Connect unary JSON).
 
 import { Buffer } from "node:buffer"
+import { Readable } from "node:stream"
+import type { ReadableStream as WebReadableStream } from "node:stream/web"
 
 import { Agent, buildConnector, fetch, type Dispatcher } from "undici"
 
@@ -45,6 +47,11 @@ const log = createLogger("sandbox.cubesandbox")
 
 const CONNECT_CONTENT_TYPE = "application/connect+json"
 const CONNECT_PROTOCOL_VERSION = "1"
+
+/** (R6 #3) Deadline for a streamed file transfer (working-set PULL of a large file).
+ *  Longer than a unary request — a multi-hundred-MB VM→mirror transfer over the proxy
+ *  legitimately exceeds the per-request timeout. */
+const ENVD_STREAM_TIMEOUT_MS = 600_000
 
 /** POSIX single-quote a shell word so argv elements survive `bash -l -c`. */
 function shellQuote(word: string): string {
@@ -489,6 +496,50 @@ export class CubeEnvdClient {
       )
     }
     return Buffer.from(await resp.arrayBuffer())
+  }
+
+  /**
+   * (R6 #3) STREAM a whole file via `GET /files` — the response body as a Node
+   * Readable, NEVER buffered whole. The working-set PULL pipes this into the mirror
+   * with a rolling hash so an arbitrarily large VM file transfers without OOM AND
+   * without loss (the old whole-`arrayBuffer` read forced the preserve-and-skip that
+   * lost >10 MiB files). Uses a longer deadline than a unary request since a large
+   * transfer legitimately takes longer.
+   */
+  async readFileStream(
+    path: string,
+    options: ReadFileOptions = {}
+  ): Promise<Readable> {
+    const user = options.username ?? this.username
+    const params = new URLSearchParams({ path, username: user })
+    const resp = await fetch(this.url(`/files?${params.toString()}`), {
+      method: "GET",
+      headers: this.authHeaders(user),
+      dispatcher: this.dispatcher,
+      signal: AbortSignal.timeout(
+        Math.max(this.requestTimeoutMs, ENVD_STREAM_TIMEOUT_MS)
+      ),
+    })
+    if (resp.status === 404) {
+      const { code, message } = await readErrorBody(resp)
+      throw new CubeEnvdNotFoundError(
+        `read ${path} failed: ${message}`,
+        404,
+        code
+      )
+    }
+    if (resp.status !== 200 && resp.status !== 206) {
+      const { code, message } = await readErrorBody(resp)
+      throw new CubeEnvdError(
+        `read ${path} failed: ${message}`,
+        resp.status,
+        code
+      )
+    }
+    if (!resp.body) {
+      throw new CubeEnvdError(`read ${path} stream: empty response body`)
+    }
+    return Readable.fromWeb(resp.body as unknown as WebReadableStream)
   }
 
   /** Stat a path (`filesystem.Filesystem/Stat`). Throws {@link CubeEnvdNotFoundError} if absent. */

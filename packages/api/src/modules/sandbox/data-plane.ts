@@ -313,6 +313,19 @@ export interface BareDataPlaneRebuildRow {
  * CAS. Kept as an interface so docker:bare's detached variant (S12, deferred)
  * can substitute a remote implementation without touching the spine.
  */
+/**
+ * (R6 #3/#6) The DURABILITY result of an off-box PULL. `unreadable` files were NOT
+ * captured (transport read/stream error), so the VM's bytes are still the SOLE copy
+ * and the caller MUST NOT delete the VM. An empty `unreadable` ⇒ the pull is durable
+ * (every changed file was streamed/read into the mirror; a large file is STREAMED,
+ * never skipped — the R6 #3 fix for the >10 MiB silent-loss).
+ */
+export interface PullOutcome {
+  pulled: string[]
+  pruned: string[]
+  unreadable: string[]
+}
+
 export interface WorkingSetBridge {
   applyManifest(input: {
     manifestSha256?: string
@@ -330,7 +343,7 @@ export interface WorkingSetBridge {
    * mirror sees the true VM working set (incl. deletes). Host bridges leave this
    * undefined — their bytes are always in the mirror dir (no pull).
    */
-  pull?(input: { dir: string }): Promise<void>
+  pull?(input: { dir: string }): Promise<PullOutcome>
   /**
    * (R4 review fix) Release any transport the bridge owns. The OFF-BOX bridge mints
    * a FRESH envd client (its own undici Agent + keep-alive socket pool to CubeProxy)

@@ -2616,7 +2616,23 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
         // ⑤ PULL each mount VM→mirror(materializedDir) with delete-prune (F1).
         for (const mount of mounts) {
           if (mount.materializedDir && wsBridge.pull) {
-            await wsBridge.pull({ dir: mount.materializedDir })
+            const outcome = await wsBridge.pull({ dir: mount.materializedDir })
+            // (R6 #3) DURABILITY: if any file could not be read/streamed, the pull did
+            // NOT capture the VM's bytes — treat it as a FAILED pull so the ⑦ gate
+            // preserves the VM (never delete the sole copy) instead of the R5 behavior
+            // that silently lost >10 MiB files.
+            if (outcome.unreadable.length > 0) {
+              pullOk = false
+              log.error(
+                {
+                  sessionId,
+                  runtimeId,
+                  mount: mount.id,
+                  unreadable: outcome.unreadable,
+                },
+                "off-box teardown PULL left unreadable file(s) — VM preserved (not durable)"
+              )
+            }
           }
         }
       } catch (err) {
@@ -3261,7 +3277,16 @@ async function recoverOffBoxSession(
     wsBridge = adapter.workingSet(workingSetHandleFromRef(ref, rc.credentials))
     for (const mount of sessionMounts) {
       if (mount.materializedDir && wsBridge.pull) {
-        await wsBridge.pull({ dir: mount.materializedDir })
+        const outcome = await wsBridge.pull({ dir: mount.materializedDir })
+        // (R6 #3) an unreadable file means the recovery pull is NOT durable — throw so
+        // the catch leaves the mounts 'failed' + the VM preserved for a later re-pull,
+        // rather than committing a partial mirror.
+        if (outcome.unreadable.length > 0) {
+          throw new SandboxServiceError(
+            `off-box recovery pull left unreadable file(s): ${outcome.unreadable.join(", ")}`,
+            503
+          )
+        }
       }
     }
   } catch (err) {
