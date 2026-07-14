@@ -115,6 +115,23 @@ function dockerStorageVolumeIssues(env: RawEnv): ConfigIssue[] {
 
 const NO_PRODUCTION_ISSUES = (): ConfigIssue[] => []
 
+/** (#10, review-fix) Whether a URL hostname is a loopback address — the FULL
+ *  127.0.0.0/8 block, IPv6 ::1, and IPv4-mapped-IPv6 loopback (Node hex-encodes
+ *  ::ffff:127.x.x.x → ::ffff:7fxx:xxxx), not just the literal 127.0.0.1/::1. A prod
+ *  off-box "remote" control plane bound to ANY loopback is a misconfig. (Integer /
+ *  hex host forms like 2130706433 or 0x7f.0.0.1 are already normalized to 127.0.0.1
+ *  by `new URL`, so the 127. prefix catches them too.) */
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "")
+  if (h === "localhost") return true
+  if (h === "::1" || h === "0:0:0:0:0:0:0:1") return true
+  if (/^127\.\d+\.\d+\.\d+$/.test(h) || h === "127.0.0.1") return true
+  // IPv4-mapped IPv6 loopback: ::ffff:127.x.x.x, hex-encoded as ::ffff:7fxx:xxxx.
+  if (/^::ffff:127\.\d+\.\d+\.\d+$/.test(h)) return true
+  if (/^::ffff:(0:)?7f[0-9a-f]{2}:[0-9a-f]+$/.test(h)) return true
+  return false
+}
+
 /** Off-box cube production hardening (#10). In production the control + proxy
  *  URLs must be https:// to a NON-loopback host and an API key must be set — an
  *  unauthenticated, plaintext, or loopback-bound off-box control plane would let
@@ -144,13 +161,7 @@ function cubeProductionIssues(env: RawEnv, nodeEnv: string): ConfigIssue[] {
         )
       )
     }
-    const host = parsed.hostname.toLowerCase()
-    if (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "::1" ||
-      host === "[::1]"
-    ) {
+    if (isLoopbackHost(parsed.hostname)) {
       issues.push(
         issue(
           [key],

@@ -7,6 +7,18 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  rm,
+  rmdir,
+  readdir,
+  stat,
+} from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join, dirname, relative } from "node:path"
+import {
   createProductWorkingSetBridge,
   createDetachedWorkingSetBridge,
   makeDockerExecTransport,
@@ -285,6 +297,156 @@ test("#5 — empty directories round-trip: PULL mkdirs into the mirror, PUSH mkd
     vmDirs.has("/conversation/newdir"),
     "mirror empty dir pushed into VM"
   )
+})
+
+// A REAL-fs mirror (so a file↔dir collision actually raises ENOTDIR/EISDIR, which
+// in-memory fakes cannot). Mirror-rooted relpaths ("/conversation/x") map under root.
+function realFsMirror(
+  root: string
+): Pick<
+  Parameters<typeof createDetachedWorkingSetBridge>[0],
+  | "readMirrorFile"
+  | "writeMirrorFile"
+  | "listMirrorFiles"
+  | "removeMirrorFile"
+  | "makeMirrorDir"
+  | "listMirrorEmptyDirs"
+  | "removeMirrorDir"
+> {
+  const abs = (rel: string): string => join(root, rel.replace(/^\//, ""))
+  const walk = async (
+    dir: string,
+    emit: "files" | "emptydirs"
+  ): Promise<string[]> => {
+    const out: string[] = []
+    const recurse = async (d: string): Promise<void> => {
+      let entries
+      try {
+        entries = await readdir(d, { withFileTypes: true })
+      } catch {
+        return
+      }
+      if (emit === "emptydirs" && entries.length === 0 && d !== root) {
+        out.push(`/${relative(root, d).split(/[\\/]/).join("/")}`)
+        return
+      }
+      for (const e of entries) {
+        const full = join(d, e.name)
+        if (e.isDirectory()) await recurse(full)
+        else if (emit === "files" && e.isFile())
+          out.push(`/${relative(root, full).split(/[\\/]/).join("/")}`)
+      }
+    }
+    await recurse(dir)
+    return out
+  }
+  return {
+    readMirrorFile: (rel) => readFile(abs(rel)),
+    writeMirrorFile: async (rel, bytes) => {
+      await mkdir(dirname(abs(rel)), { recursive: true })
+      await writeFile(abs(rel), bytes)
+    },
+    listMirrorFiles: () => walk(root, "files"),
+    removeMirrorFile: (rel) => rm(abs(rel), { force: true }).then(() => {}),
+    makeMirrorDir: async (rel) => {
+      await mkdir(abs(rel), { recursive: true })
+    },
+    listMirrorEmptyDirs: () => walk(root, "emptydirs"),
+    removeMirrorDir: (rel) => rmdir(abs(rel)).catch(() => {}),
+  }
+}
+
+test("#5 collision — a base FILE replaced by a VM DIR round-trips (prune-before-writes, no ENOTDIR abort)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ws-collide-"))
+  // Base mirror holds a regular file at /conversation/foo.
+  await mkdir(join(root, "conversation"), { recursive: true })
+  await writeFile(join(root, "conversation", "foo"), "i am a file")
+
+  // The VM now has a DIRECTORY /conversation/foo containing bar.txt (foo is a
+  // non-empty dir → NO 'dir' entry; only its child file is listed).
+  const transport: WorkingSetTransport = {
+    async list() {
+      return [
+        {
+          relpath: "/conversation/foo/bar.txt",
+          kind: "file",
+          size: 3,
+          mtimeSec: 1,
+        },
+      ]
+    },
+    async read() {
+      return Buffer.from("new")
+    },
+    async write() {},
+    async remove() {},
+    async makeDir() {},
+  }
+  const bridge = createDetachedWorkingSetBridge({
+    mirrorDir: root,
+    mountRoots: ["/conversation"],
+    transport,
+    statCache: new Map(),
+    ...realFsMirror(root),
+  })
+
+  // BEFORE the fix this threw ENOTDIR (mkdir /conversation/foo over a file) and
+  // aborted the whole pull; now the stale file is pruned FIRST, so the write lands.
+  const res = await bridge.fetchChangedIntoMirror()
+  assert.deepEqual(res.fetched, ["/conversation/foo/bar.txt"])
+  assert.deepEqual(
+    res.pruned,
+    ["/conversation/foo"],
+    "the colliding base file was pruned"
+  )
+  // The mirror now has foo as a DIRECTORY with bar.txt inside.
+  assert.ok((await stat(join(root, "conversation", "foo"))).isDirectory())
+  assert.equal(
+    (await readFile(join(root, "conversation", "foo", "bar.txt"))).toString(),
+    "new"
+  )
+  await rm(root, { recursive: true, force: true })
+})
+
+test("#5 collision — a NESTED base DIR replaced by a VM FILE round-trips (empty-dir chain collapsed to fixpoint, no EISDIR)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ws-collide2-"))
+  // Base mirror holds a NESTED subtree at /conversation/x (depth ≥ 2).
+  await mkdir(join(root, "conversation", "x", "sub"), { recursive: true })
+  await writeFile(join(root, "conversation", "x", "sub", "deep.txt"), "old")
+
+  // The VM now has a regular FILE at /conversation/x (agent did rm -rf x && > x).
+  const transport: WorkingSetTransport = {
+    async list() {
+      return [
+        { relpath: "/conversation/x", kind: "file", size: 2, mtimeSec: 1 },
+      ]
+    },
+    async read() {
+      return Buffer.from("hi")
+    },
+    async write() {},
+    async remove() {},
+    async makeDir() {},
+  }
+  const bridge = createDetachedWorkingSetBridge({
+    mirrorDir: root,
+    mountRoots: ["/conversation"],
+    transport,
+    statCache: new Map(),
+    ...realFsMirror(root),
+  })
+
+  // BEFORE the fixpoint fix this left /conversation/x as an empty DIR (only the
+  // leaf /x/sub was pruned in one pass) → writeFile onto a dir → EISDIR → abort.
+  const res = await bridge.fetchChangedIntoMirror()
+  assert.deepEqual(res.fetched, ["/conversation/x"])
+  // The mirror now has x as a regular FILE with the VM bytes.
+  assert.ok((await stat(join(root, "conversation", "x"))).isFile())
+  assert.equal(
+    (await readFile(join(root, "conversation", "x"))).toString(),
+    "hi"
+  )
+  await rm(root, { recursive: true, force: true })
 })
 
 // ─────────────────────── S12 forced-commit-failure stash ──────────────────────

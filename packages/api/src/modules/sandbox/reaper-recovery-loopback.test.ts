@@ -25,6 +25,7 @@ import {
   getSandboxById,
   listReconcileCandidateSessionIds,
   listReapableClosingSandboxSessions,
+  listKeepAliveSandboxResourceIds,
   hasDockerMountHistory,
 } from "./repo.js"
 import { insertFileMount, updateFileMount } from "./repo-space.js"
@@ -664,6 +665,64 @@ test("F3: listReapableClosingSandboxSessions gates on state + session + deleted_
       none.length,
       0,
       "grace gate excludes rows closed within the window"
+    )
+  })
+})
+
+test("R5 #4 (review-fix): keepalive INCLUDES a failed-recoverable 'closing' off-box VM under the attempt cap, EXCLUDES it once teardown_epoch reaches the cap (bounded provider spend)", async () => {
+  await withTestDb(async (db) => {
+    const seed = await seedSession(db)
+    const runtimeId = await insertSandboxRuntime(db, {
+      workspaceId: seed.workspaceId,
+      sessionId: seed.sessionId,
+      adapter: "cubesandbox",
+      state: "closing",
+      resourceId: "vm-c3",
+    })
+    // A failed-recoverable mount owned by this closing sandbox.
+    const mount = await insertFileMount(db as any, {
+      workspaceId: seed.workspaceId,
+      sessionId: seed.sessionId,
+      fileSpaceId: seed.fileSpaceId,
+      mountSubpath: "conversation",
+      baseSnapshotId: null,
+      materializedDir: "/tmp/preserved",
+    })
+    await updateFileMount(db as any, mount.id, {
+      status: "failed",
+      sandboxId: runtimeId,
+    })
+
+    const setEpoch = (n: number) =>
+      sql`UPDATE sandboxes SET teardown_epoch = ${n} WHERE id = ${runtimeId}`.execute(
+        db
+      )
+
+    // Under the cap (epoch 1 < 5) → the VM's TTL is kept alive for recovery.
+    await setEpoch(1)
+    const within = await listKeepAliveSandboxResourceIds(
+      "cubesandbox",
+      1800,
+      5,
+      db as any
+    )
+    assert.ok(
+      within.includes("vm-c3"),
+      "a failed-recoverable closing VM is kept alive while attempts remain"
+    )
+
+    // At/over the cap (epoch 5, not < 5) → keepalive stops → provider TTL reclaims
+    // the VM → bounded spend (this is the fix for the infinite-renew regression).
+    await setEpoch(5)
+    const beyond = await listKeepAliveSandboxResourceIds(
+      "cubesandbox",
+      1800,
+      5,
+      db as any
+    )
+    assert.ok(
+      !beyond.includes("vm-c3"),
+      "keepalive STOPS once the recovery attempt cap is reached (no infinite renew)"
     )
   })
 })

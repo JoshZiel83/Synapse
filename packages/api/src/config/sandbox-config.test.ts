@@ -179,3 +179,72 @@ test("resolveSandboxMode: cubesandbox is the only bare-forcing provider; explici
     "bare"
   )
 })
+
+// ── #10 (review-fix) cube production loopback hardening (validateProduction) ────
+
+import { SANDBOX_ADAPTER_METADATA } from "../modules/sandbox/adapter-metadata.js"
+
+const cubeValidateProduction = SANDBOX_ADAPTER_METADATA.find(
+  (m) => m.key === "cubesandbox:bare"
+)!.meta.config.validateProduction
+
+function cubeProdIssues(over: Record<string, string>): string[] {
+  const env = {
+    SANDBOX_CUBESANDBOX_API_URL: "https://cube.example.com:13000",
+    SANDBOX_CUBESANDBOX_PROXY_URL: "https://proxy.example.com:11080",
+    SANDBOX_CUBESANDBOX_API_KEY: "a-real-key",
+    ...over,
+  } as never
+  return cubeValidateProduction(env, "production").map((i) => i.path.join("."))
+}
+
+test("#10: a fully-hardened prod cube config raises no production issues", () => {
+  assert.deepEqual(cubeProdIssues({}), [])
+})
+
+test("#10: the FULL 127.0.0.0/8 block is treated as loopback (not just 127.0.0.1)", () => {
+  for (const host of ["127.0.0.1", "127.0.0.2", "127.1.2.3", "localhost"]) {
+    assert.ok(
+      cubeProdIssues({
+        SANDBOX_CUBESANDBOX_API_URL: `https://${host}:13000`,
+      }).includes("SANDBOX_CUBESANDBOX_API_URL"),
+      `${host} must be flagged as loopback`
+    )
+  }
+})
+
+test("#10: IPv4-mapped IPv6 loopback + bare ::1 are flagged", () => {
+  for (const host of ["[::1]", "[::ffff:127.0.0.1]"]) {
+    assert.ok(
+      cubeProdIssues({
+        SANDBOX_CUBESANDBOX_PROXY_URL: `https://${host}:11080`,
+      }).includes("SANDBOX_CUBESANDBOX_PROXY_URL"),
+      `${host} must be flagged as loopback`
+    )
+  }
+})
+
+test("#10: http:// and a missing API key are flagged in production", () => {
+  assert.ok(
+    cubeProdIssues({
+      SANDBOX_CUBESANDBOX_API_URL: "http://cube.example.com:13000",
+    }).includes("SANDBOX_CUBESANDBOX_API_URL"),
+    "http:// must be flagged"
+  )
+  assert.ok(
+    cubeProdIssues({ SANDBOX_CUBESANDBOX_API_KEY: "   " }).includes(
+      "SANDBOX_CUBESANDBOX_API_KEY"
+    ),
+    "a whitespace-only API key must be flagged"
+  )
+})
+
+test("#10: a public non-loopback https config is NOT a false positive", () => {
+  assert.deepEqual(
+    cubeProdIssues({
+      SANDBOX_CUBESANDBOX_API_URL: "https://8.8.8.8:13000",
+      SANDBOX_CUBESANDBOX_PROXY_URL: "https://[2001:4860:4860::8888]:11080",
+    }),
+    []
+  )
+})

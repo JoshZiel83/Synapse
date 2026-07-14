@@ -30,6 +30,7 @@ import {
   getActiveMountsForSession,
   getFailedRecoverableMounts,
   sessionHasFailedRecoverableMounts,
+  closeSessionFailedMounts,
   getFileSpace,
   ensureContentBlob,
   appendSnapshot,
@@ -685,6 +686,15 @@ const OFFBOX_ORPHAN_MIN_AGE_MS = 600_000
  *  provider spend, no infinite renew. ~one TTL window. */
 const RECOVERY_KEEPALIVE_WINDOW_SECONDS = 1800
 
+/** (R5 #4, review-fix) Hard cap on off-box recovery re-drives for a stuck 'closing'
+ *  row. teardown_epoch bumps on every close-gate flip — the initial teardown plus
+ *  each closing-retry-reaper re-drive (~every CLOSING_RETRY_GRACE_SECONDS) — so this
+ *  bounds how many times a failed-recoverable VM is kept alive before the keepalive
+ *  stops (TTL reclaims the VM) and teardown converges terminal (accepts the loss +
+ *  alerts). ~20 re-drives keeps provider spend under a bounded window per stuck VM,
+ *  rather than the infinite renew an updated_at-only window allowed. */
+const MAX_OFFBOX_RECOVERY_ATTEMPTS = 20
+
 /** Resolve the CURRENTLY-configured adapter when it is off-box, else null. Shared
  *  by the off-box sweep + keepalive so both target the same provider. Injectable.
  *  (#13) Returns the NARROWED OffBoxSandboxAdapter so the sweep/keepalive call the
@@ -796,6 +806,7 @@ export async function keepAliveOffBoxSandboxes(
       repo.listKeepAliveSandboxResourceIds(
         tag,
         RECOVERY_KEEPALIVE_WINDOW_SECONDS,
+        MAX_OFFBOX_RECOVERY_ATTEMPTS,
         r
       ))
   let resourceIds: string[]
@@ -2654,29 +2665,62 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
       mounts.length === 0 &&
       (await sessionHasFailedRecoverableMounts(run, sessionId))
     ) {
-      log.warn(
-        { sessionId, runtimeId },
-        "off-box teardown: no active mounts but FAILED recoverable mounts pending — leaving VM + state='closing' for recovery re-pull"
+      // (R5 #4 review-fix) Defer for recovery re-pull ONLY while attempts remain.
+      // teardown_epoch (== the lease captured at THIS flip) counts close-gate re-
+      // drives; once it hits the cap, the keepalive has already stopped and the
+      // provider TTL has reclaimed the VM, so the preserved-but-un-pulled work is
+      // unrecoverable — converge terminal + ACCEPT THE LOSS loudly instead of
+      // re-driving (and renewing) forever.
+      if (epoch < BigInt(MAX_OFFBOX_RECOVERY_ATTEMPTS)) {
+        log.warn(
+          { sessionId, runtimeId, attempt: epoch.toString() },
+          "off-box teardown: no active mounts but FAILED recoverable mounts pending — leaving VM + state='closing' for recovery re-pull"
+        )
+        return
+      }
+      log.error(
+        { sessionId, runtimeId, attempts: epoch.toString() },
+        "off-box teardown: recovery attempts EXHAUSTED — converging terminal + ACCEPTING DATA LOSS (VM presumed reclaimed by its provider TTL)"
       )
+      await closeSessionFailedMounts(run, sessionId).catch(() => {})
+      await rm(sandboxRootFor(sessionId), {
+        recursive: true,
+        force: true,
+      }).catch(() => {})
+      await cleanupDirs([sandboxRootFor(sessionId)]).catch(() => {})
+      if (ctx) {
+        await revokeSandboxGrants({
+          workspaceId: ctx.workspaceId,
+          runtimeId,
+          actorId: ctx.actorId,
+          conversationId: ctx.conversationId,
+          executor: run,
+        }).catch((err) => log.error({ sessionId, err }, "revoke grants failed"))
+        await repo
+          .casCloseSandboxAtEpoch(runtimeId, epoch, { state: "failed" }, run)
+          .catch(() => false)
+        await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
+          log.error({ sessionId, err }, "soft-delete runtime failed")
+        )
+      }
       return
     }
 
-    // (#6) Re-check the teardown lease RIGHT BEFORE the irreversible DELETE cluster.
-    // A concurrent teardown/reaper (another replica) that re-flipped this row bumped
-    // the epoch past N; we then ABORT (leaving state='closing' for that owner to
-    // converge) rather than redundantly DELETE the VM + soft-delete the runtime. The
-    // pull+commit above are non-destructive/idempotent, so running them twice is
-    // harmless; only the DELETE cluster must be single-owner. (Committing stale/empty
-    // bytes is separately prevented: a pull from an already-killed VM fails
-    // resource_gone → pullOk=false → no commit.)
-    if (
-      pullOk &&
-      commitOk &&
-      !(await stillHoldsTeardownLease(runtimeId, epoch, run))
-    ) {
+    // (#6) Re-check the teardown lease BEFORE EITHER terminal branch — the DELETE
+    // cluster AND the ⑦-fail mark-mounts-'failed' branch. A concurrent teardown
+    // (another replica) that re-flipped this row bumped the epoch past N, so a
+    // SUPERSEDED teardown must touch NOTHING and abort (leaving state='closing' for
+    // the current owner to converge). CRITICAL that this is NOT gated on
+    // pull+commit success: a superseded loser whose pull FAILED *because the winner
+    // already DELETEd the shared VM* (pullOk=false) would otherwise fall through to
+    // the ⑦-fail branch and clobber the winner's just-'closed' mounts back to
+    // 'failed'. The pull+commit above are non-destructive/idempotent, so a loser
+    // having run them is harmless. (This must run AFTER the ⑦-guard so a legit
+    // failed-recoverable defer still wins.)
+    if (!(await stillHoldsTeardownLease(runtimeId, epoch, run))) {
       log.info(
         { sessionId, runtimeId },
-        "off-box teardown: superseded (teardown_epoch advanced) before DELETE — leaving to the current owner"
+        "off-box teardown: superseded (teardown_epoch advanced) — leaving to the current owner (no DELETE, no mount-state change)"
       )
       return
     }
@@ -3208,7 +3252,7 @@ async function recoverOffBoxSession(
     const persisted =
       (await repo.getBareSandboxForDispatch(runtimeId, run))?.credentials ??
       null
-    const rc = await adapter.reconnectDataPlane!(ref, {
+    const rc = await adapter.reconnectDataPlane(ref, {
       persistedCredentials: persisted,
       executor: run,
       workspaceId: sessionMounts[0]?.workspaceId,

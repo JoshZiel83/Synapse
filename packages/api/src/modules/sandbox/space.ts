@@ -8,6 +8,7 @@ export {
   getActiveMountsForSession,
   getFailedRecoverableMounts,
   sessionHasFailedRecoverableMounts,
+  closeSessionFailedMounts,
   appendSnapshot,
   getSnapshotManifestSha,
 } from "./repo-space.js"

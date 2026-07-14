@@ -289,6 +289,23 @@ export async function sessionHasFailedRecoverableMounts(
 }
 
 /**
+ * (R5 #4 review-fix) Terminally close every FAILED mount of a session — used when
+ * off-box recovery is EXHAUSTED (the un-pulled VM is unrecoverable, so its preserved
+ * materializedDir is being discarded). Flips 'failed' → 'closed' so the recovery
+ * sweep + the keepalive's failed-mount predicate stop matching the row.
+ */
+export async function closeSessionFailedMounts(
+  client: Executor,
+  sessionId: string
+): Promise<void> {
+  await sql`
+    UPDATE file_mounts
+       SET status = 'closed', closed_at = NOW()
+     WHERE session_id = ${sessionId}
+       AND status = 'failed'`.execute(client)
+}
+
+/**
  * Append a new snapshot to a space's DAG and advance current_snapshot_id, all
  * under a short transaction that serializes version assignment via
  * SELECT ... FOR UPDATE on the file_spaces row. The caller must have already

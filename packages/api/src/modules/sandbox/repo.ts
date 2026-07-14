@@ -958,14 +958,20 @@ export async function listNonTerminalSandboxResourceIds(
 export async function listKeepAliveSandboxResourceIds(
   adapter: string,
   recoveryWindowSeconds: number,
+  maxRecoveryAttempts: number,
   run: Executor = db
 ): Promise<string[]> {
   // (R5 #4) Also refresh a 'closing' off-box VM that still has failed-RECOVERABLE
-  // mounts — but ONLY within a bounded recovery window (updated_at, bumped by each
-  // recovery/close-gate pass). This keeps the provider TTL from destroying the sole
-  // un-pulled copy WHILE recovery is still trying, WITHOUT renewing forever: past the
-  // window the keepalive stops and the TTL reclaims a genuinely un-recoverable VM
-  // (bounded provider spend). Provisioning/active are always refreshed (in use).
+  // mounts — but under TWO hard bounds so the provider TTL is never renewed forever:
+  //   • teardown_epoch < maxRecoveryAttempts — the MONOTONIC attempt cap. Every
+  //     close-gate flip (the initial teardown + each closing-retry-reaper re-drive)
+  //     bumps teardown_epoch, so this counts recovery re-drives; past the cap the
+  //     keepalive stops and the provider TTL reclaims a genuinely un-recoverable VM.
+  //     (updated_at alone does NOT bound: the reaper self-flip bumps updated_at every
+  //     ~180s, so an updated_at window would slide forever — the original #4 bug.)
+  //   • updated_at within the window — a secondary "recently re-driven" filter that
+  //     also stops keepalive once the reaper GIVES UP re-driving the row.
+  // Provisioning/active are always refreshed (in use).
   const rows = await sql<{ resourceId: string }>`
     SELECT sb.resource_id AS "resourceId"
       FROM sandboxes sb
@@ -976,6 +982,7 @@ export async function listKeepAliveSandboxResourceIds(
           sb.state IN ('provisioning', 'active')
           OR (
             sb.state = 'closing'
+            AND sb.teardown_epoch < ${maxRecoveryAttempts}
             AND sb.updated_at > NOW() - make_interval(secs => ${recoveryWindowSeconds})
             AND EXISTS (
               SELECT 1 FROM file_mounts m

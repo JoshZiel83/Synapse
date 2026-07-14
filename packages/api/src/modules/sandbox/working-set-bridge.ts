@@ -389,13 +389,73 @@ export function createDetachedWorkingSetBridge(
     const maxReadBytes = opts.maxReadBytes
     const fetched: string[] = []
     const preserved: string[] = []
+
+    // (F1 / §6.4 / #5 collision-fix) PRUNE runs BEFORE the writes. Rebuild the mirror
+    // to EXACTLY the VM listing FIRST — every mirror file/empty-dir absent from the
+    // VM is deleted upstream, so remove it. Pruning first is what makes a file↔dir
+    // REPLACEMENT safe: if the base mirror holds a FILE at `/x` and the VM now has a
+    // DIR `/x/…` (or vice-versa), the stale node is removed here so the write below
+    // can mkdir/writeFile at `/x` without an ENOTDIR/EISDIR collision that would
+    // otherwise abort the WHOLE pull every turn. File-prune precedes empty-dir-prune
+    // (removing a file can leave its dir empty); a dir the VM still carries is kept,
+    // and a mirror dir the fetch needs is re-created by the write's parent-mkdir.
+    const presentFiles = new Set(fileListing.map((f) => f.relpath))
+    // (#5) A mirror empty-dir is still NEEDED if the VM lists it as an empty dir OR
+    // it is an ANCESTOR of any VM file/dir — otherwise pruning a transiently-empty
+    // ancestor (e.g. /conversation after its only file is pruned) would rmdir a dir
+    // the fetch is about to write back into (harmless churn, but it also wrongly
+    // reports the ancestor as 'pruned'). Only a dir the VM genuinely dropped is
+    // rmdir'd (empty-dir delete-propagation).
+    const neededDirs = new Set<string>()
+    const addAncestors = (p: string): void => {
+      let cur = p
+      let i = cur.lastIndexOf("/")
+      while (i > 0) {
+        cur = cur.slice(0, i)
+        neededDirs.add(cur)
+        i = cur.lastIndexOf("/")
+      }
+    }
+    for (const f of fileListing) addAncestors(f.relpath)
+    for (const d of dirListing) {
+      neededDirs.add(d.relpath)
+      addAncestors(d.relpath)
+    }
+    const pruned: string[] = []
+    for (const rel of await listMirrorFiles()) {
+      if (!presentFiles.has(rel)) {
+        await opts.removeMirrorFile?.(rel)
+        statCache.delete(rel)
+        pruned.push(rel)
+      }
+    }
+    // (#5 collision-fix) Collapse empty-dir CHAINS to a fixpoint. listMirrorEmptyDirs
+    // reports LEAF empty dirs only, so removing a leaf can expose a newly-empty
+    // PARENT that a single pass would miss — leaving e.g. `/x` as an empty directory
+    // when the base held `/x/sub/deep.txt` and the VM now has a FILE at `/x`, which
+    // would then EISDIR on the write. Re-walk + prune until no non-needed empty dir
+    // remains, so the whole stale chain is gone before the file write lands. (Bounded:
+    // each pass removes ≥1 dir or stops; a needed ancestor is always spared.)
+    let prunedADir = true
+    while (prunedADir) {
+      prunedADir = false
+      for (const rel of await listMirrorEmptyDirs()) {
+        if (!neededDirs.has(rel)) {
+          await opts.removeMirrorDir?.(rel)
+          pruned.push(rel)
+          prunedADir = true
+        }
+      }
+    }
+
+    // Fetch the changed files INTO the (now-pruned) mirror.
     for (const rel of toFetch) {
       const f = byPath.get(rel)
       // (#14) PRESERVE-and-EXCLUDE an oversize file: never buffer its whole body
       // (OOM). Leave the mirror bytes as-is (base copy stays → scanCommitDir sees no
       // change for it → excluded from the change-set) and DON'T touch the stat-cache
       // (so it re-preserves next scan). It stays in the VM listing's `present` set
-      // below, so it is NOT pruned. The caller commits the files that fit.
+      // above, so it is NOT pruned. The caller commits the files that fit.
       if (f && maxReadBytes !== undefined && f.size > maxReadBytes) {
         preserved.push(rel)
         continue
@@ -420,33 +480,6 @@ export function createDetachedWorkingSetBridge(
     // ones; mkdir -p is idempotent.)
     for (const rel of dirListing) {
       await opts.makeMirrorDir?.(rel.relpath)
-    }
-    // (F1 / §6.4) PULL-side delete-propagation: rebuild the mirror to EXACTLY the
-    // listing. Every mirror file absent from the VM listing is a file the agent
-    // deleted upstream — REMOVE it from the mirror (and drop its stat-cache entry)
-    // so the following scanCommitDir sees the delete instead of resurrecting the
-    // stale base copy. This is the pull-side twin of planReplication.removes.
-    const presentFiles = new Set(fileListing.map((f) => f.relpath))
-    const mirrorFiles = await listMirrorFiles()
-    const pruned: string[] = []
-    for (const rel of mirrorFiles) {
-      if (!presentFiles.has(rel)) {
-        await opts.removeMirrorFile?.(rel)
-        statCache.delete(rel)
-        pruned.push(rel)
-      }
-    }
-    // (#5) EMPTY-dir delete-propagation: an empty mirror dir absent from the VM's
-    // dir set is one the agent deleted upstream — rmdir it. Runs AFTER the file
-    // prune (removing files can leave a dir empty). A dir the VM still carries (in
-    // dirListing) is kept; a non-empty mirror dir is not in listMirrorEmptyDirs, so
-    // it is never rmdir'd here.
-    const presentDirs = new Set(dirListing.map((f) => f.relpath))
-    for (const rel of await listMirrorEmptyDirs()) {
-      if (!presentDirs.has(rel)) {
-        await opts.removeMirrorDir?.(rel)
-        pruned.push(rel)
-      }
     }
     return {
       fetched,
