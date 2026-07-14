@@ -158,13 +158,20 @@ test("SANDBOX_DOCKER_RUN_AS_UID permits 0 (root, today's default)", () => {
   assert.equal(parsed.data.SANDBOX_DOCKER_RUN_AS_UID, 0)
 })
 
-test("resolveSandboxMode: e2b/cube/cubesandbox providers default to bare, explicit mode wins", () => {
-  assert.equal(resolveSandboxMode({ SANDBOX_PROVIDER: "e2b" }), "bare")
-  assert.equal(resolveSandboxMode({ SANDBOX_PROVIDER: "cube" }), "bare")
-  // cubesandbox (P4b) is the FIRST bare-forcing provider actually registered.
+test("resolveSandboxMode: cubesandbox is the only bare-forcing provider; explicit mode wins", () => {
+  // cubesandbox (the off-box adapter) is the ONLY provider that derives mode=bare.
   assert.equal(resolveSandboxMode({ SANDBOX_PROVIDER: "cubesandbox" }), "bare")
+  // #9(1): the decommissioned e2b/cube names are no longer special-cased — they
+  // resolve to 'resident' (an unregistered `${provider}:resident` key), which the
+  // boot superRefine then hard-rejects. No lingering bare-forcing aliases.
+  assert.equal(resolveSandboxMode({ SANDBOX_PROVIDER: "e2b" }), "resident")
+  assert.equal(resolveSandboxMode({ SANDBOX_PROVIDER: "cube" }), "resident")
+  // An explicit SANDBOX_MODE always wins over the provider-derived default.
   assert.equal(
-    resolveSandboxMode({ SANDBOX_PROVIDER: "e2b", SANDBOX_MODE: "resident" }),
+    resolveSandboxMode({
+      SANDBOX_PROVIDER: "cubesandbox",
+      SANDBOX_MODE: "resident",
+    }),
     "resident"
   )
   assert.equal(

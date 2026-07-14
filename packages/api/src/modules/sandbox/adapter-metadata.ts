@@ -117,6 +117,64 @@ function dockerStorageVolumeIssues(env: RawEnv): ConfigIssue[] {
 
 const NO_PRODUCTION_ISSUES = (): ConfigIssue[] => []
 
+/** Off-box cube production hardening (#10). In production the control + proxy
+ *  URLs must be https:// to a NON-loopback host and an API key must be set — an
+ *  unauthenticated, plaintext, or loopback-bound off-box control plane would let
+ *  anyone on the path create/exec/read remote VMs. A dev/local deploy
+ *  (NODE_ENV!=='production') is exempt so the unauthenticated local cube keeps
+ *  working. Absence of a URL is already reported by `validate`, so this only
+ *  hardens a URL that IS present. */
+function cubeProductionIssues(env: RawEnv, nodeEnv: string): ConfigIssue[] {
+  if (nodeEnv !== "production") return []
+  const issues: ConfigIssue[] = []
+  const checkUrl = (key: string, raw: string | undefined): void => {
+    const value = raw?.trim()
+    if (!value) return
+    let parsed: URL
+    try {
+      parsed = new URL(value)
+    } catch {
+      issues.push(issue([key], `${key} must be a valid URL in production`))
+      return
+    }
+    if (parsed.protocol !== "https:") {
+      issues.push(
+        issue(
+          [key],
+          `${key} must use https:// in production (got '${parsed.protocol}//') — ` +
+            `an off-box sandbox control plane must not carry credentials in the clear`
+        )
+      )
+    }
+    const host = parsed.hostname.toLowerCase()
+    if (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      host === "[::1]"
+    ) {
+      issues.push(
+        issue(
+          [key],
+          `${key} must not point at a loopback host in production (got '${parsed.hostname}')`
+        )
+      )
+    }
+  }
+  checkUrl("SANDBOX_CUBESANDBOX_API_URL", env.SANDBOX_CUBESANDBOX_API_URL)
+  checkUrl("SANDBOX_CUBESANDBOX_PROXY_URL", env.SANDBOX_CUBESANDBOX_PROXY_URL)
+  if (!env.SANDBOX_CUBESANDBOX_API_KEY?.trim()) {
+    issues.push(
+      issue(
+        ["SANDBOX_CUBESANDBOX_API_KEY"],
+        "SANDBOX_CUBESANDBOX_API_KEY is required in production — an unauthenticated " +
+          "off-box sandbox control plane is reachable by anyone who can route to it"
+      )
+    )
+  }
+  return issues
+}
+
 // ── endpoint contracts ──────────────────────────────────────────────────────
 
 const ENDPOINT_INPROCESS: AdapterEndpointContract = {
@@ -387,9 +445,9 @@ export const SANDBOX_ADAPTER_METADATA: readonly SandboxAdapterMetadataEntry[] =
             }
             return issues
           },
-          // R4 Phase 3 (#6): production fail-closed (reject http:// control/proxy
-          // URLs, loopback hosts, and an empty API key in production) lands here.
-          validateProduction: NO_PRODUCTION_ISSUES,
+          // #10: production fail-closed — reject http:// control/proxy URLs,
+          // loopback hosts, and an empty API key when NODE_ENV==='production'.
+          validateProduction: cubeProductionIssues,
         },
       },
       endpoint: ENDPOINT_ENVD,

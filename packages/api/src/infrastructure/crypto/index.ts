@@ -55,7 +55,21 @@ let cachedPassphrase: string | null = null
 function getPassphrase(): string {
   if (cachedPassphrase !== null) return cachedPassphrase
 
-  const configured = process.env.MCP_ENCRYPTION_KEY || process.env.APP_SECRET
+  // #15: select the first source whose TRIMMED value is non-empty — a
+  // whitespace-only MCP_ENCRYPTION_KEY must neither pass as a "configured" key
+  // nor shadow a real APP_SECRET. But derive from the ORIGINAL untrimmed value:
+  // trimming the scrypt input would change the passphrase for every deployment
+  // whose key carries surrounding whitespace and orphan all data already
+  // encrypted at rest. (config's superRefine rejects a trimmed-empty key at boot
+  // in production, so this selection matches the boot gate.)
+  const rawMcpKey = process.env.MCP_ENCRYPTION_KEY
+  const rawAppSecret = process.env.APP_SECRET
+  let configured: string | undefined
+  if (rawMcpKey?.trim()) {
+    configured = rawMcpKey
+  } else if (rawAppSecret?.trim()) {
+    configured = rawAppSecret
+  }
   if (configured) {
     cachedPassphrase = configured
     return cachedPassphrase

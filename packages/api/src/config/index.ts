@@ -389,15 +389,20 @@ export type RawEnv = z.infer<typeof envObjectSchema>
 export const envSchema = envObjectSchema.superRefine((env, ctx) => {
   if (
     env.NODE_ENV === "production" &&
-    !env.MCP_ENCRYPTION_KEY &&
-    !env.APP_SECRET
+    // #15: a whitespace-only key (MCP_ENCRYPTION_KEY="   ") is truthy but derives
+    // a trivially-guessable passphrase. Treat trimmed-empty as missing for the
+    // boot CHECK. (Derivation itself keeps the ORIGINAL untrimmed value — trimming
+    // the scrypt input would change every existing deployment's passphrase and
+    // orphan all credentials already encrypted at rest.)
+    !firstNonEmpty([env.MCP_ENCRYPTION_KEY, env.APP_SECRET])
   ) {
     ctx.addIssue({
       code: "custom",
       path: ["MCP_ENCRYPTION_KEY"],
       message:
         "MCP_ENCRYPTION_KEY (or APP_SECRET) is required in production to " +
-        "encrypt sensitive plugin/IM credentials at rest",
+        "encrypt sensitive plugin/IM credentials at rest (a whitespace-only " +
+        "value does not count)",
     })
   }
   // Better Auth needs a stable signing secret in production. Resolve the same
@@ -696,18 +701,16 @@ export function resolveSandboxProviderName(env: {
 }
 
 /** Resolve the effective sandbox mode. SANDBOX_MODE=auto (the default) derives
- *  from the provider: the bare-adapter providers (e2b/cube) default to 'bare',
- *  everything else to 'resident'. An explicit resident/bare wins. P2 registers
- *  only resident adapters (local/docker); bare is a P3/P4 surface. */
+ *  from the provider: the off-box bare provider (cubesandbox) defaults to 'bare',
+ *  everything else to 'resident'. An explicit resident/bare wins. The only
+ *  registered bare provider is cubesandbox; local/docker are resident. */
 export function resolveSandboxMode(env: {
   SANDBOX_PROVIDER?: string
   SANDBOX_MODE?: "resident" | "bare" | "auto"
 }): "resident" | "bare" {
   if (env.SANDBOX_MODE && env.SANDBOX_MODE !== "auto") return env.SANDBOX_MODE
   const provider = resolveSandboxProviderName(env)
-  return provider === "e2b" || provider === "cube" || provider === "cubesandbox"
-    ? "bare"
-    : "resident"
+  return provider === "cubesandbox" ? "bare" : "resident"
 }
 
 function loadEnvOrExit(): z.infer<typeof envSchema> {
@@ -1052,16 +1055,17 @@ if (config.sandbox.provider === "none") {
     `${config.sandbox.provider}:${config.sandbox.mode}`
   )
 ) {
-  // P1.5: a REQUESTED sandbox whose ${provider}:${mode} has NO registered adapter
-  // (a typo, or e2b/cube which derive mode=bare but aren't registered yet) would
-  // otherwise degrade to a silent unsandboxed run. Warn LOUDLY at boot; per-turn
-  // provisioning then fails and surfaces the degraded-turn notice (owner chose
-  // run-unsandboxed over hard-fail, so this is a warning, not a boot reject).
-  log.warn(
+  // #9(1): a REQUESTED sandbox whose ${provider}:${mode} has NO registered adapter
+  // is a STRUCTURAL misconfiguration (a typo like SANDBOX_PROVIDER=cubesandbx, or a
+  // decommissioned provider name). Booting anyway would silently run EVERY turn
+  // without isolation. Fail closed at boot so the misconfig is impossible to miss.
+  // NOTE: this is distinct from a *runtime* provision failure (e.g. the off-box
+  // control plane is transiently down) — that still degrades to an unsandboxed turn
+  // with a notice, per the owner's availability choice. Only the config is fatal.
+  throw new Error(
     `SANDBOX_PROVIDER/SANDBOX_MODE resolves to '${config.sandbox.provider}:${config.sandbox.mode}', ` +
       `which has NO registered sandbox adapter (registered: ${SANDBOX_ADAPTER_KEYS.join(", ")}). ` +
-      "Sandboxes will FAIL to provision and actors will run WITHOUT isolation (with a degraded-turn " +
-      "notice). Fix SANDBOX_PROVIDER/SANDBOX_MODE, or set SANDBOX_PROVIDER=none to disable sandboxing " +
-      "intentionally."
+      "Refusing to boot: this would run actors WITHOUT isolation. Fix SANDBOX_PROVIDER/SANDBOX_MODE, " +
+      "or set SANDBOX_PROVIDER=none to disable sandboxing intentionally."
   )
 }

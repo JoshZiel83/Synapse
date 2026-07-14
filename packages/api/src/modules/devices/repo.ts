@@ -2045,16 +2045,31 @@ export async function consumeLocalPairingTx(args: {
  */
 // P1.6: real OS facts persisted on the sandbox row at mint, read by the
 // capability projection's bundle-eligibility + Windows-guard logic (COALESCE
-// d.platform, sb.platform, 'linux'). A host-side sandbox's platform is knowable
+// d.platform, sb.platform, 'linux'). A HOST-side sandbox's platform is knowable
 // exactly here — local runs directly on the API host; docker (DooD) is a linux
-// container on that host, so its arch matches the host. Off-box providers
-// (E2B/Cube) will declare their own platform/arch when those adapters land.
+// container on that host, so its arch matches the host.
+//
+// (#11) An OFF-BOX adapter's real platform is the REMOTE VM's, NEVER the API
+// host's (an arm64 API standing up an x86_64 VM would misgrant platform-specific
+// tool bundles). Off-box adapters therefore MUST supply platform/arch at mint
+// (cubesandbox probes the VM and hard-fails create() if it can't). This host
+// fallback is scoped to the host adapters ONLY; reaching it for any other adapter
+// means the off-box facts went missing, so it fails CLOSED rather than persisting
+// a guessed host arch. (The columns are NOT NULL — the projection's invariant that
+// a sandbox always has a known platform — so a guess or a NULL are both wrong; a
+// throw aborts the mint and the spine retries.)
 function sandboxHostPlatformArch(adapter: string): {
   platform: string
   arch: string
 } {
+  if (adapter === "local") {
+    return { platform: process.platform, arch: process.arch }
+  }
   if (adapter === "docker") return { platform: "linux", arch: process.arch }
-  return { platform: process.platform, arch: process.arch }
+  throw new Error(
+    `sandboxHostPlatformArch: off-box adapter '${adapter}' must supply ` +
+      `platform/arch at mint (refusing to guess the API host's platform for a remote VM)`
+  )
 }
 
 export async function mintLocalSandboxRuntimeTx(args: {

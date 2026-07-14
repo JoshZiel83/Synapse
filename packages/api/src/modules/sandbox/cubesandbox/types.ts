@@ -40,6 +40,13 @@ export const SYNAPSE_RUNTIME_ID_KEY = "synapseRuntimeId"
 export const SYNAPSE_WORKSPACE_ID_KEY = "synapseWorkspaceId"
 /** Metadata key: the owning session id. */
 export const SYNAPSE_SESSION_ID_KEY = "synapseSessionId"
+/** Metadata key (#12c): the owning Synapse DEPLOYMENT id (config SANDBOX_DEPLOYMENT_ID).
+ *  Two deployments that share ONE Cube account each stamp their own id; the orphan
+ *  sweep reaps only VMs whose deployment id matches this deployment's (so replicas
+ *  of the SAME deployment share an id and can clean up for each other, but a
+ *  sibling deployment's VMs are untouchable). Omitted when SANDBOX_DEPLOYMENT_ID is
+ *  unset — the sweep then treats the absent marker as the empty-id owner. */
+export const SYNAPSE_DEPLOYMENT_ID_KEY = "synapseDeploymentId"
 
 // ── Control plane ────────────────────────────────────────────────────────────
 

@@ -59,6 +59,7 @@ import { repersistBareSandboxCredentials } from "./repo.js"
 import {
   CubeControlClient,
   CubeEnvdClient,
+  SYNAPSE_DEPLOYMENT_ID_KEY,
   SYNAPSE_RUNTIME_ID_KEY,
   SYNAPSE_SESSION_ID_KEY,
   SYNAPSE_WORKSPACE_ID_KEY,
@@ -84,6 +85,10 @@ export interface CubesandboxBareOptions {
    *  by the keepalive maintenance tick so an active session's VM never expires. */
   sandboxTtlSeconds: number
   apiKey?: string
+  /** (#12c) this deployment's provenance id (SANDBOX_DEPLOYMENT_ID); "" when unset.
+   *  Stamped onto every created VM + matched by the orphan sweep so sibling
+   *  deployments on one Cube account never reap each other's VMs. */
+  deploymentId: string
 }
 
 /** Build the cubesandbox:bare options from the validated config namespace. */
@@ -98,6 +103,7 @@ export function cubesandboxBareOptionsFromEnv(): CubesandboxBareOptions {
     envdPort: c.envdPort,
     sandboxTtlSeconds: c.sandboxTtlSeconds,
     apiKey: c.apiKey || undefined,
+    deploymentId: config.sandbox.deploymentId,
   }
 }
 
@@ -229,6 +235,26 @@ export async function detectCubePlatformArch(
   }
 }
 
+/** (#11) Bounded-retry wrapper over {@link detectCubePlatformArch}. A cold VM's
+ *  envd may not be exec-ready on the first probe, so retry a few times with a
+ *  short backoff. Returns null ONLY after every attempt failed — the caller then
+ *  HARD-fails create() (tear down + retry) rather than persisting a guessed arch,
+ *  which would misgrant platform-specific tool bundles (arm64 API ↔ x86_64 VM). */
+export async function detectCubePlatformArchOrNull(
+  envd: RemoteEnvdTransport,
+  attempts = 3,
+  backoffMs = 500
+): Promise<{ platform: string; arch: string } | null> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const facts = await detectCubePlatformArch(envd)
+    if (facts) return facts
+    if (attempt < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, backoffMs))
+    }
+  }
+  return null
+}
+
 export interface MakeCubesandboxBareAdapterDeps {
   /** Force the descriptor (test seam). */
   descriptorOverride?: SandboxCapabilityDescriptor
@@ -282,15 +308,27 @@ export function makeCubesandboxBareAdapter(
       // the keepalive maintenance tick while the session stays non-terminal.
       const runtimeId = randomUUID()
       const serviceId = randomUUID()
+      // (#12c) provenance metadata. The deployment id is added ONLY when configured
+      // — an absent marker reads as the empty-id owner, matching an unset sweep.
+      const createMetadata: Record<string, string> = {
+        [SYNAPSE_RUNTIME_ID_KEY]: runtimeId,
+        [SYNAPSE_WORKSPACE_ID_KEY]: spec.workspaceId,
+        [SYNAPSE_SESSION_ID_KEY]: spec.sessionId,
+      }
+      if (runOpts.deploymentId) {
+        createMetadata[SYNAPSE_DEPLOYMENT_ID_KEY] = runOpts.deploymentId
+      }
       const created = await control
         .create({
           templateID: runOpts.template,
           timeoutSeconds: runOpts.sandboxTtlSeconds,
-          metadata: {
-            [SYNAPSE_RUNTIME_ID_KEY]: runtimeId,
-            [SYNAPSE_WORKSPACE_ID_KEY]: spec.workspaceId,
-            [SYNAPSE_SESSION_ID_KEY]: spec.sessionId,
-          },
+          // (#10) Request PRIVATE (token-authenticated) traffic only when this
+          // deployment is authenticated (an apiKey is configured). An
+          // unauthenticated local cube can't mint a traffic token, so leaving it
+          // undefined keeps the dev VM reachable; a hardened deploy gets
+          // allowPublicTraffic:false + a per-VM trafficAccessToken.
+          allowPublicTraffic: runOpts.apiKey ? false : undefined,
+          metadata: createMetadata,
         })
         .catch((err) => {
           throw new SandboxBackendError(
@@ -327,7 +365,17 @@ export function makeCubesandboxBareAdapter(
           envdAccessToken: created.envdAccessToken,
           trafficAccessToken: created.trafficAccessToken,
         }
-        const platformArch = await detectCubePlatformArch(envd)
+        // (#11) FAIL CLOSED on an undetectable arch: an off-box VM's platform/arch
+        // has no host fallback (the API host's process.* would misgrant bundles),
+        // so a definitive probe failure aborts create() — the catch below tears the
+        // VM down and the spine retries — rather than persisting a guessed arch.
+        const platformArch = await detectCubePlatformArchOrNull(envd)
+        if (!platformArch) {
+          throw new SandboxBackendError(
+            "cubesandbox platform/arch probe failed after retries — refusing to " +
+              "persist a guessed architecture (would misgrant platform-specific tool bundles)"
+          )
+        }
         const credentialsEncrypted = encodeSandboxDataPlaneCredentials(
           rawCredentials,
           { sandboxRowId: runtimeId, workspaceId: spec.workspaceId }
@@ -341,8 +389,8 @@ export function makeCubesandboxBareAdapter(
           dataPlaneEndpoint,
           resourceId: sandboxID,
           credentialsEncrypted,
-          platform: platformArch?.platform,
-          arch: platformArch?.arch,
+          platform: platformArch.platform,
+          arch: platformArch.arch,
           capabilityDescriptor: descriptor as unknown as Record<
             string,
             unknown
@@ -581,6 +629,16 @@ export function makeCubesandboxBareAdapter(
         // Provenance: only ever reap a VM WE created (tagged with our runtimeId
         // key). A foreign tenant's sandbox on a shared deployment is untouchable.
         if (!e.metadata?.[SYNAPSE_RUNTIME_ID_KEY]) continue
+        // (#12c) Deployment scoping: reap only VMs stamped with THIS deployment's id
+        // (an absent marker == the empty-id owner). A sibling deployment sharing the
+        // same Cube account carries a different id → never cross-reaped. Replicas of
+        // the SAME deployment share the id, so they still clean up for each other.
+        if (
+          (e.metadata?.[SYNAPSE_DEPLOYMENT_ID_KEY] ?? "") !==
+          runOpts.deploymentId
+        ) {
+          continue
+        }
         // Tracked by a non-terminal DB row (provisioning/active/closing) → in use.
         if (activeResourceIds.has(e.sandboxID)) continue
         // Age grace: never reap a VM younger than a provision cycle — its mint may

@@ -1202,10 +1202,11 @@ function mapPlaneError(err: unknown): McpDispatchResult {
     return errResult("runtime_constraint", err.message)
   }
   if (err instanceof SandboxResourceGoneError) {
-    // The container was externally removed mid-session (B13). No dedicated
-    // SynapseError code exists, so surface runtime_constraint + a `resource_gone`
-    // detail; the dispatch/teardown spine flips sandboxes.state='failed' and runs
-    // failed-commit preservation off this signal.
+    // The container was externally removed mid-session (B13), OR the off-box VM
+    // vanished and the cube plane already mapped its CubeProxy 502/503/504 to this
+    // uniform error (#12b). No dedicated SynapseError code exists, so surface
+    // runtime_constraint + a `resource_gone` detail; the dispatch/teardown spine
+    // flips sandboxes.state='failed' and runs failed-commit preservation off it.
     return errResult("runtime_constraint", err.message, { resource_gone: true })
   }
   const message = err instanceof Error ? err.message : String(err)

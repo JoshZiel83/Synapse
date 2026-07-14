@@ -1678,6 +1678,19 @@ export function startSessionThinkingWorker() {
           () => shutdownSessionInstances(sessionId)
         )
 
+        // (#12a) Tear down the file sandbox when a session goes BLOCKED, mirroring
+        // the running→idle transition. Without this the sandbox row stays
+        // non-terminal, so the keepalive maintenance tick would renew a blocked
+        // session's off-box VM deadline forever (a paid-resource leak with no
+        // session ever consuming it). Best-effort — a teardown failure must not
+        // stop the block cleanup (commit conflicts are already surfaced elsewhere).
+        if (sandboxEnabled) {
+          await runCleanupStep(
+            `teardown sandbox for blocked session ${sessionId}`,
+            () => teardownSandbox(sessionId)
+          )
+        }
+
         const wakeupTargets = pendingWakeups.filter(
           (wakeup) =>
             (wakeup.sourceParticipantType === "workspace_member" ||

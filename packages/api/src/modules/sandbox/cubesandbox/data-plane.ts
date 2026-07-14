@@ -52,6 +52,7 @@ import {
   type SandboxFileStat,
 } from "../data-plane.js"
 import type { SandboxCapabilityDescriptor } from "../model.js"
+import { SandboxResourceGoneError } from "../docker-sandbox-backend.js"
 import { CubeEnvdError, CubeEnvdNotFoundError } from "./types.js"
 import type {
   ExecOptions,
@@ -296,10 +297,56 @@ function assertWriteAccess(ctx: ConfinementCtx): void {
  * There is no host child to abort — dispose() only awaits in-flight remote calls to
  * settle, then releases the pooled envd dispatcher.
  */
+/** (#12b) A CubeProxy gateway status (502/503/504) means the proxy could not reach
+ *  the VM's envd — the off-box VM vanished (killed / TTL-expired). An envd-level 4xx
+ *  (the VM is up but rejected the op, e.g. a path 404) is NOT a gone VM. */
+function isCubeProxyGoneStatus(status: number | undefined): boolean {
+  return status === 502 || status === 503 || status === 504
+}
+
+/** (#12b) Translate a CubeProxy-unreachable error to the CANONICAL
+ *  SandboxResourceGoneError so EVERY plane consumer (dispatch → resource_gone,
+ *  teardown, liveness) converges the same way, instead of a cube-specific error
+ *  only the dispatch mapper would recognize. Any other error passes through. */
+function toGoneIfProxyUnreachable(err: unknown): unknown {
+  if (err instanceof CubeEnvdError && isCubeProxyGoneStatus(err.status)) {
+    return new SandboxResourceGoneError(
+      `cubesandbox VM unreachable via CubeProxy (HTTP ${err.status}) — treating the sandbox as gone`
+    )
+  }
+  return err
+}
+
+/** Wrap a transport so every DATA op maps a CubeProxy-unreachable error to the
+ *  uniform gone error. close()/destroy() pass through unchanged (a gone VM during
+ *  teardown is already the desired end state); destroy stays optional so a stub
+ *  without it is unaffected and the plane's `if (envd.destroy)` check still holds. */
+function wrapEnvdGoneMapping(envd: RemoteEnvdTransport): RemoteEnvdTransport {
+  const mapRejection = <T>(p: Promise<T>): Promise<T> =>
+    p.catch((err: unknown) => {
+      throw toGoneIfProxyUnreachable(err)
+    })
+  return {
+    exec: (request, options) => mapRejection(envd.exec(request, options)),
+    writeFile: (path, bytes, options) =>
+      mapRejection(envd.writeFile(path, bytes, options)),
+    readFile: (path, options) => mapRejection(envd.readFile(path, options)),
+    stat: (path) => mapRejection(envd.stat(path)),
+    listDir: (path) => mapRejection(envd.listDir(path)),
+    makeDir: (path) => mapRejection(envd.makeDir(path)),
+    move: (source, destination) => mapRejection(envd.move(source, destination)),
+    remove: (path) => mapRejection(envd.remove(path)),
+    close: () => envd.close(),
+    destroy: envd.destroy ? () => envd.destroy!() : undefined,
+  }
+}
+
 export function createRemoteBareDataPlane(
   opts: RemoteBareDataPlaneOptions
 ): SandboxDataPlane {
-  const { envd, vmRoot } = opts
+  const { vmRoot } = opts
+  // (#12b) every plane op speaks through the gone-mapping wrapper.
+  const envd = wrapEnvdGoneMapping(opts.envd)
   const caps = opts.descriptor.core
   const execTimeoutDefault =
     opts.defaultExecTimeoutMs ?? DEFAULT_REMOTE_EXEC_TIMEOUT_MS

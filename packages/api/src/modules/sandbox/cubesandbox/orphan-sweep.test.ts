@@ -13,7 +13,11 @@ import assert from "node:assert/strict"
 import { makeCubesandboxBareAdapter } from "../cubesandbox-adapter.js"
 import type { CubesandboxBareOptions } from "../cubesandbox-adapter.js"
 import type { CubeControlClient } from "./control-client.js"
-import { SYNAPSE_RUNTIME_ID_KEY, type SandboxListEntry } from "./types.js"
+import {
+  SYNAPSE_DEPLOYMENT_ID_KEY,
+  SYNAPSE_RUNTIME_ID_KEY,
+  type SandboxListEntry,
+} from "./types.js"
 
 const OPTS: CubesandboxBareOptions = {
   apiUrl: "http://127.0.0.1:13000",
@@ -23,6 +27,7 @@ const OPTS: CubesandboxBareOptions = {
   vmRoot: "/workspace",
   envdPort: 49983,
   sandboxTtlSeconds: 1800,
+  deploymentId: "",
 }
 
 interface ControlSink {
@@ -166,4 +171,66 @@ test("refreshResourceDeadline pushes the deadline forward by the configured TTL"
   const adapter = adapterWith(fakeControl([], sink))
   await adapter.refreshResourceDeadline!("vm-keepalive")
   assert.deepEqual(sink.timeouts, [["vm-keepalive", 1800]])
+})
+
+// ── #12c: deployment-scoped orphan reaping ───────────────────────────────────
+// Two deployments sharing ONE Cube account each stamp their own deployment id.
+// The sweep must reap only VMs whose deployment id matches THIS deployment's, so a
+// sibling deployment's VMs are never cross-reaped, while replicas of the SAME
+// deployment (shared id) still clean up for each other.
+
+function adapterWithDeployment(
+  control: CubeControlClient,
+  deploymentId: string
+) {
+  return makeCubesandboxBareAdapter({
+    optionsOverride: { ...OPTS, deploymentId },
+    controlClientFactory: () => control,
+  })
+}
+
+/** A provenance-tagged entry `age` ms old, stamped with a specific deployment id. */
+function oursForDeployment(
+  id: string,
+  ageMs: number,
+  deploymentId: string
+): SandboxListEntry {
+  return {
+    sandboxID: id,
+    state: "running",
+    startedAt: new Date(Date.now() - ageMs).toISOString(),
+    metadata: {
+      [SYNAPSE_RUNTIME_ID_KEY]: `rt-${id}`,
+      ...(deploymentId ? { [SYNAPSE_DEPLOYMENT_ID_KEY]: deploymentId } : {}),
+    },
+  }
+}
+
+test("listOrphans: a configured deployment reaps only its OWN deployment's VMs", async () => {
+  const sink: ControlSink = { killed: [], timeouts: [] }
+  const entries: SandboxListEntry[] = [
+    oursForDeployment("vm-mine", 20 * 60_000, "dep-A"), // old, ours → orphan
+    oursForDeployment("vm-sibling", 20 * 60_000, "dep-B"), // sibling deploy → spared
+    ours("vm-unmarked", 20 * 60_000), // no deployment marker → spared (!= "dep-A")
+  ]
+  const adapter = adapterWithDeployment(fakeControl(entries, sink), "dep-A")
+  const orphans = await adapter.listOrphans!({
+    activeResourceIds: new Set<string>(),
+    minAgeMs: GRACE,
+  })
+  assert.deepEqual(orphans.map((o) => o.resourceId).sort(), ["vm-mine"])
+})
+
+test("listOrphans: an UNSET deployment id reaps unmarked VMs but spares a marked sibling", async () => {
+  const sink: ControlSink = { killed: [], timeouts: [] }
+  const entries: SandboxListEntry[] = [
+    ours("vm-unmarked", 20 * 60_000), // no marker, our (empty) owner → orphan
+    oursForDeployment("vm-sibling", 20 * 60_000, "dep-B"), // marked sibling → spared
+  ]
+  const adapter = adapterWithDeployment(fakeControl(entries, sink), "")
+  const orphans = await adapter.listOrphans!({
+    activeResourceIds: new Set<string>(),
+    minAgeMs: GRACE,
+  })
+  assert.deepEqual(orphans.map((o) => o.resourceId).sort(), ["vm-unmarked"])
 })
