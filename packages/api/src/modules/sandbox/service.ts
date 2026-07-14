@@ -2343,6 +2343,24 @@ export interface TeardownSandboxOptions {
  * resource + revoke ITS grants + soft-delete IT. NEVER load session mounts, commit
  * the session mirror, or rm(sandboxRootFor(sessionId)) — those are the NEW owner's.
  */
+/**
+ * (#6) True iff this teardown still holds the lease captured at its close-gate flip
+ * — the sandbox row's teardown_epoch still equals N. A concurrent teardown/reaper
+ * that re-flipped the row bumped the epoch past N (→ false), and a fully-removed row
+ * reads null (→ false). Called RIGHT BEFORE each irreversible teardown cluster so a
+ * superseded teardown aborts instead of double-destroying.
+ */
+async function stillHoldsTeardownLease(
+  runtimeId: string,
+  epoch: bigint,
+  run: Executor
+): Promise<boolean> {
+  const current = await repo
+    .readSandboxTeardownEpoch(runtimeId, run)
+    .catch(() => null)
+  return current === epoch
+}
+
 async function teardownStaleRuntimeDataFree(
   sessionId: string,
   runtimeId: string,
@@ -2350,10 +2368,10 @@ async function teardownStaleRuntimeDataFree(
 ): Promise<void> {
   const row = await repo.getSandboxById(runtimeId, run)
   if (!row || row.state === "closed" || row.state === "failed") return
-  const fenced = await repo
+  const { flipped, epoch } = await repo
     .casFlipSandboxClosing(runtimeId, run)
-    .catch(() => false)
-  if (!fenced) return
+    .catch(() => ({ flipped: false, epoch: null as bigint | null }))
+  if (!flipped || epoch === null) return
   markBareDataPlaneClosing(runtimeId)
   try {
     let adapter: SandboxAdapter | null = null
@@ -2361,6 +2379,16 @@ async function teardownStaleRuntimeDataFree(
       adapter = adapterForRow(row.adapter, row.mode)
     } catch {
       adapter = null
+    }
+    // (#6) Re-check the teardown lease RIGHT BEFORE the irreversible destroy: a
+    // concurrent teardown/reaper that re-flipped the row bumped the epoch past N, so
+    // we abort (leaving it 'closing' for that owner) rather than redundantly destroy.
+    if (!(await stillHoldsTeardownLease(runtimeId, epoch, run))) {
+      log.info(
+        { sessionId, runtimeId },
+        "data-free teardown: superseded (teardown_epoch advanced) — leaving to the current owner"
+      )
+      return
     }
     // Kill the stale runtime's OWN provider resource by its own resource_id — an
     // off-box VM via destroyResource; a host resource is left to the docker/reconcile
@@ -2392,8 +2420,8 @@ async function teardownStaleRuntimeDataFree(
       )
     }
     await repo
-      .updateSandboxRow(runtimeId, { state: "closed" }, run)
-      .catch(() => {})
+      .casCloseSandboxAtEpoch(runtimeId, epoch, { state: "closed" }, run)
+      .catch(() => false)
     await deleteRuntime(row.workspaceId, runtimeId, run).catch((err) =>
       log.error({ runtimeId, err }, "data-free teardown: soft-delete failed")
     )
@@ -2429,21 +2457,24 @@ export async function markSandboxResourceGone(
   runtimeId: string,
   run: Executor = repo.defaultDbh()
 ): Promise<void> {
-  const fenced = await repo
+  const { flipped } = await repo
     .casFlipSandboxClosing(runtimeId, run)
     .catch((err) => {
       log.warn(
         { runtimeId, err },
         "markSandboxResourceGone: CAS flip to 'closing' failed"
       )
-      return false
+      return { flipped: false, epoch: null as bigint | null }
     })
-  if (!fenced) {
+  if (!flipped) {
     log.info(
       { runtimeId },
       "markSandboxResourceGone: row already terminal / owned by a concurrent teardown — no-op"
     )
   }
+  // NOTE: this only arms the 'closing' convergence — it destroys nothing itself, so
+  // no teardown_epoch lease re-check is needed here (the subsequent teardown holds
+  // the lease and fences its own irreversible cluster).
 }
 
 /**
@@ -2523,8 +2554,8 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
   // is still non-terminal. A false means the row is already terminal or another
   // teardown owns the lifecycle → ABORT rather than kill+commit under an unset
   // fence (which would violate the R3.8 exactly-one-when-active invariant).
-  const fenced = await repo.casFlipSandboxClosing(runtimeId, run)
-  if (!fenced) {
+  const { flipped, epoch } = await repo.casFlipSandboxClosing(runtimeId, run)
+  if (!flipped || epoch === null) {
     log.warn(
       { sessionId, runtimeId },
       "off-box teardown: close-gate CAS lost (row terminal or a concurrent teardown owns it) — aborting"
@@ -2622,6 +2653,26 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
       return
     }
 
+    // (#6) Re-check the teardown lease RIGHT BEFORE the irreversible DELETE cluster.
+    // A concurrent teardown/reaper (another replica) that re-flipped this row bumped
+    // the epoch past N; we then ABORT (leaving state='closing' for that owner to
+    // converge) rather than redundantly DELETE the VM + soft-delete the runtime. The
+    // pull+commit above are non-destructive/idempotent, so running them twice is
+    // harmless; only the DELETE cluster must be single-owner. (Committing stale/empty
+    // bytes is separately prevented: a pull from an already-killed VM fails
+    // resource_gone → pullOk=false → no commit.)
+    if (
+      pullOk &&
+      commitOk &&
+      !(await stillHoldsTeardownLease(runtimeId, epoch, run))
+    ) {
+      log.info(
+        { sessionId, runtimeId },
+        "off-box teardown: superseded (teardown_epoch advanced) before DELETE — leaving to the current owner"
+      )
+      return
+    }
+
     // ⑦ GATE the DELETE on pull+commit success.
     if (pullOk && commitOk) {
       // Pull+commit durable → NOW DELETE the VM (best-effort; the row goes terminal
@@ -2657,9 +2708,12 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
           conversationId: ctx.conversationId,
           executor: run,
         }).catch((err) => log.error({ sessionId, err }, "revoke grants failed"))
+        // (#6) epoch-fenced terminal write — no-ops if a concurrent teardown took the
+        // lease in the window since the re-check (row then stays 'closing' for the
+        // reaper to converge; the VM is already gone, so kill is idempotent).
         await repo
-          .updateSandboxRow(runtimeId, { state: "closed" }, run)
-          .catch(() => {})
+          .casCloseSandboxAtEpoch(runtimeId, epoch, { state: "closed" }, run)
+          .catch(() => false)
         await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
           log.error({ sessionId, err }, "soft-delete runtime failed")
         )
@@ -2798,10 +2852,14 @@ export async function teardownSandbox(
   // transition does) — so BAIL rather than kill+commit under an unset fence. (A
   // 'closing'→'closing' self-flip returns true, so the closing-retry reaper still
   // re-drives an in-progress teardown.)
+  // (#6) The teardown LEASE captured at the close-gate flip. Non-null whenever
+  // runtimeId is truthy and we pass the gate below; re-checked before the
+  // irreversible tail so a concurrent teardown that took the lease aborts this one.
+  let teardownEpoch: bigint | null = null
   if (runtimeId) {
-    let fenced = false
+    let flip: { flipped: boolean; epoch: bigint | null }
     try {
-      fenced = await repo.casFlipSandboxClosing(runtimeId, run)
+      flip = await repo.casFlipSandboxClosing(runtimeId, run)
     } catch (err) {
       // A transient DB error leaves the fence state UNKNOWN — do NOT proceed to
       // kill+commit under an unset fence; bail so the closing reaper / reconcile
@@ -2812,13 +2870,14 @@ export async function teardownSandbox(
       )
       return
     }
-    if (!fenced) {
+    if (!flip.flipped || flip.epoch === null) {
       log.info(
         { sessionId, runtimeId },
         "teardown: close-gate CAS flipped 0 rows (already terminal / owned elsewhere) — bailing without kill/commit"
       )
       return
     }
+    teardownEpoch = flip.epoch
     markBareDataPlaneClosing(runtimeId)
   }
 
@@ -2903,20 +2962,7 @@ export async function teardownSandbox(
         log.error({ sessionId, err }, "teardown commit failed")
       }
 
-      if (commitOk) {
-        // delete the live dirs (CAS is the source of truth; dirs are scratch).
-        await rm(sandboxRootFor(sessionId), {
-          recursive: true,
-          force: true,
-        }).catch(() => {})
-        await cleanupDirs([sandboxRootFor(sessionId)]).catch(() => {})
-        for (const mount of mounts) {
-          await updateFileMount(run, mount.id, {
-            status: "closed",
-            closedAt: true,
-          }).catch(() => {})
-        }
-      } else {
+      if (!commitOk) {
         // Commit failed → PRESERVE the live dirs. Mark mounts 'failed' (keeping
         // materialized_dir) so the data can be recovered/retried later.
         const message =
@@ -2933,6 +2979,42 @@ export async function teardownSandbox(
           { sessionId, sandboxRoot: sandboxRootFor(sessionId) },
           "teardown commit failed — preserved live dirs for recovery"
         )
+      }
+    }
+
+    // (#6) Re-check the teardown lease RIGHT BEFORE the irreversible tail (rm the
+    // live dirs + close mounts + terminal state + soft-delete). commitSpaces above is
+    // non-destructive (re-scanning the same mirror is idempotent), so a superseded
+    // teardown having committed is harmless; but the rm + terminal writes must be
+    // single-owner. If a concurrent teardown/reaper took the lease (epoch != N) we
+    // ABORT here, leaving state='closing' + the live dirs for that owner — critically
+    // preventing a stale loser from rm'ing the dir out from under the winner's commit,
+    // then stamping 'failed' over the winner's 'closed'. (No fence was laid for a
+    // runtime-less orphan, so it keeps its unfenced tail.)
+    if (
+      runtimeId &&
+      teardownEpoch !== null &&
+      !(await stillHoldsTeardownLease(runtimeId, teardownEpoch, run))
+    ) {
+      log.info(
+        { sessionId, runtimeId },
+        "teardown: superseded (teardown_epoch advanced) before the destructive tail — leaving to the current owner"
+      )
+      return
+    }
+
+    if (mounts.length > 0 && commitOk) {
+      // delete the live dirs (CAS is the source of truth; dirs are scratch).
+      await rm(sandboxRootFor(sessionId), {
+        recursive: true,
+        force: true,
+      }).catch(() => {})
+      await cleanupDirs([sandboxRootFor(sessionId)]).catch(() => {})
+      for (const mount of mounts) {
+        await updateFileMount(run, mount.id, {
+          status: "closed",
+          closedAt: true,
+        }).catch(() => {})
       }
     }
 
@@ -2958,13 +3040,25 @@ export async function teardownSandbox(
         conversationId: ctx.conversationId,
         executor: run,
       }).catch((err) => log.error({ sessionId, err }, "revoke grants failed"))
-      await repo
-        .updateSandboxRow(
-          runtimeId,
-          { state: commitOk ? "closed" : "failed" },
-          run
-        )
-        .catch(() => {})
+      // (#6) epoch-fenced terminal write when a lease was laid (runtimeId path always
+      // lays one). No-ops if a concurrent teardown took the lease in the window since
+      // the re-check above → the row stays 'closing' for that owner to converge,
+      // instead of this teardown stamping a stale terminal state.
+      const terminalState = commitOk ? "closed" : "failed"
+      if (teardownEpoch !== null) {
+        await repo
+          .casCloseSandboxAtEpoch(
+            runtimeId,
+            teardownEpoch,
+            { state: terminalState },
+            run
+          )
+          .catch(() => false)
+      } else {
+        await repo
+          .updateSandboxRow(runtimeId, { state: terminalState }, run)
+          .catch(() => {})
+      }
       await deleteRuntime(ctx.workspaceId, runtimeId, run).catch((err) =>
         log.error({ sessionId, err }, "soft-delete runtime failed")
       )

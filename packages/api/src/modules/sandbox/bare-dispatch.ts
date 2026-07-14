@@ -45,6 +45,14 @@ import type { SandboxCapabilityDescriptor } from "./model.js"
 // rebuild-on-restart runs — never a registry-first gate (preservation #2).
 const liveBarePlanes = new Map<string, SandboxDataPlane>()
 
+// (#5-B) Which live planes front an OFF-BOX runtime (a shared remote VM). The HIT
+// re-check fails CLOSED for these on a DB read error: a slipped-through write to a
+// VM another replica is tearing down would be discarded when that replica DELETEs
+// it (a lost write, unrecoverable), and a denied turn is retryable. A HOST bare
+// plane (local/docker) stays fail-open — its VM is on THIS host, no other replica
+// can tear it down, and a transient DB blip must not kill an active local dispatch.
+const offBoxBarePlanes = new Set<string>()
+
 // P1.3(b): singleflight the lazy rebuild-on-miss. Two concurrent misses for the
 // same runtime must NOT each build a plane — the second liveBarePlanes.set would
 // overwrite the first, orphaning the first plane's child process past teardown
@@ -100,9 +108,14 @@ function bareTargetIdentityOk(row: {
 
 export function registerBareDataPlane(
   runtimeId: string,
-  plane: SandboxDataPlane
+  plane: SandboxDataPlane,
+  // (#5-B) whether this runtime is off-box (a shared remote VM). Drives the HIT
+  // re-check's fail-closed-on-DB-error decision. Defaults false (host bare).
+  offBox = false
 ): void {
   liveBarePlanes.set(runtimeId, plane)
+  if (offBox) offBoxBarePlanes.add(runtimeId)
+  else offBoxBarePlanes.delete(runtimeId)
 }
 
 export function unregisterBareDataPlane(
@@ -110,6 +123,7 @@ export function unregisterBareDataPlane(
 ): SandboxDataPlane | undefined {
   const plane = liveBarePlanes.get(runtimeId)
   liveBarePlanes.delete(runtimeId)
+  offBoxBarePlanes.delete(runtimeId)
   // R3.3: invalidate any in-flight rebuild that started before this unregister.
   bareTeardownGen.set(runtimeId, (bareTeardownGen.get(runtimeId) ?? 0) + 1)
   return plane
@@ -176,7 +190,9 @@ async function hitStillDispatchable(
       st.runtimeDeletedAt === null &&
       (st.state === "active" || st.state === "provisioning")
   } catch {
-    live = true // fail-open (see doc)
+    // (#5-B) fail-CLOSED for an off-box runtime (deny — retryable), fail-OPEN for a
+    // host runtime (a transient DB blip must not kill an active local dispatch).
+    live = !offBoxBarePlanes.has(runtimeId)
   }
   hitLivenessCache.set(runtimeId, { live, expiresAt: now + HIT_RECHECK_TTL_MS })
   return live
@@ -463,6 +479,14 @@ export async function dispatchBareRuntimeTool(
           }
         }
         liveBarePlanes.set(input.runtimeId, built)
+        // (#5-B) track off-box provenance for a REBUILT plane too (create() sets it
+        // at register time; a cross-restart rebuild resolves it from the row's
+        // adapter tag) so the HIT re-check fails closed for it on a DB read error.
+        if (sandboxAdapterMetadata(row.adapter, "bare")?.meta.offBox) {
+          offBoxBarePlanes.add(input.runtimeId)
+        } else {
+          offBoxBarePlanes.delete(input.runtimeId)
+        }
         return { plane: built }
       })().finally(() => {
         inflightBareRebuilds.delete(input.runtimeId)

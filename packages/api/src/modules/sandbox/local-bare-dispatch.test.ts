@@ -26,6 +26,11 @@ import {
   __clearBareDataPlanes,
 } from "./bare-dispatch.js"
 import { markSandboxResourceGone, teardownSandbox } from "./service.js"
+import {
+  casFlipSandboxClosing,
+  readSandboxTeardownEpoch,
+  casCloseSandboxAtEpoch,
+} from "./repo.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
 
 function uniq(p: string): string {
@@ -591,5 +596,105 @@ test("#3 closing reaper with a runtimeId does DATA-FREE convergence of the STALE
       null,
       "the re-provisioned runtime is NOT soft-deleted by the stale reaper"
     )
+  })
+})
+
+// ── #6: durable teardown-epoch lease (multi-replica single-owner fencing) ──────
+
+test("#6: casFlipSandboxClosing bumps + returns the epoch; a re-flip supersedes the prior lease", async () => {
+  await withTestDb(async (db) => {
+    const { workspaceId, sessionId } = await seedSession(db)
+    const runtimeId = randomUUID()
+    await mintBareSandboxRuntimeTx({
+      runtimeId,
+      workspaceId,
+      sessionId,
+      serviceId: randomUUID(),
+      adapter: "local",
+      dataPlaneEndpoint: `inprocess:${runtimeId}`,
+      capabilityDescriptor: buildLocalBareDescriptor({
+        isolation: "bwrap",
+      }) as unknown as Record<string, unknown>,
+      exposures: [],
+      executor: db,
+    })
+
+    // First flip: epoch 0 → 1, returned as the caller's lease N.
+    const first = await casFlipSandboxClosing(runtimeId, db)
+    assert.equal(first.flipped, true)
+    assert.equal(first.epoch, 1n)
+    assert.equal(await readSandboxTeardownEpoch(runtimeId, db), 1n)
+
+    // A concurrent teardown/reaper re-flips (self-flip on 'closing') → epoch 2.
+    const second = await casFlipSandboxClosing(runtimeId, db)
+    assert.equal(second.flipped, true)
+    assert.equal(second.epoch, 2n)
+
+    // The FIRST teardown's terminal write (holding stale N=1) MUST no-op — it was
+    // superseded — so it can't stamp a terminal state over the current owner's row.
+    const staleClose = await casCloseSandboxAtEpoch(
+      runtimeId,
+      1n,
+      { state: "closed" },
+      db
+    )
+    assert.equal(staleClose, false, "stale-epoch terminal write no-ops")
+    const stillClosing = await db
+      .selectFrom("sandboxes")
+      .select("state")
+      .where("id", "=", runtimeId)
+      .executeTakeFirstOrThrow()
+    assert.equal(
+      stillClosing.state,
+      "closing",
+      "row stays 'closing' for the owner"
+    )
+
+    // The CURRENT owner (N=2) writes the terminal state successfully.
+    const ownerClose = await casCloseSandboxAtEpoch(
+      runtimeId,
+      2n,
+      { state: "closed" },
+      db
+    )
+    assert.equal(ownerClose, true, "current-lease terminal write lands")
+    const closed = await db
+      .selectFrom("sandboxes")
+      .select("state")
+      .where("id", "=", runtimeId)
+      .executeTakeFirstOrThrow()
+    assert.equal(closed.state, "closed")
+  })
+})
+
+test("#6: casFlipSandboxClosing on a terminal row does not flip and returns no epoch", async () => {
+  await withTestDb(async (db) => {
+    const { workspaceId, sessionId } = await seedSession(db)
+    const runtimeId = randomUUID()
+    await mintBareSandboxRuntimeTx({
+      runtimeId,
+      workspaceId,
+      sessionId,
+      serviceId: randomUUID(),
+      adapter: "local",
+      dataPlaneEndpoint: `inprocess:${runtimeId}`,
+      capabilityDescriptor: buildLocalBareDescriptor({
+        isolation: "bwrap",
+      }) as unknown as Record<string, unknown>,
+      exposures: [],
+      executor: db,
+    })
+    // Drive it terminal.
+    const flip = await casFlipSandboxClosing(runtimeId, db)
+    await casCloseSandboxAtEpoch(
+      runtimeId,
+      flip.epoch!,
+      { state: "closed" },
+      db
+    )
+    // A later teardown finds a terminal row → no flip, no lease.
+    const late = await casFlipSandboxClosing(runtimeId, db)
+    assert.equal(late.flipped, false)
+    assert.equal(late.epoch, null)
   })
 })

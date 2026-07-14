@@ -753,12 +753,75 @@ export async function casFlipSandboxActive(
 export async function casFlipSandboxClosing(
   id: string,
   run: Executor = db
-): Promise<boolean> {
-  const res = await run
+): Promise<{ flipped: boolean; epoch: bigint | null }> {
+  // (#6) BUMP teardown_epoch on every flip — including the 'closing'→'closing'
+  // self-flip — and RETURN the new value N. N is the caller's teardown LEASE: a
+  // concurrent teardown (a second reaper, another replica) that later re-flips the
+  // same row bumps the epoch past N, so the first teardown's re-check before its
+  // irreversible cluster sees epoch != N and ABORTS — single-owner destruction for
+  // a multi-replica deployment where the state CAS alone (self-flip returns a win)
+  // let both teardowns through.
+  const row = await run
     .updateTable("sandboxes")
-    .set({ state: "closing", updatedAt: new Date() } as never)
+    .set({
+      state: "closing",
+      updatedAt: new Date(),
+      teardownEpoch: sql`teardown_epoch + 1`,
+    } as never)
     .where("id", "=", id)
     .where("state", "in", ["provisioning", "active", "closing"])
+    .returning(sql<string>`teardown_epoch`.as("teardownEpoch"))
+    .executeTakeFirst()
+  if (!row) return { flipped: false, epoch: null }
+  return {
+    flipped: true,
+    epoch: BigInt((row as { teardownEpoch: string }).teardownEpoch),
+  }
+}
+
+/**
+ * (#6) Read a sandbox row's current teardown_epoch (the lease value). Used by the
+ * teardown paths to re-check RIGHT BEFORE the irreversible cluster: if the epoch no
+ * longer equals the N captured at the close-gate flip, a concurrent teardown took
+ * the lease and this one must abort (leaving the row 'closing' for the winner /
+ * reaper) rather than double-destroy. Returns null if the row is gone.
+ */
+export async function readSandboxTeardownEpoch(
+  id: string,
+  run: Executor = db
+): Promise<bigint | null> {
+  const row = await run
+    .selectFrom("sandboxes")
+    .select(sql<string>`teardown_epoch`.as("teardownEpoch"))
+    .where("id", "=", id)
+    .executeTakeFirst()
+  return row ? BigInt((row as { teardownEpoch: string }).teardownEpoch) : null
+}
+
+/**
+ * (#6) Epoch-fenced TERMINAL state write. Writes the final state (closed/failed)
+ * ONLY while this teardown still holds the lease (teardown_epoch = N). If a
+ * concurrent teardown re-flipped the row (epoch != N) the write no-ops (0 rows) and
+ * the row stays 'closing' for the winner / reaper to converge — so a superseded
+ * teardown can never stamp a terminal state over a row someone else now owns.
+ * Returns true iff it wrote.
+ */
+export async function casCloseSandboxAtEpoch(
+  id: string,
+  epoch: bigint,
+  patch: { state: SandboxRow["state"]; errorMessage?: string | null },
+  run: Executor = db
+): Promise<boolean> {
+  const set: Record<string, unknown> = {
+    state: patch.state,
+    updatedAt: new Date(),
+  }
+  if (patch.errorMessage !== undefined) set.errorMessage = patch.errorMessage
+  const res = await run
+    .updateTable("sandboxes")
+    .set(set as never)
+    .where("id", "=", id)
+    .where(sql`teardown_epoch`, "=", epoch.toString())
     .executeTakeFirst()
   return Number(res.numUpdatedRows ?? 0n) === 1
 }
