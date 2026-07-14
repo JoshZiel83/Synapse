@@ -25,7 +25,7 @@ import {
   getLiveBareDataPlane,
   __clearBareDataPlanes,
 } from "./bare-dispatch.js"
-import { markSandboxResourceGone } from "./service.js"
+import { markSandboxResourceGone, teardownSandbox } from "./service.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
 
 function uniq(p: string): string {
@@ -519,6 +519,77 @@ test("resource_gone flips an active sandbox to 'closing' (NOT 'failed') so teard
       row2.state,
       "closed",
       "a terminal row is never resurrected to 'closing'"
+    )
+  })
+})
+
+test("#3 closing reaper with a runtimeId does DATA-FREE convergence of the STALE runtime, never the re-provisioned active one", async () => {
+  await withTestDb(async (db) => {
+    const { workspaceId, sessionId } = await seedSession(db)
+    const descriptor = buildLocalBareDescriptor({ isolation: "bwrap" })
+    const mint = async () => {
+      const runtimeId = randomUUID()
+      const serviceId = randomUUID()
+      await mintBareSandboxRuntimeTx({
+        runtimeId,
+        workspaceId,
+        sessionId,
+        serviceId,
+        adapter: "local",
+        dataPlaneEndpoint: `inprocess:${runtimeId}`,
+        capabilityDescriptor: descriptor as unknown as Record<string, unknown>,
+        exposures: buildBareCoreCatalog(descriptor),
+        executor: db,
+      })
+      return runtimeId
+    }
+    const setState = (id: string, state: string) =>
+      db
+        .updateTable("sandboxes")
+        .set({ state } as never)
+        .where("id", "=", id)
+        .execute()
+
+    // R_old goes 'closing' (a stuck straggler); then the session is re-provisioned
+    // → R_new 'active'. The partial-unique index permits this coexistence.
+    const rOld = await mint()
+    await setState(rOld, "closing")
+    const rNew = await mint()
+    await setState(rNew, "active")
+
+    // The closing reaper targets the SPECIFIC stale runtime.
+    await teardownSandbox(sessionId, { runtimeId: rOld, executor: db })
+
+    const oldRow = await db
+      .selectFrom("sandboxes")
+      .select("state")
+      .where("id", "=", rOld)
+      .executeTakeFirstOrThrow()
+    const newRow = await db
+      .selectFrom("sandboxes")
+      .select("state")
+      .where("id", "=", rNew)
+      .executeTakeFirstOrThrow()
+    const newRuntime = await db
+      .selectFrom("runtimes")
+      .select("deletedAt")
+      .where("id", "=", rNew)
+      .executeTakeFirstOrThrow()
+
+    assert.equal(
+      oldRow.state,
+      "closed",
+      "the stale runtime is converged terminal"
+    )
+    assert.equal(
+      newRow.state,
+      "active",
+      "the re-provisioned runtime is UNTOUCHED"
+    )
+    assert.equal(
+      newRuntime.deletedAt,
+      null,
+      "the re-provisioned runtime is NOT soft-deleted by the stale reaper"
     )
   })
 })

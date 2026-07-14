@@ -651,11 +651,16 @@ export async function retryStuckClosingSandboxes(
   let retried = 0
   for (const row of stuck) {
     try {
-      await teardownSandbox(row.sessionId, { executor: deps.executor })
+      // (R5 #3) Pin the SPECIFIC 'closing' runtime so teardown converges IT, never
+      // the newest (possibly re-provisioned) sandbox for the session.
+      await teardownSandbox(row.sessionId, {
+        executor: deps.executor,
+        runtimeId: row.runtimeId,
+      })
       retried += 1
     } catch (err) {
       log.error(
-        { sessionId: row.sessionId, err },
+        { sessionId: row.sessionId, runtimeId: row.runtimeId, err },
         "retryStuckClosingSandboxes teardown re-drive failed"
       )
     }
@@ -2268,6 +2273,86 @@ export interface TeardownSandboxOptions {
    * this seam teardown re-acquires the global db and the reaper test fake-greens.
    */
   executor?: Executor
+  /**
+   * (R5 #3) Converge THIS SPECIFIC runtime, not "the newest sandbox for the
+   * session." The closing reaper passes the exact 'closing' row's id so teardown
+   * never re-resolves (via mounts / createdAt-DESC) to a newer, re-provisioned
+   * sandbox and kills IT. When set AND a newer live sandbox already owns the
+   * session, teardown runs a DATA-FREE convergence of this stale runtime (kill its
+   * OWN provider resource + soft-delete it) — the session's mounts/mirror/CAS
+   * belong to the new owner and are never touched.
+   */
+  runtimeId?: string
+}
+
+/**
+ * (R5 #3) DATA-FREE convergence of a stale runtime whose session was already
+ * re-provisioned by a newer live sandbox. Kill ONLY this runtime's own provider
+ * resource + revoke ITS grants + soft-delete IT. NEVER load session mounts, commit
+ * the session mirror, or rm(sandboxRootFor(sessionId)) — those are the NEW owner's.
+ */
+async function teardownStaleRuntimeDataFree(
+  sessionId: string,
+  runtimeId: string,
+  run: Executor
+): Promise<void> {
+  const row = await repo.getSandboxById(runtimeId, run)
+  if (!row || row.state === "closed" || row.state === "failed") return
+  const fenced = await repo
+    .casFlipSandboxClosing(runtimeId, run)
+    .catch(() => false)
+  if (!fenced) return
+  markBareDataPlaneClosing(runtimeId)
+  try {
+    let adapter: SandboxAdapter | null = null
+    try {
+      adapter = adapterForRow(row.adapter, row.mode)
+    } catch {
+      adapter = null
+    }
+    // Kill the stale runtime's OWN provider resource by its own resource_id — an
+    // off-box VM via destroyResource; a host resource is left to the docker/reconcile
+    // orphan reaper (a stray host child/container is cheap + swept). NEVER the session
+    // mirror or the newer runtime's mounts.
+    if (adapter?.meta.offBox && adapter.destroyResource && row.resourceId) {
+      await adapter
+        .destroyResource(row.resourceId)
+        .catch((err) =>
+          log.error(
+            { runtimeId, resourceId: row.resourceId, err },
+            "data-free teardown: destroyResource failed (orphan sweep backstops)"
+          )
+        )
+    }
+    const ctx = await loadSessionContext(sessionId, run)
+    if (ctx) {
+      await revokeSandboxGrants({
+        workspaceId: ctx.workspaceId,
+        runtimeId,
+        actorId: ctx.actorId,
+        conversationId: ctx.conversationId,
+        executor: run,
+      }).catch((err) =>
+        log.error(
+          { runtimeId, err },
+          "data-free teardown: revoke grants failed"
+        )
+      )
+    }
+    await repo
+      .updateSandboxRow(runtimeId, { state: "closed" }, run)
+      .catch(() => {})
+    await deleteRuntime(row.workspaceId, runtimeId, run).catch((err) =>
+      log.error({ runtimeId, err }, "data-free teardown: soft-delete failed")
+    )
+    unregisterBareDataPlane(runtimeId)
+    log.info(
+      { sessionId, runtimeId },
+      "data-free teardown: converged a stale 'closing' runtime whose session was re-provisioned"
+    )
+  } finally {
+    clearBareDataPlaneClosing(runtimeId)
+  }
 }
 
 /**
@@ -2585,13 +2670,30 @@ export async function teardownSandbox(
   // a single rolled-back connection can only see its own uncommitted session +
   // mounts, and without it the grant/runtime terminal block below is skipped.
   const run = options.executor ?? repo.defaultDbh()
+
+  // (R5 #3) When the caller (the closing reaper) targets a SPECIFIC runtime, and a
+  // NEWER live sandbox already owns the session (re-provisioned while this 'closing'
+  // straggler lingered), converge the straggler DATA-FREE — never fall through to the
+  // session-scoped resolution below, which would grab the NEW runtime's mounts/handle/
+  // mirror and kill/wipe/commit IT (the design-review wrong-VM hazard).
+  if (options.runtimeId) {
+    if (
+      await repo.sessionHasNewerLiveSandbox(sessionId, options.runtimeId, run)
+    ) {
+      await teardownStaleRuntimeDataFree(sessionId, options.runtimeId, run)
+      return
+    }
+  }
+
   const ctx = await loadSessionContext(sessionId, run)
   const mounts = await getActiveMountsForSession(run, sessionId)
 
-  // Resolve the owning runtime id from mounts OR (R3.5(D) mount-less sandbox) from
-  // the by-session control resolver, so a mount-less non-terminal sandbox is still
-  // reapable. A session with NO mounts AND no owning row is a true no-op.
-  let runtimeId = runtimeIdFromMounts(mounts) || null
+  // Resolve the owning runtime id. When the caller pinned a runtimeId (#3), that is
+  // authoritative (bypasses the mounts / createdAt-DESC resolver — the wrong-VM
+  // source). Otherwise: from mounts OR (R3.5(D) mount-less sandbox) the by-session
+  // control resolver, so a mount-less non-terminal sandbox is still reapable. A
+  // session with NO mounts AND no owning row is a true no-op.
+  let runtimeId = options.runtimeId || runtimeIdFromMounts(mounts) || null
   if (!runtimeId) {
     runtimeId =
       (await repo.getSandboxBySessionForControl(sessionId, run))?.id ?? null

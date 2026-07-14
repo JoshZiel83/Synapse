@@ -818,9 +818,12 @@ export async function casFailStuckProvisioningSandbox(
 export async function listReapableClosingSandboxSessions(
   graceSeconds: number,
   run: Executor = db
-): Promise<Array<{ sessionId: string }>> {
-  const rows = await sql<{ sessionId: string }>`
-    SELECT sb.session_id AS "sessionId"
+): Promise<Array<{ sessionId: string; runtimeId: string }>> {
+  // (R5 #3) Return the SPECIFIC runtimeId of each 'closing' row, not just the
+  // session — teardown must converge THAT row, never re-resolve to the newest
+  // (possibly re-provisioned) sandbox and kill it.
+  const rows = await sql<{ sessionId: string; runtimeId: string }>`
+    SELECT sb.session_id AS "sessionId", sb.id AS "runtimeId"
       FROM sandboxes sb
       JOIN runtimes_live r ON r.id = sb.id
       WHERE sb.state = 'closing'
@@ -829,6 +832,30 @@ export async function listReapableClosingSandboxSessions(
     run
   )
   return rows.rows
+}
+
+/**
+ * (R5 #3) Is the session already owned by a DIFFERENT live sandbox? — i.e. was it
+ * re-provisioned while this (`excludeRuntimeId`) 'closing' straggler lingered. True
+ * when a provisioning/active sandbox exists for the session with a different id (the
+ * partial-unique index allows exactly one such live row + closing stragglers). When
+ * true, the straggler's teardown must be DATA-FREE (kill its own VM + soft-delete
+ * its runtime only) — the session's mirror/mounts/CAS belong to the new owner.
+ */
+export async function sessionHasNewerLiveSandbox(
+  sessionId: string,
+  excludeRuntimeId: string,
+  run: Executor = db
+): Promise<boolean> {
+  const row = await sql<{ ok: boolean }>`
+    SELECT EXISTS(
+      SELECT 1 FROM sandboxes sb
+        JOIN runtimes_live r ON r.id = sb.id
+        WHERE sb.session_id = ${sessionId}
+          AND sb.id <> ${excludeRuntimeId}
+          AND sb.state IN ('provisioning', 'active')
+    ) AS "ok"`.execute(run)
+  return Boolean(row.rows[0]?.ok)
 }
 
 /**
