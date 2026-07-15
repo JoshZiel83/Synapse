@@ -21,7 +21,7 @@ import {
 import { refreshSpaces, type RefreshDeps } from "./service.js"
 import {
   mergePendingRefreshConflicts,
-  normalizePendingRefresh,
+  decodePendingRefresh,
 } from "./pending-conflicts.js"
 
 let helperAvailable = true
@@ -122,7 +122,7 @@ test("mergePendingRefreshConflicts: same-original distinct sidecars both survive
   )
 })
 
-test("normalizePendingRefresh: coerces + defaults symlink/file kind", () => {
+test("decodePendingRefresh: a well-formed blob (file + symlink sidecars) passes through", () => {
   const raw = {
     deferredConflictsBySubpath: { conversation: ["/a"] },
     sidecarsBySubpath: {
@@ -130,26 +130,44 @@ test("normalizePendingRefresh: coerces + defaults symlink/file kind", () => {
         {
           original: "/conversation/a",
           sidecar: "/conversation/.synapse-conflicts/h",
-        }, // no kind → file
+          kind: "file",
+          contentSha: "a".repeat(64),
+        },
         {
           original: "/conversation/b",
           sidecar: "/conversation/.synapse-conflicts/h2",
           kind: "symlink",
+          target: "/etc/hosts",
         },
       ],
     },
   }
-  const out = normalizePendingRefresh(raw)
+  const out = decodePendingRefresh(raw)
   assert.equal(out.sidecarsBySubpath.conversation[0].kind, "file")
   assert.equal(out.sidecarsBySubpath.conversation[1].kind, "symlink")
 })
 
-test("normalizePendingRefresh: null/garbage → empty maps", () => {
-  assert.deepEqual(normalizePendingRefresh(undefined), {
+test("decodePendingRefresh: a sidecar missing the required `kind` fails SAFE to empty maps (strict, no kind→file default)", () => {
+  const out = decodePendingRefresh({
+    deferredConflictsBySubpath: {},
+    sidecarsBySubpath: {
+      conversation: [
+        { original: "/conversation/a", sidecar: "/conversation/x" }, // no kind
+      ],
+    },
+  })
+  assert.deepEqual(out, {
     deferredConflictsBySubpath: {},
     sidecarsBySubpath: {},
   })
-  assert.deepEqual(normalizePendingRefresh("nope"), {
+})
+
+test("decodePendingRefresh: null/garbage → empty maps", () => {
+  assert.deepEqual(decodePendingRefresh(undefined), {
+    deferredConflictsBySubpath: {},
+    sidecarsBySubpath: {},
+  })
+  assert.deepEqual(decodePendingRefresh("nope"), {
     deferredConflictsBySubpath: {},
     sidecarsBySubpath: {},
   })
@@ -311,7 +329,7 @@ test(
         "_sandboxPendingRefreshConflicts"
       ]
       assert.ok(pending, "refresh conflict persisted to collaboration_state")
-      const norm = normalizePendingRefresh(pending)
+      const norm = decodePendingRefresh(pending)
       assert.deepEqual(norm.deferredConflictsBySubpath.actor, ["/x.txt"])
       assert.equal(
         norm.sidecarsBySubpath.actor?.[0]?.original,

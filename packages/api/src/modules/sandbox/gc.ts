@@ -31,6 +31,11 @@ import {
 import { parseManifestShas } from "../files/manifest-parse.js"
 import { gcCas } from "./materialize.js"
 import {
+  decodePendingConflicts,
+  decodePendingRefresh,
+  type ConflictSidecarRef,
+} from "./pending-conflicts.js"
+import {
   defaultDbh,
   gcPartTables,
   listGcAssetContentShas,
@@ -225,7 +230,8 @@ const PENDING_REFRESH_KEY = "_sandboxPendingRefreshConflicts"
  * collaboration_state (both the commit and refresh pending stores). These blobs
  * preserve the agent's losing pre-conflict copy and are not referenced by any
  * snapshot/part/asset (round-11 follow-up), so GC must treat them as roots.
- * Tolerant of shape drift: only string contentSha on kind!="symlink" entries.
+ * Uses the SAME strict decode as the repo read path (no second tolerant walk): a
+ * corrupt blob decodes to empty, and only FILE-kind sidecars carry CAS bytes.
  */
 async function collectPendingSidecarShas(dbh: Executor): Promise<Set<string>> {
   const out = new Set<string>()
@@ -238,38 +244,19 @@ async function collectPendingSidecarShas(dbh: Executor): Promise<Set<string>> {
   })
   for (const rawState of states) {
     const state = (rawState ?? {}) as Record<string, unknown>
-    // Commit store: { subpath: { paths, sidecars: [{contentSha,kind}] } }
-    collectFromSidecarMap(
-      out,
-      (state[PENDING_COMMIT_KEY] as Record<string, unknown>) ?? {},
-      (v) => (v as { sidecars?: unknown })?.sidecars
-    )
-    // Refresh store: { sidecarsBySubpath: { subpath: [{contentSha,kind}] } }
-    const refresh = (state[PENDING_REFRESH_KEY] ?? {}) as {
-      sidecarsBySubpath?: unknown
-    }
-    collectFromSidecarMap(
-      out,
-      (refresh.sidecarsBySubpath as Record<string, unknown>) ?? {},
-      (v) => v
-    )
+    const commit = decodePendingConflicts(state[PENDING_COMMIT_KEY])
+    for (const entry of Object.values(commit)) addFileShas(out, entry.sidecars)
+    const refresh = decodePendingRefresh(state[PENDING_REFRESH_KEY])
+    for (const refs of Object.values(refresh.sidecarsBySubpath))
+      addFileShas(out, refs)
   }
   return out
 }
 
-/** Pull contentSha off every file-kind sidecar in a per-subpath map. */
-function collectFromSidecarMap(
-  out: Set<string>,
-  bySubpath: Record<string, unknown>,
-  pickSidecars: (entry: unknown) => unknown
-): void {
-  for (const entry of Object.values(bySubpath)) {
-    const sidecars = pickSidecars(entry)
-    if (!Array.isArray(sidecars)) continue
-    for (const s of sidecars) {
-      const ref = s as { kind?: unknown; contentSha?: unknown }
-      if (ref?.kind === "symlink") continue
-      if (typeof ref?.contentSha === "string") out.add(ref.contentSha)
-    }
+/** Add every FILE-kind sidecar's contentSha (its CAS bytes are a GC root). A symlink
+ *  sidecar carries a `target` string, not CAS bytes, so it contributes nothing. */
+function addFileShas(out: Set<string>, sidecars: ConflictSidecarRef[]): void {
+  for (const ref of sidecars) {
+    if (ref.kind === "file" && ref.contentSha) out.add(ref.contentSha)
   }
 }

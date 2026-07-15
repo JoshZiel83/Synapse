@@ -1,7 +1,12 @@
 /**
  * Durable pending-conflict state codec for sandbox session collaboration JSON.
- * Repo reads/writes this blob; service consumes the typed result.
+ * Repo reads/writes this blob; service consumes the typed result. The read path is
+ * a STRICT Zod decode (mirrors decodeSandboxCapabilityDescriptor): required fields are
+ * required, with NO per-field old-data coercion — a genuinely corrupt blob fails SAFE
+ * to empty at the top level so a turn never crashes.
  */
+
+import { z } from "zod"
 
 /** A conflicting file whose pre-conflict local copy was preserved at a sidecar. */
 export interface ConflictSidecarRef {
@@ -56,16 +61,6 @@ const CONFLICTS_DIRNAME = ".synapse-conflicts"
  * slashes and are not "." or "..".
  */
 export const SIDECAR_ROUTE_RE = /^\/([^/]+)\/\.synapse-conflicts\/([^/]+)$/
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : []
-}
 
 /** Whether a single path segment is safe (non-empty, not "." or ".."). */
 function isSafeSegment(seg: string): boolean {
@@ -125,37 +120,40 @@ export function mergePendingConflicts(
 }
 
 /**
- * Coerce the stored pending-conflicts blob into the current shape
- * (subpath -> { paths, sidecars }). A malformed/absent blob → {}.
+ * Strict sidecar-ref schema. original/sidecar/kind are REQUIRED (the writer always
+ * supplies them — a missing one is corruption, not old data). contentSha/target stay
+ * OPTIONAL: they are kind-discriminated RUNTIME states (a file with no contentSha, or a
+ * symlink with no target, is a genuinely irrecoverable sidecar — surfaced as PERMANENT
+ * by isSidecarPayloadIrrecoverable, NOT an old-data default). `kind` is a plain string
+ * (not an enum) so an unrecognized kind is decoded + handled as irrecoverable rather
+ * than nuking the whole blob. Default strip tolerates benign additive keys.
  */
-export function normalizePendingConflicts(
+const ConflictSidecarRefSchema: z.ZodType<ConflictSidecarRef> = z.object({
+  original: z.string(),
+  sidecar: z.string(),
+  kind: z.string(),
+  contentSha: z.string().optional(),
+  target: z.string().optional(),
+})
+
+const PendingCommitConflictSchema = z.record(
+  z.string(),
+  z.object({
+    paths: z.array(z.string()),
+    sidecars: z.array(ConflictSidecarRefSchema),
+  })
+)
+
+/**
+ * Strict decode of the stored pending-conflicts blob. A blob that does not match the
+ * current shape fails SAFE to {} (fail-closed, never a crash) — there is NO per-field
+ * coercion of old/partial data.
+ */
+export function decodePendingConflicts(
   raw: unknown
 ): Record<string, PendingCommitConflict> {
-  if (!isRecord(raw)) return {}
-  const out: Record<string, PendingCommitConflict> = {}
-  for (const [sub, val] of Object.entries(raw)) {
-    if (isRecord(val)) {
-      out[sub] = {
-        paths: stringArray(val.paths),
-        sidecars: Array.isArray(val.sidecars)
-          ? val.sidecars.map(normalizeSidecarRef)
-          : [],
-      }
-    }
-  }
-  return out
-}
-
-/** Coerce a stored sidecar ref, defaulting a missing `kind` to "file". */
-function normalizeSidecarRef(raw: unknown): ConflictSidecarRef {
-  const v = isRecord(raw) ? raw : {}
-  return {
-    original: typeof v.original === "string" ? v.original : "",
-    sidecar: typeof v.sidecar === "string" ? v.sidecar : "",
-    kind: typeof v.kind === "string" ? v.kind : "file",
-    ...(typeof v.contentSha === "string" ? { contentSha: v.contentSha } : {}),
-    ...(typeof v.target === "string" ? { target: v.target } : {}),
-  }
+  const parsed = PendingCommitConflictSchema.safeParse(raw)
+  return parsed.success ? parsed.data : {}
 }
 
 /**
@@ -198,27 +196,24 @@ export function mergePendingRefreshConflicts(
   return { deferredConflictsBySubpath, sidecarsBySubpath }
 }
 
-/** Coerce the stored pending-refresh blob into the current shape. */
-export function normalizePendingRefresh(
+const PendingRefreshPersistedSchema = z.object({
+  deferredConflictsBySubpath: z.record(z.string(), z.array(z.string())),
+  sidecarsBySubpath: z.record(z.string(), z.array(ConflictSidecarRefSchema)),
+})
+
+/**
+ * Strict decode of the stored pending-refresh blob (the persisted subset —
+ * deferredConflictsBySubpath + sidecarsBySubpath). A blob that does not match the
+ * current shape fails SAFE to empty maps, with no per-field coercion.
+ */
+export function decodePendingRefresh(
   raw: unknown
 ): Pick<
   PendingRefreshConflicts,
   "deferredConflictsBySubpath" | "sidecarsBySubpath"
 > {
-  const v = isRecord(raw) ? raw : {}
-  const deferredConflictsBySubpath: Record<string, string[]> = {}
-  if (isRecord(v.deferredConflictsBySubpath)) {
-    for (const [sub, paths] of Object.entries(v.deferredConflictsBySubpath)) {
-      deferredConflictsBySubpath[sub] = stringArray(paths)
-    }
-  }
-  const sidecarsBySubpath: Record<string, ConflictSidecarRef[]> = {}
-  if (isRecord(v.sidecarsBySubpath)) {
-    for (const [sub, refs] of Object.entries(v.sidecarsBySubpath)) {
-      if (Array.isArray(refs)) {
-        sidecarsBySubpath[sub] = refs.map(normalizeSidecarRef)
-      }
-    }
-  }
-  return { deferredConflictsBySubpath, sidecarsBySubpath }
+  const parsed = PendingRefreshPersistedSchema.safeParse(raw)
+  return parsed.success
+    ? parsed.data
+    : { deferredConflictsBySubpath: {}, sidecarsBySubpath: {} }
 }

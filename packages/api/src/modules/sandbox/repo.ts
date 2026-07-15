@@ -14,9 +14,9 @@ import type { Executor } from "../../infrastructure/database/kysely.js"
 import {
   type PendingCommitConflict,
   type PendingRefreshConflicts,
-  normalizePendingConflicts,
+  decodePendingConflicts,
   mergePendingConflicts,
-  normalizePendingRefresh,
+  decodePendingRefresh,
   mergePendingRefreshConflicts,
 } from "./pending-conflicts.js"
 import {
@@ -348,7 +348,7 @@ export async function recordPendingCommitConflictsOn(
     string,
     unknown
   >
-  const prev = normalizePendingConflicts(state[PENDING_CONFLICTS_KEY])
+  const prev = decodePendingConflicts(state[PENDING_CONFLICTS_KEY])
   const merged = mergePendingConflicts(prev, conflictsBySubpath)
   await sql`
       UPDATE sessions
@@ -388,7 +388,7 @@ export async function peekPendingCommitConflicts(
     .where("id", "=", sessionId)
     .executeTakeFirst()
   const state = (row?.collaborationState ?? {}) as Record<string, unknown>
-  const pending = normalizePendingConflicts(state[PENDING_CONFLICTS_KEY])
+  const pending = decodePendingConflicts(state[PENDING_CONFLICTS_KEY])
   return Object.keys(pending).length > 0 ? pending : {}
 }
 
@@ -427,7 +427,7 @@ export async function recordPendingRefreshConflictsOn(
     string,
     unknown
   >
-  const prev = normalizePendingRefresh(state[PENDING_REFRESH_KEY])
+  const prev = decodePendingRefresh(state[PENDING_REFRESH_KEY])
   const merged = mergePendingRefreshConflicts(prev, incoming)
   await sql`
     UPDATE sessions
@@ -474,7 +474,7 @@ export async function peekPendingRefreshConflicts(
     .where("id", "=", sessionId)
     .executeTakeFirst()
   const state = (row?.collaborationState ?? {}) as Record<string, unknown>
-  return normalizePendingRefresh(state[PENDING_REFRESH_KEY])
+  return decodePendingRefresh(state[PENDING_REFRESH_KEY])
 }
 
 /** Clear the stashed refresh conflicts (after the agent has consumed them). */

@@ -1,16 +1,17 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
-  normalizePendingConflicts,
+  decodePendingConflicts,
   mergePendingConflicts,
 } from "./pending-conflicts.js"
 
 /**
- * normalizePendingConflicts coerces the session's stashed pending-commit-conflict
- * blob into the current {paths, sidecars} shape (a malformed/absent blob → {}).
+ * decodePendingConflicts is a STRICT Zod decode of the stashed pending-commit-conflict
+ * blob (subpath -> {paths, sidecars}). There is NO per-field old-data coercion: a blob
+ * that does not match the current shape fails SAFE to {} at the top level.
  */
 
-test("normalizePendingConflicts: current shape passes through (kind defaulted)", () => {
+test("decodePendingConflicts: a well-formed blob (file + symlink sidecars) passes through", () => {
   const cur = {
     conversation: {
       paths: ["/a.txt", "/b.txt"],
@@ -19,56 +20,43 @@ test("normalizePendingConflicts: current shape passes through (kind defaulted)",
           original: "/conversation/a.txt",
           sidecar: "/conversation/.synapse-conflicts/a.txt",
           kind: "file",
+          contentSha: "a".repeat(64),
         },
-      ],
-    },
-  }
-  const out = normalizePendingConflicts(cur)
-  assert.deepEqual(out, cur)
-})
-
-test("normalizePendingConflicts: a bare-array (non-record) subpath value is dropped", () => {
-  // No back-compat with the pre-round-7 string[] shape (removed): a non-record
-  // value is not the current {paths, sidecars} shape, so it is skipped.
-  const out = normalizePendingConflicts({
-    conversation: ["/a.txt"],
-    actor: { paths: ["/c.txt"], sidecars: [] },
-  })
-  assert.deepEqual(out, { actor: { paths: ["/c.txt"], sidecars: [] } })
-})
-
-test("normalizePendingConflicts: null/garbage → empty object", () => {
-  assert.deepEqual(normalizePendingConflicts(undefined), {})
-  assert.deepEqual(normalizePendingConflicts(null), {})
-  assert.deepEqual(normalizePendingConflicts("nope"), {})
-  assert.deepEqual(normalizePendingConflicts(42), {})
-})
-
-test("normalizePendingConflicts: partial/malformed entries are defaulted", () => {
-  const mixed = {
-    a: { paths: ["/x"] }, // missing sidecars
-    b: { sidecars: [{ original: "/b/y", sidecar: "/b/.synapse-conflicts/y" }] }, // missing paths + sidecar kind
-    c: {}, // both missing
-    d: { paths: "not-an-array", sidecars: "nope" }, // wrong types
-  }
-  const out = normalizePendingConflicts(mixed)
-  assert.deepEqual(out, {
-    a: { paths: ["/x"], sidecars: [] },
-    b: {
-      paths: [],
-      // a pre-round-10 sidecar (no kind) defaults to "file" (it was always
-      // a readable file before symlink sidecars existed).
-      sidecars: [
         {
-          original: "/b/y",
-          sidecar: "/b/.synapse-conflicts/y",
-          kind: "file",
+          original: "/conversation/link",
+          sidecar: "/conversation/.synapse-conflicts/link",
+          kind: "symlink",
+          target: "/etc/hosts",
         },
       ],
     },
-    c: { paths: [], sidecars: [] },
-    d: { paths: [], sidecars: [] },
-  })
+  }
+  assert.deepEqual(decodePendingConflicts(cur), cur)
+})
+
+test("decodePendingConflicts: null/garbage → empty object", () => {
+  assert.deepEqual(decodePendingConflicts(undefined), {})
+  assert.deepEqual(decodePendingConflicts(null), {})
+  assert.deepEqual(decodePendingConflicts("nope"), {})
+  assert.deepEqual(decodePendingConflicts(42), {})
+})
+
+test("decodePendingConflicts: a malformed blob fails SAFE to {} — no per-field coercion (strict, no old-data defaults)", () => {
+  // A required field missing (kind), a wrong-typed field, and a non-record subpath value
+  // each make the WHOLE blob fail the strict decode → {} (never a silently-defaulted
+  // partial). This is the intended fail-closed: we own the write shape, so a
+  // non-conforming blob is corruption, not old data to be patched up.
+  assert.deepEqual(
+    decodePendingConflicts({
+      b: { paths: [], sidecars: [{ original: "/b/y", sidecar: "/b/z" }] }, // sidecar missing required kind
+    }),
+    {}
+  )
+  assert.deepEqual(
+    decodePendingConflicts({ a: { paths: "not-an-array", sidecars: [] } }),
+    {}
+  )
+  assert.deepEqual(decodePendingConflicts({ conversation: ["/a.txt"] }), {})
 })
 
 /**
