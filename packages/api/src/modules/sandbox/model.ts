@@ -83,11 +83,6 @@ export interface SandboxCapabilityDescriptor {
   egress?: "none" | "named"
   /** Whether the adapter supports connect()/reconnect after an API restart. */
   reconnectable: boolean
-  /** Lifecycle knobs. setTimeout: the off-box cubesandbox adapter exposes an idle-TTL
-   *  knob (true); pause/portIngress are not yet used by any adapter. */
-  setTimeout?: boolean
-  pause?: boolean
-  portIngress?: boolean
 }
 
 /**
@@ -124,9 +119,6 @@ export const SandboxCapabilityDescriptorSchema = z.strictObject({
   isolation: z.enum(["bwrap", "container", "provider"]).nullable(),
   egress: z.enum(["none", "named"]).optional(),
   reconnectable: z.boolean(),
-  setTimeout: z.boolean().optional(),
-  pause: z.boolean().optional(),
-  portIngress: z.boolean().optional(),
 }) satisfies z.ZodType<SandboxCapabilityDescriptor>
 
 /**
@@ -169,7 +161,6 @@ const CUBESANDBOX_BARE_CAPS = {
  *   - search:false — no in-VM ripgrep bridge in the MVP → fs_search omitted at the
  *     catalog (bareFilesystemTools) and fail-closed in the plane.
  *   - rangeRead:true — envd GET /files honors HTTP Range.
- *   - setTimeout:true — the control plane exposes an idle-TTL knob.
  * Every value is within the persisted-descriptor Zod schema (isolation 'provider',
  * confinedFs 'unsupported', staleWriteGuard 'advisory' are all permitted) — no DDL.
  */
@@ -194,7 +185,6 @@ export function buildCubesandboxBareDescriptor(): SandboxCapabilityDescriptor {
     isolation: "provider",
     egress: "named",
     reconnectable: true,
-    setTimeout: true,
   }
 }
 

@@ -127,9 +127,11 @@ export async function isFilesystemExposureHealthy(
 }
 
 /**
- * Session ids that have at least one mount in a non-terminal lifecycle state
- * (provisioning/active) — the reconcile sweep's candidate set. The status
- * `in [...]` predicate is load-bearing (excludes closed/failed/recovering).
+ * The reconcile sweep's candidate session ids — the UNION of two arms (see the
+ * inline query comment): a live-mount arm (a mount in a non-terminal state,
+ * status IN provisioning/active — excludes closed/failed/recovering) ∪ a
+ * live-sandbox arm (a sandbox whose state is NOT IN closed/failed). The union can
+ * only GROW the set, so a live container is never dropped from the reaper shield.
  */
 export async function listReconcileCandidateSessionIds(
   run: Executor = db
@@ -406,9 +408,10 @@ export async function clearPendingCommitConflicts(
 }
 
 /**
- * Executor-bound core of recordPendingRefreshConflicts: read (FOR UPDATE) →
- * merge → write the pending refresh blob on the given (already-open) tx. Used by
- * refreshSpaces to couple the persist with the per-mount base advance in ONE
+ * Persist refresh conflicts (deferred paths + sidecars) for at-least-once delivery
+ * (round-10 #1) on the given ALREADY-OPEN tx: read (FOR UPDATE) → merge with any
+ * still-undelivered ones → write the pending refresh blob. Executor-bound so
+ * refreshSpaces couples the persist with the per-mount base advance in ONE
  * transaction (round-11 #2).
  */
 export async function recordPendingRefreshConflictsOn(
@@ -435,24 +438,6 @@ export async function recordPendingRefreshConflictsOn(
          COALESCE(collaboration_state, '{}'::jsonb)
          || jsonb_build_object(${PENDING_REFRESH_KEY}::text, ${JSON.stringify(merged)}::jsonb)
        WHERE id = ${sessionId}`.execute(txq)
-}
-
-/**
- * Persist refresh conflicts (deferred paths + sidecars) for at-least-once
- * delivery (round-10 #1), MERGING with any still-undelivered ones. Opens its own
- * transaction via the injected runInTx (default: withDbTransaction).
- */
-export async function recordPendingRefreshConflicts(
-  sessionId: string,
-  incoming: Pick<
-    PendingRefreshConflicts,
-    "deferredConflictsBySubpath" | "sidecarsBySubpath"
-  >,
-  runInTxArg: <T>(fn: (tx: Executor) => Promise<T>) => Promise<T> = runInTx
-): Promise<void> {
-  await runInTxArg((txq) =>
-    recordPendingRefreshConflictsOn(txq, sessionId, incoming)
-  )
 }
 
 /**

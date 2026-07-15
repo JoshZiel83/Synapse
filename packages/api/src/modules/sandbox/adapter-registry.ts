@@ -305,11 +305,10 @@ export function bareMetaFor(provider: string): {
   return { meta: entry.meta, endpoint: entry.endpoint }
 }
 
-/** Build the docker backend options from the validated config.sandbox namespace.
- *  (Relocated from service.ts so the registry can build the LAZY provision backend
- *  without a value cycle. Consumed HERE only — the docker:resident factory below;
- *  service.ts no longer imports it.) */
-export function dockerSandboxOptionsFromEnv(): DockerSandboxOptions {
+/** Build the docker sandbox options from the validated config.sandbox namespace.
+ *  (Relocated from service.ts so the registry can build the LAZY provision path without
+ *  a value cycle. Consumed HERE only — the docker:resident factory below.) */
+function dockerSandboxOptionsFromEnv(): DockerSandboxOptions {
   const dk = config.sandbox.docker
   const tunnel: "frp" = "frp"
   return {

@@ -1,7 +1,9 @@
 // Mode-B (bare sandbox) DATA PLANE (§4.7.1) — the confined tool surface a bare
-// adapter exposes IN-PROCESS (local:bare) or over a remote bridge (docker:bare,
-// S10 deferred). It is the terminus dispatchBareRuntimeTool routes to, in place
-// of the resident device-runtime's MCP HTTP endpoint.
+// adapter exposes. Host-side and IN-PROCESS for BOTH local:bare and docker:bare
+// (the fs is the host's <sandboxRoot> in both; only exec differs — local runs a
+// child, docker execs into the container). It is the terminus
+// dispatchBareRuntimeTool routes to, in place of the resident device-runtime's
+// MCP HTTP endpoint. (The detached off-box variant is the cubesandbox plane.)
 //
 // Two hard invariants live here, at the TYPE level so they cannot be bypassed:
 //   1. Every plane call carries a ConfinementCtx whose `scope` is the union

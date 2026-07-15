@@ -214,8 +214,9 @@ function tokensDiffer(
 /**
  * (§1.6/2e) Obtain the OFF-BOX VM's platform/arch via a one-shot envd exec — the
  * cube control plane carries no arch, and the API host's process.* would misgrant
- * bundles (arm64 API standing up an x86_64 VM). Best-effort: any failure returns
- * null and the mint falls back to sandboxHostPlatformArch (no worse than pre-R4).
+ * bundles (arm64 API standing up an x86_64 VM). Returns null on any probe failure;
+ * there is NO host fallback — the mint (#11) FAILS CLOSED on a null (aborts create()
+ * and tears the VM down) rather than persisting a guessed architecture.
  */
 export async function detectCubePlatformArch(
   envd: RemoteEnvdTransport,

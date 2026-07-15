@@ -91,27 +91,43 @@ export interface SandboxAdapterMeta<K extends string = string> {
   readonly config: AdapterConfigContract
 }
 
+/** The endpoint a key's MODE requires: resident ⇒ `null` (no bare data plane); bare ⇒ a
+ *  NON-NULL contract. So a bare leaf that forgets its endpoint — or a resident leaf with a
+ *  stray one — is a COMPILE error, not a runtime bareMetaFor throw. The generic-entry case
+ *  (K=string ⇒ mode is the wide union) stays nullable, since a resident leaf is null. */
+export type EndpointForMode<K extends string> = [KeyMode<K>] extends [
+  "resident",
+]
+  ? null
+  : [KeyMode<K>] extends ["bare"]
+    ? AdapterEndpointContract
+    : AdapterEndpointContract | null
+
 /** One registered adapter's metadata leaf, keyed `${provider}:${mode}`. Parameterized by
- *  its OWN key K so provider / mode / meta.tag are FORCED to decode from K (they cannot
- *  contradict the key). SANDBOX_ADAPTER_METADATA is the SINGLE source of truth for the
- *  discriminant `kind`; the ADAPTER_FACTORIES mapped type pins each factory's kind + key
+ *  its OWN key K so provider / mode / meta.tag / endpoint are FORCED to decode from K (they
+ *  cannot contradict the key). SANDBOX_ADAPTER_METADATA is the SINGLE source of truth for
+ *  the discriminant `kind`; the ADAPTER_FACTORIES mapped type pins each factory's kind + key
  *  + provider to its leaf AT COMPILE TIME (AdapterForKey<K>). */
 export interface SandboxAdapterMetadataEntry<K extends string = string> {
   readonly provider: KeyProvider<K>
   readonly mode: KeyMode<K>
   readonly kind: SandboxAdapterKind
   readonly meta: SandboxAdapterMeta<K>
-  /** endpoint scheme + R3.2 identity predicate; null for resident. */
-  readonly endpoint: AdapterEndpointContract | null
+  /** endpoint scheme + R3.2 identity predicate; null for resident, non-null for bare. */
+  readonly endpoint: EndpointForMode<K>
 }
 
 /** Assemble the metadata table as a Record keyed by `${provider}:${mode}`. The generic
- *  binds each value to SandboxAdapterMetadataEntry<ITS OWN KEY>, so a value whose
- *  provider / mode / meta.tag disagrees with its key is a COMPILE error, and a duplicate
- *  key is a duplicate object-literal property (TS1117) — key uniqueness is structural. */
+ *  binds each value to SandboxAdapterMetadataEntry<ITS OWN KEY>, so: a value whose
+ *  provider / mode / meta.tag / endpoint disagrees with its key is a COMPILE error; a key
+ *  that is NOT a well-formed `${string}:${AdapterMode}` (colonless, or a mode segment that
+ *  isn't resident|bare) maps to `never` and REJECTS its value; and a duplicate key is a
+ *  duplicate object-literal property (TS1117) — key uniqueness is structural. */
 function defineAdapterTable<
   T extends {
-    readonly [K in keyof T]: SandboxAdapterMetadataEntry<K & string>
+    readonly [K in keyof T]: K extends `${string}:${AdapterMode}`
+      ? SandboxAdapterMetadataEntry<K & string>
+      : never
   },
 >(table: T): T {
   return table
