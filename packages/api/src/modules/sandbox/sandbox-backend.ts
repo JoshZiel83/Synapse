@@ -193,6 +193,20 @@ export interface SandboxDataPlaneCredentials {
   extra?: Record<string, string>
 }
 
+/**
+ * (R4 §1.4c) The NARROW input an `adapter.workingSet(...)` reads — the provider
+ * resource id + the token-bearing data-plane credentials. This is the COMPLETE set
+ * both impls consume (host adapters read nothing; the off-box adapter reads exactly
+ * resourceId + credentials). A full {@link SandboxHandle} is structurally assignable,
+ * so the provision path passes its live handle directly; the teardown/recovery path
+ * passes `{ resourceId, credentials }` from the SandboxRef + reconnect — no fabricated
+ * handle with dead lifecycle stubs.
+ */
+export interface WorkingSetHandle {
+  readonly resourceId: string
+  readonly credentials?: SandboxDataPlaneCredentials | null
+}
+
 /** A live sandbox handle — mirrors the e2b Sandbox INSTANCE methods we use. */
 export interface SandboxHandle {
   readonly adapter: string

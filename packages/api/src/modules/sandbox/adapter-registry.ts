@@ -37,6 +37,7 @@ import {
   type SandboxBackend,
   type SandboxDataPlaneCredentials,
   type SandboxHandle,
+  type WorkingSetHandle,
   type SandboxInfo,
   type SandboxLiveness,
   type SandboxRef,
@@ -187,11 +188,12 @@ export interface SandboxAdapter {
 
   /**
    * (2c) working-set contract: the adapter supplies the bridge the spine drives
-   * on provision (push) and teardown (pull-before-kill). R4 Phase 1c: ALL
-   * adapters return the pass-through product bridge for now; the off-box detached
-   * envd bridge lands in a later sub-phase.
+   * on provision (push) and teardown (pull-before-kill). Host adapters return the
+   * pass-through product bridge; the off-box adapter builds the detached envd bridge.
+   * Takes only {@link WorkingSetHandle} (resourceId + credentials) — the complete set
+   * any impl reads — so the teardown/recovery path never fabricates a full handle.
    */
-  workingSet(handle: SandboxHandle): WorkingSetBridge
+  workingSet(handle: WorkingSetHandle): WorkingSetBridge
 
   /**
    * (2a/§1.8) Reconstruct the data plane from a PERSISTED row on a bare-dispatch
@@ -256,7 +258,7 @@ export interface OffBoxSandboxAdapter extends SandboxAdapter {
   readonly kind: "offBoxBare"
   // (R6 #6) narrow the working-set bridge to the off-box shape where `pull` is REQUIRED
   // — teardown/recovery call it unconditionally + branch on the PullOutcome.
-  workingSet(handle: SandboxHandle): OffBoxWorkingSetBridge
+  workingSet(handle: WorkingSetHandle): OffBoxWorkingSetBridge
   rebuildDataPlane(row: BareDataPlaneRebuildRow): Promise<SandboxDataPlane>
   reconnectDataPlane(
     ref: SandboxRef,

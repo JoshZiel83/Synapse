@@ -55,7 +55,6 @@ import type { HostProvider } from "./host-provider.js"
 import {
   readHostPidIdentity,
   verifyPidIdentity,
-  type SandboxDataPlaneCredentials,
   type SandboxHandle,
   type SandboxLiveness,
   type SandboxRef,
@@ -102,8 +101,8 @@ export {
   isSidecarPayloadIrrecoverable,
   mergePendingConflicts,
   mergePendingRefreshConflicts,
-  normalizePendingConflicts,
-  normalizePendingRefresh,
+  decodePendingConflicts,
+  decodePendingRefresh,
   parseSidecarRoute,
   SIDECAR_ROUTE_RE,
 } from "./pending-conflicts.js"
@@ -2592,49 +2591,6 @@ export async function markSandboxResourceGone(
   // the lease and fences its own irreversible cluster).
 }
 
-/**
- * (R4 §1.4c / §6.3) A minimal SandboxHandle carrying ONLY what an off-box
- * `adapter.workingSet(handle)` reads — the TOKEN-BEARING credentials (from
- * reconnect) + the resource id — so the teardown/recovery pull runs on a
- * token-bearing transport, never a token-less connect. The lifecycle methods are
- * never invoked by workingSet(); they fail loud if a future caller misuses this.
- */
-function workingSetHandleFromRef(
-  ref: SandboxRef,
-  credentials: SandboxDataPlaneCredentials | null
-): SandboxHandle {
-  const unsupported = (): never => {
-    throw new SandboxServiceError(
-      "working-set handle: lifecycle methods are not supported",
-      500
-    )
-  }
-  return {
-    adapter: ref.adapter,
-    mode: ref.mode,
-    credentials,
-    sandboxId: ref.sandboxId,
-    resourceId: ref.resourceId,
-    runtimeLink: {
-      mode: "bare",
-      runtimeId: ref.runtimeId,
-      runtimeServiceId: ref.runtimeServiceId ?? "",
-      dataPlaneEndpoint: `envd:${ref.resourceId}`,
-    },
-    getHost: unsupported,
-    setTimeout: async () => {},
-    isRunning: async () => false,
-    probeLiveness: async () => "unknown",
-    getInfo: () => ({
-      adapter: ref.adapter,
-      sandboxId: ref.sandboxId,
-      runtimeId: ref.runtimeId,
-      runtimeServiceId: ref.runtimeServiceId ?? "",
-    }),
-    kill: async () => {},
-  }
-}
-
 interface TeardownOffBoxArgs {
   sessionId: string
   run: Executor
@@ -2712,9 +2668,10 @@ async function teardownOffBoxSandbox(args: TeardownOffBoxArgs): Promise<void> {
         // The reconnect's confined plane is unused here — we drive the raw
         // working-set transport (built from the same token-bearing creds).
         await rc.plane.dispose().catch(() => {})
-        wsBridge = adapter.workingSet(
-          workingSetHandleFromRef(ref, rc.credentials)
-        )
+        wsBridge = adapter.workingSet({
+          resourceId: ref.resourceId,
+          credentials: rc.credentials,
+        })
         // ⑤ PULL each mount VM→mirror(materializedDir) with delete-prune (F1). The
         // off-box bridge's `pull` is type-REQUIRED (#6) — no optional guard.
         for (const mount of mounts) {
@@ -3476,7 +3433,10 @@ async function recoverOffBoxSession(
       workspaceId: sessionMounts[0]?.workspaceId,
     })
     await rc.plane.dispose().catch(() => {})
-    wsBridge = adapter.workingSet(workingSetHandleFromRef(ref, rc.credentials))
+    wsBridge = adapter.workingSet({
+      resourceId: ref.resourceId,
+      credentials: rc.credentials,
+    })
     for (const mount of sessionMounts) {
       // (#6) off-box `pull` is type-REQUIRED — no optional guard.
       if (mount.materializedDir) {
