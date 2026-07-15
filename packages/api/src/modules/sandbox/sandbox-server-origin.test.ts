@@ -1,7 +1,7 @@
 // Unit tests for the two pure spec-building helpers extracted from
 // provisionSandbox: sandboxLocalServerOrigin (which origin the LOCAL device
 // dials back to) and sandboxSpecVolumeSubpath (the docker-ONLY volume subpath).
-// Both are pure env/arg logic (no DB), mirroring docker-backend-options.test.ts.
+// Both are pure env/arg logic (no DB), mirroring sandbox-config.test.ts.
 
 import test from "node:test"
 import assert from "node:assert/strict"

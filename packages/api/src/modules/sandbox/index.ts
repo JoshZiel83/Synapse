@@ -30,7 +30,7 @@ export {
   type RecoverFailedMountsResult,
 } from "./service.js"
 export {
-  isSidecarPayloadIrrecoverable,
+  isSidecarPathUnroutable,
   mergePendingRefreshConflicts,
   type PendingCommitConflict,
   type PendingRefreshConflicts,

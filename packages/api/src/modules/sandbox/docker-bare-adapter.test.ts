@@ -1,5 +1,5 @@
 // Mode-B (docker:bare) acceptance — DB-FREE, spawn-stubbed (aligned with
-// docker-sandbox-backend.test.ts's fake docker CLI + the mint seam). Covers the
+// docker-sandbox.test.ts's fake docker CLI + the mint seam). Covers the
 // SECURITY-CRITICAL gates: hardened run argv + ABSENCE assertions (B6), the
 // literal-path subpath mounts / HOST-RCE trap, uid-parity (B7), runDockerCapture
 // returns-not-rejects + backstop kill + resource_gone (B13), the docker exec

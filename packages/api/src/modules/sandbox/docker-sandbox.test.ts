@@ -8,30 +8,13 @@ import {
   reapDockerSandboxOrphans,
   probeDockerContainerLiveness,
   type DockerSandboxOptions,
-  type SpawnImpl,
 } from "./docker-sandbox.js"
 import {
   SandboxAdapterError,
   type SandboxSpec,
-  type SandboxRef,
   type SandboxHostSpec,
 } from "./sandbox-lifecycle.js"
 import { toSandboxVolumeSubpath } from "./service.js"
-
-/** The docker adapter's provision lifecycle as the {create, connect} pair, so each test
- *  reads naturally against the free provision/connect functions. */
-function dockerBackend(opts: DockerSandboxOptions) {
-  return {
-    create: (spec: SandboxSpec) => provisionDockerSandbox(spec, opts),
-    connect: (ref: SandboxRef) =>
-      connectDockerSandbox(ref, { spawnImpl: opts.spawnImpl }),
-  }
-}
-
-/** The ENV-FREE reconnect lifecycle (connect only — provision needs no such object). */
-function dockerReconnect(opts: { spawnImpl?: SpawnImpl } = {}) {
-  return { connect: (ref: SandboxRef) => connectDockerSandbox(ref, opts) }
-}
 
 // A fake `docker` CLI: records argv, returns scripted stdout/exit per subcommand.
 function fakeDocker(
@@ -109,7 +92,7 @@ test("docker create(): builds a correct `docker run` argv + completes the staged
     return { stdout: "" }
   })
   const staged: string[] = []
-  const backend = dockerBackend({
+  const opts: DockerSandboxOptions = {
     ...baseOpts,
     spawnImpl,
     createPairing: fakePairing(),
@@ -118,13 +101,14 @@ test("docker create(): builds a correct `docker run` argv + completes the staged
       runtimeId: "dev-1",
       runtimeServiceId: "svc-1",
     }),
-  })
-  const handle = await backend.create(
+  }
+  const handle = await provisionDockerSandbox(
     baseSpec({
       onRuntimeReady: async (id) => {
         staged.push(`device:${id}`)
       },
-    })
+    }),
+    opts
   )
 
   const runArgs = calls.find((c) => c[0] === "run")!
@@ -173,7 +157,7 @@ test("docker create(): tunnel=frp injects SYNAPSE_TUNNEL_* env", async () => {
     if (args[0] === "run") return { stdout: "cid\n" }
     return { stdout: "" }
   })
-  const backend = dockerBackend({
+  const opts: DockerSandboxOptions = {
     ...baseOpts,
     tunnel: "frp",
     tunnelAuthToken: "tok-123",
@@ -184,8 +168,8 @@ test("docker create(): tunnel=frp injects SYNAPSE_TUNNEL_* env", async () => {
       runtimeId: "d",
       runtimeServiceId: "s",
     }),
-  })
-  await backend.create(baseSpec())
+  }
+  await provisionDockerSandbox(baseSpec(), opts)
   const runArgs = calls.find((c) => c[0] === "run")!
   assert.ok(
     runArgs.some((a) => a === "SYNAPSE_TUNNEL_SERVER_ADDR=tunnel-edge"),
@@ -214,7 +198,7 @@ test("docker create(): omits SYNAPSE_TUNNEL_INTERNAL_BASE_URL when not configure
     if (args[0] === "run") return { stdout: "cid\n" }
     return { stdout: "" }
   })
-  const backend = dockerBackend({
+  const opts: DockerSandboxOptions = {
     ...baseOpts,
     tunnel: "frp",
     tunnelAuthToken: "tok-123",
@@ -224,8 +208,8 @@ test("docker create(): omits SYNAPSE_TUNNEL_INTERNAL_BASE_URL when not configure
       runtimeId: "d",
       runtimeServiceId: "s",
     }),
-  })
-  await backend.create(baseSpec())
+  }
+  await provisionDockerSandbox(baseSpec(), opts)
   const runArgs = calls.find((c) => c[0] === "run")!
   assert.ok(
     !runArgs.some((a) => a.startsWith("SYNAPSE_TUNNEL_INTERNAL_BASE_URL=")),
@@ -243,14 +227,16 @@ test("connectDockerSandbox: connect + kill by container id (no provision opts)",
     return { stdout: "" }
   })
   // Note: NO image/network/volume/frp opts — just the spawn seam.
-  const backend = dockerReconnect({ spawnImpl })
-  const handle = await backend.connect({
-    adapter: "docker",
-    mode: "resident",
-    sandboxId: "sess-reconnect",
-    resourceId: "container-reconnect",
-    runtimeId: "dev-x",
-  })
+  const handle = await connectDockerSandbox(
+    {
+      adapter: "docker",
+      mode: "resident",
+      sandboxId: "sess-reconnect",
+      resourceId: "container-reconnect",
+      runtimeId: "dev-x",
+    },
+    { spawnImpl }
+  )
   assert.equal(await handle.isRunning(), true)
   await handle.kill()
   assert.ok(
@@ -327,27 +313,32 @@ test("R3.4 probeDockerContainerLiveness: a daemon/transport error → 'unknown' 
 
 test("connectDockerSandbox: rejects a non-docker ref + a ref without container id", async () => {
   const { spawnImpl } = fakeDocker(() => ({ stdout: "" }))
-  const backend = dockerReconnect({ spawnImpl })
   await assert.rejects(
     () =>
-      backend.connect({
-        adapter: "local",
-        mode: "resident",
-        sandboxId: "s",
-        resourceId: "c",
-        runtimeId: "d",
-      }),
+      connectDockerSandbox(
+        {
+          adapter: "local",
+          mode: "resident",
+          sandboxId: "s",
+          resourceId: "c",
+          runtimeId: "d",
+        },
+        { spawnImpl }
+      ),
     SandboxAdapterError
   )
   await assert.rejects(
     () =>
-      backend.connect({
-        adapter: "docker",
-        mode: "resident",
-        sandboxId: "s",
-        resourceId: "",
-        runtimeId: "d",
-      }),
+      connectDockerSandbox(
+        {
+          adapter: "docker",
+          mode: "resident",
+          sandboxId: "s",
+          resourceId: "",
+          runtimeId: "d",
+        },
+        { spawnImpl }
+      ),
     /no container id/
   )
 })
@@ -364,7 +355,7 @@ test("docker create(): bootstrap timeout self-cleans container + pairing + devic
     return { stdout: "" }
   })
   const cleaned: Array<Record<string, unknown>> = []
-  const backend = dockerBackend({
+  const opts: DockerSandboxOptions = {
     ...baseOpts,
     spawnImpl,
     createPairing: fakePairing(),
@@ -374,8 +365,11 @@ test("docker create(): bootstrap timeout self-cleans container + pairing + devic
     failCleanup: async (a) => {
       cleaned.push(a)
     },
-  })
-  await assert.rejects(() => backend.create(baseSpec()), /did not bootstrap/)
+  }
+  await assert.rejects(
+    () => provisionDockerSandbox(baseSpec(), opts),
+    /did not bootstrap/
+  )
   // The container WAS created (docker run returned an id) but the runtime never
   // bootstrapped → cleanup reaps the container + cancels the pairing, runtimeId null.
   assert.deepEqual(cleaned, [
@@ -388,14 +382,14 @@ test("docker create(): bootstrap timeout self-cleans container + pairing + devic
   ])
 })
 
-test("docker create(): a throwing onDeviceClaimed self-cleans the bootstrapped device", async () => {
+test("docker create(): a throwing onRuntimeReady self-cleans the bootstrapped device", async () => {
   const { spawnImpl } = fakeDocker((args) => {
     if (args[0] === "inspect") return { code: 1 }
     if (args[0] === "run") return { stdout: "container-x\n" }
     return { stdout: "" }
   })
   const cleaned: Array<Record<string, unknown>> = []
-  const backend = dockerBackend({
+  const opts: DockerSandboxOptions = {
     ...baseOpts,
     spawnImpl,
     createPairing: fakePairing(),
@@ -406,15 +400,16 @@ test("docker create(): a throwing onDeviceClaimed self-cleans the bootstrapped d
     failCleanup: async (a) => {
       cleaned.push(a)
     },
-  })
+  }
   await assert.rejects(
     () =>
-      backend.create(
+      provisionDockerSandbox(
         baseSpec({
           onRuntimeReady: async () => {
             throw new Error("persist boom")
           },
-        })
+        }),
+        opts
       ),
     /persist boom/
   )
@@ -430,27 +425,33 @@ test("docker create(): a throwing onDeviceClaimed self-cleans the bootstrapped d
 
 test("docker connect(): rejects non-docker ref + requires a container id", async () => {
   const { spawnImpl } = fakeDocker(() => ({ stdout: "" }))
-  const backend = dockerBackend({ ...baseOpts, spawnImpl })
+  const opts: DockerSandboxOptions = { ...baseOpts, spawnImpl }
   await assert.rejects(
     () =>
-      backend.connect({
-        adapter: "local",
-        mode: "resident",
-        sandboxId: "s",
-        resourceId: "",
-        runtimeId: "d",
-      }),
+      connectDockerSandbox(
+        {
+          adapter: "local",
+          mode: "resident",
+          sandboxId: "s",
+          resourceId: "",
+          runtimeId: "d",
+        },
+        { spawnImpl: opts.spawnImpl }
+      ),
     SandboxAdapterError
   )
   await assert.rejects(
     () =>
-      backend.connect({
-        adapter: "docker",
-        mode: "resident",
-        sandboxId: "s",
-        resourceId: "",
-        runtimeId: "d",
-      }),
+      connectDockerSandbox(
+        {
+          adapter: "docker",
+          mode: "resident",
+          sandboxId: "s",
+          resourceId: "",
+          runtimeId: "d",
+        },
+        { spawnImpl: opts.spawnImpl }
+      ),
     /no container id/
   )
 })
@@ -461,16 +462,19 @@ test("docker connect: empty runtimeId still kills the container (half-provisione
     seen.push(args)
     return { stdout: "" }
   })
-  const backend = dockerBackend({ ...baseOpts, spawnImpl })
+  const opts: DockerSandboxOptions = { ...baseOpts, spawnImpl }
   // Crash after `docker run` but before the runtime was ready: container id known,
   // runtimeId is "". teardown must still reap the container.
-  const handle = await backend.connect({
-    adapter: "docker",
-    mode: "resident",
-    sandboxId: "sess-half",
-    resourceId: "container-half",
-    runtimeId: "",
-  })
+  const handle = await connectDockerSandbox(
+    {
+      adapter: "docker",
+      mode: "resident",
+      sandboxId: "sess-half",
+      resourceId: "container-half",
+      runtimeId: "",
+    },
+    { spawnImpl: opts.spawnImpl }
+  )
   await handle.kill()
   assert.ok(
     seen.some((c) => c[0] === "rm" && c.includes("container-half")),
@@ -485,15 +489,18 @@ test("docker handle: kill() stops + removes the container; isRunning inspects", 
     if (args[0] === "inspect") return { stdout: "true\n" }
     return { stdout: "" }
   })
-  const backend = dockerBackend({ ...baseOpts, spawnImpl })
-  const handle = await backend.connect({
-    adapter: "docker",
-    mode: "resident",
-    sandboxId: "sess-9",
-    resourceId: "container-xyz",
-    runtimeId: "dev-9",
-    runtimeServiceId: "svc-9",
-  })
+  const opts: DockerSandboxOptions = { ...baseOpts, spawnImpl }
+  const handle = await connectDockerSandbox(
+    {
+      adapter: "docker",
+      mode: "resident",
+      sandboxId: "sess-9",
+      resourceId: "container-xyz",
+      runtimeId: "dev-9",
+      runtimeServiceId: "svc-9",
+    },
+    { spawnImpl: opts.spawnImpl }
+  )
   assert.equal(handle.resourceId, "container-xyz")
   assert.equal(await handle.isRunning(), true)
   await handle.kill()
@@ -509,14 +516,17 @@ test("docker handle: kill() stops + removes the container; isRunning inspects", 
 
 test("docker handle: setTimeout + getHost throw (no silent no-op / fake host)", async () => {
   const { spawnImpl } = fakeDocker(() => ({ stdout: "" }))
-  const backend = dockerBackend({ ...baseOpts, spawnImpl })
-  const handle = await backend.connect({
-    adapter: "docker",
-    mode: "resident",
-    sandboxId: "s",
-    resourceId: "c",
-    runtimeId: "d",
-  })
+  const opts: DockerSandboxOptions = { ...baseOpts, spawnImpl }
+  const handle = await connectDockerSandbox(
+    {
+      adapter: "docker",
+      mode: "resident",
+      sandboxId: "s",
+      resourceId: "c",
+      runtimeId: "d",
+    },
+    { spawnImpl: opts.spawnImpl }
+  )
   await assert.rejects(() => handle.setTimeout(1000), SandboxAdapterError)
   assert.throws(() => handle.getHost(8080), SandboxAdapterError)
 })
@@ -570,7 +580,7 @@ test("docker create(): spec without storageVolumeSubpath fails loud (never mount
     return { stdout: "" }
   })
   const cleaned: Array<Record<string, unknown>> = []
-  const backend = dockerBackend({
+  const opts: DockerSandboxOptions = {
     ...baseOpts,
     spawnImpl,
     createPairing: fakePairing(),
@@ -581,14 +591,14 @@ test("docker create(): spec without storageVolumeSubpath fails loud (never mount
     failCleanup: async (a) => {
       cleaned.push(a)
     },
-  })
+  }
   // Omit storageVolumeSubpath → buildDockerRunArgs must reject rather than mount
   // a guessed path. The failure happens after the pairing is created, so cleanup
   // cancels the pairing (no container, no device yet).
   const spec = baseSpec()
   delete (spec as Partial<SandboxHostSpec>).storageVolumeSubpath
   await assert.rejects(
-    () => backend.create(spec),
+    () => provisionDockerSandbox(spec, opts),
     /storageVolumeSubpath is required/
   )
   assert.deepEqual(cleaned, [

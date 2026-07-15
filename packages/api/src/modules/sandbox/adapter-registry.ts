@@ -6,15 +6,15 @@
 // registry miss (adapter-bound endpoint scheme, P1.3); it is NOT carried on the
 // adapter (the dead `dataPlane?()` method was removed in P1.2). P1.2 INVARIANT
 // (machine-enforced by adapter-registry-fail-closed.test.ts): every BARE adapter
-// is host-side (capabilities.confinedFs==='native') — that is what makes the
-// current host-dir materialize/commit-scan + host-side endpoint fork valid. The
-// first OFF-BOX adapter (cubesandbox:bare, confinedFs:'unsupported') TRIPS that
-// guard, which is why the adapter.rebuildDataPlane + off-box working-set seam are
-// built + VALIDATED alongside it (R4).
+// declares the two dispatch seams — adapter.rebuildDataPlane (rebuild-on-miss) +
+// a non-null endpoint contract (R3.2 scheme/identity). R4 INVERTED the old
+// host-side-only rule: an off-box adapter (cubesandbox:bare, confinedFs:
+// 'unsupported') is now first-class, carrying the off-box working-set + orphan
+// seams instead of a host-dir materialize.
 //
 // F-A (preserved): a docker adapter's teardown/liveness/reconnect NEVER forces the
 // provision config to evaluate. `create()` (provision) calls
-// provisionDockerSandbox(dockerBackendOptionsFromEnv()) with the env read LAZILY only
+// provisionDockerSandbox(dockerSandboxOptionsFromEnv()) with the env read LAZILY only
 // when create() is actually invoked; `connect()` (teardown/liveness/reconnect) calls the
 // env-free connectDockerSandbox (it takes no provision options at all). So a docker
 // sandbox stays reapable after a fallback to local / SANDBOX_PROVIDER=none / a lost
@@ -290,7 +290,7 @@ export function bareMetaFor(provider: string): {
  *  (Relocated from service.ts so the registry can build the LAZY provision backend
  *  without a value cycle. Consumed HERE only — the docker:resident factory below;
  *  service.ts no longer imports it.) */
-export function dockerBackendOptionsFromEnv(): DockerSandboxOptions {
+export function dockerSandboxOptionsFromEnv(): DockerSandboxOptions {
   const dk = config.sandbox.docker
   const tunnel: "frp" = "frp"
   return {
@@ -361,7 +361,7 @@ function makeDockerResidentAdapter(deps?: {
 }): SandboxAdapter {
   // F-A: connect (teardown/liveness/reconnect) is ENV-FREE — connectDockerSandbox
   // takes only the spawnImpl seam, no provision env; create (provision) reads
-  // dockerBackendOptionsFromEnv() LAZILY, ONLY when invoked. The teardown path never
+  // dockerSandboxOptionsFromEnv() LAZILY, ONLY when invoked. The teardown path never
   // touches the provision env.
   const { meta } = residentMetaFor("docker")
   return {
@@ -373,7 +373,7 @@ function makeDockerResidentAdapter(deps?: {
     meta,
     endpoint: null,
     create: (spec) =>
-      provisionDockerSandbox(spec, dockerBackendOptionsFromEnv()),
+      provisionDockerSandbox(spec, dockerSandboxOptionsFromEnv()),
     connect: (ref) =>
       connectDockerSandbox(ref, { spawnImpl: deps?.dockerSpawnImpl }),
     ready: (handle, opts) => residentReady(deps?.readiness, handle, opts),
@@ -702,7 +702,7 @@ export interface MakeDockerBareAdapterDeps {
   descriptorOverride?: SandboxCapabilityDescriptor
   /** Inject the mint (test seam). */
   mintRuntime?: typeof mintBareSandboxRuntime
-  /** Inject the docker CLI spawner (test seam — align with docker-sandbox-backend.test.ts). */
+  /** Inject the docker CLI spawner (test seam — align with docker-sandbox.test.ts). */
   dockerSpawnImpl?: SpawnImpl
   /** Force the run options (test seam). */
   optionsOverride?: DockerBareRunOptions

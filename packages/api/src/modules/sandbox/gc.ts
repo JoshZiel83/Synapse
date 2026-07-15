@@ -257,6 +257,6 @@ async function collectPendingSidecarShas(dbh: Executor): Promise<Set<string>> {
  *  sidecar carries a `target` string, not CAS bytes, so it contributes nothing. */
 function addFileShas(out: Set<string>, sidecars: ConflictSidecarRef[]): void {
   for (const ref of sidecars) {
-    if (ref.kind === "file" && ref.contentSha) out.add(ref.contentSha)
+    if (ref.kind === "file") out.add(ref.contentSha)
   }
 }

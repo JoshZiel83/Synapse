@@ -14,7 +14,7 @@ import type { SidecarRestoreFailureReason } from "./model.js"
  * P2/P3: when a pending conflict sidecar fails to re-materialize on the current
  * provision (the on-disk leaf is absent), the agent notice must NOT instruct
  * "read it" against that path — and must word a TRANSIENT failure (retry later)
- * differently from a PERMANENT one (corrupt/missing payload, unrecoverable).
+ * differently from a PERMANENT one (unroutable sidecar path, unrecoverable).
  * These cover the pure partition + formatting the worker uses to build that
  * notice.
  */
@@ -31,11 +31,11 @@ const symlinkRef: ConflictSidecarRef = {
   kind: "symlink",
   target: "../elsewhere",
 }
-const corruptRef: ConflictSidecarRef = {
+const unroutableRef: ConflictSidecarRef = {
   original: "/actor/legacy.txt",
-  sidecar: "/actor/.synapse-conflicts/h3",
+  sidecar: "actor/.synapse-conflicts/h3", // no leading slash → unroutable path
   kind: "file",
-  // no contentSha — a pre-round-11 / corrupt record
+  contentSha: "abc",
 }
 
 function reasons(
@@ -46,10 +46,10 @@ function reasons(
 
 test("partitionSidecars: routes by per-sidecar reason (restored / transient / permanent)", () => {
   const { restored, transient, permanent } = partitionSidecars(
-    [fileRef, symlinkRef, corruptRef],
+    [fileRef, symlinkRef, unroutableRef],
     reasons([
       [symlinkRef.sidecar, "transient"],
-      [corruptRef.sidecar, "permanent"],
+      [unroutableRef.sidecar, "permanent"],
     ])
   )
   assert.deepEqual(
@@ -64,7 +64,7 @@ test("partitionSidecars: routes by per-sidecar reason (restored / transient / pe
   )
   assert.deepEqual(
     permanent.map((s) => s.sidecar),
-    [corruptRef.sidecar],
+    [unroutableRef.sidecar],
     "a permanent failure is bucketed permanent"
   )
 })
@@ -79,31 +79,14 @@ test("partitionSidecars: empty failed-map → everything restored", () => {
   assert.equal(permanent.length, 0)
 })
 
-test("partitionSidecars: restoreStatusUnknown buckets well-formed refs transient but keeps shape-corrupt refs permanent (P3 truthfulness)", () => {
+test("partitionSidecars: restoreStatusUnknown buckets well-formed refs transient but keeps unroutable refs permanent (P3 truthfulness)", () => {
   // Unknown restore status must NOT present any well-formed sidecar as readable
-  // (→ transient, retryable). But a ref that is intrinsically unrecoverable by
-  // shape (file with no contentSha) must STILL be permanent — never over-promised
-  // as "will be retried".
-  const corruptSymlink: ConflictSidecarRef = {
-    original: "/actor/badlink",
-    sidecar: "/actor/.synapse-conflicts/h4",
-    kind: "symlink",
-    // no target — corrupt
-  }
-  const corruptKind: ConflictSidecarRef = {
-    original: "/actor/d",
-    sidecar: "/actor/.synapse-conflicts/h5",
-    kind: "dir", // unknown/corrupt kind — unrestorable regardless of payload
-    contentSha: "abc",
-  }
-  const corruptPath: ConflictSidecarRef = {
-    original: "/actor/p.txt",
-    sidecar: "actor/.synapse-conflicts/h6", // no leading slash → unroutable
-    kind: "file",
-    contentSha: "abc",
-  }
+  // (→ transient, retryable). But a ref whose own path is UNROUTABLE (can never
+  // be written) must STILL be permanent — never over-promised as "will be
+  // retried". (A missing payload is no longer a cause: the strict union means a
+  // payload-less ref cannot decode into the pending store in the first place.)
   const { restored, transient, permanent } = partitionSidecars(
-    [fileRef, symlinkRef, corruptRef, corruptSymlink, corruptKind, corruptPath],
+    [fileRef, symlinkRef, unroutableRef],
     reasons([]),
     true
   )
@@ -115,13 +98,8 @@ test("partitionSidecars: restoreStatusUnknown buckets well-formed refs transient
   )
   assert.deepEqual(
     permanent.map((s) => s.sidecar).sort(),
-    [
-      corruptRef.sidecar,
-      corruptSymlink.sidecar,
-      corruptKind.sidecar,
-      corruptPath.sidecar,
-    ].sort(),
-    "shape-corrupt refs (missing payload, unknown kind, OR unroutable path) stay permanent even when status is unknown"
+    [unroutableRef.sidecar].sort(),
+    "an unroutable-path ref stays permanent even when status is unknown"
   )
 })
 
@@ -179,7 +157,7 @@ test("permanentUnrestoredSentence: empty list → empty string", () => {
 })
 
 test("permanentUnrestoredSentence: flags UNRECOVERABLE, makes NO retry promise, tells agent to redo", () => {
-  const sentence = permanentUnrestoredSentence([corruptRef])
+  const sentence = permanentUnrestoredSentence([unroutableRef])
   assert.ok(/UNRECOVERABLE/i.test(sentence), "marks the copy as unrecoverable")
   assert.ok(
     !/later turn will restore|will be restored/i.test(sentence),

@@ -490,7 +490,7 @@ export async function clearPendingRefreshConflicts(
     .execute()
 }
 
-// ── docker-sandbox-backend.ts: bootstrap-poll + cleanup ─────────────────────
+// ── docker-sandbox.ts: bootstrap-poll + cleanup ─────────────────────────────
 
 export interface PairingBootstrapResolution {
   status: string
@@ -686,9 +686,9 @@ function toSandboxRow(row: Record<string, unknown>): SandboxRow {
 
 /**
  * Patch mutable columns on a sandboxes row (post-create back-fill + lifecycle
- * transitions). resource_id/host_pid are written ONLY here (POST-create), never
- * from onResourceCreated — for docker the container id arrives before the
- * consume mints the row (CORRECTION 4).
+ * transitions). resource_id/host_pid are written ONLY here (POST-create): for
+ * docker the container id arrives before the consume mints the row, so there is
+ * no create-time callback that could carry it (CORRECTION 4).
  */
 export async function updateSandboxRow(
   id: string,

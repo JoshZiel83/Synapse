@@ -48,7 +48,7 @@ export interface DockerSandboxOptions {
   /** Internal API origin the container dials back to (SANDBOX_SERVER_ORIGIN, e.g. http://api:3001). */
   serverOrigin: string
   /** Whether to wire the frp tunnel. A docker resident sandbox forces tunnel='frp'
-   *  UNCONDITIONALLY (dockerBackendOptionsFromEnv hardcodes 'frp'); there is no
+   *  UNCONDITIONALLY (dockerSandboxOptionsFromEnv hardcodes 'frp'); there is no
    *  transport control seam. */
   tunnel: "frp" | "none"
   /** frp facts (only used when tunnel==="frp"). */
@@ -293,7 +293,7 @@ function buildDockerRunArgs(params: {
       env.SYNAPSE_TUNNEL_INTERNAL_BASE_URL = opts.tunnelInternalBaseUrl
   } else {
     // Defensive: the docker backend is selected with tunnel=frp only (enforced
-    // by dockerBackendOptionsFromEnv). A 'none' here would boot a container the
+    // by dockerSandboxOptionsFromEnv). A 'none' here would boot a container the
     // API can never dispatch to, so refuse rather than ship a dead sandbox.
     throw new SandboxAdapterError(
       `docker backend requires tunnel='frp' (got '${opts.tunnel}'); a docker ` +

@@ -291,8 +291,7 @@ const envObjectSchema = z.object({
   // SANDBOX_PROVIDER selects the runtime substrate: local (same-host
   // device-runtime child), docker (DooD cloud-sandbox image), or e2b/cube
   // (future bare adapters). Default resolves to "none" => sandbox provisioning
-  // is DISABLED (replaces the old SYNAPSE_SANDBOX_ENABLED boolean; a LOUD boot
-  // warning fires so a deploy that only set the removed flag notices). The
+  // is DISABLED (a LOUD boot warning fires whenever the sandbox is off). The
   // shared transport facts (FRP_SHARED_TOKEN / SYNAPSE_TUNNEL_* /
   // SYNAPSE_DEVICE_TUNNEL_EDGE_URL) are read under their EXISTING keys — they
   // are shared with the frps compose service + the device control-plane SSRF
@@ -573,7 +572,7 @@ export const envSchema = envObjectSchema.superRefine((env, ctx) => {
     }
   }
   // Sandbox: a docker provider is only reachable over the frp tunnel and needs
-  // its full run env at boot — move the old dockerBackendOptionsFromEnv
+  // its full run env at boot — move the old dockerSandboxOptionsFromEnv
   // fail-fast here so a misconfiguration is caught at STARTUP, not on the first
   // provision. (An UNconfigured provider — "none" — is a valid opt-out.)
   // Sandbox boot validation (R4 §1.9 config fold): resolve the SELECTED
@@ -692,8 +691,8 @@ function resolveDocumentExtractionProviderName(env: {
 }
 
 /** Resolve the active sandbox provider (runtime substrate) name: SANDBOX_PROVIDER,
- *  else "none" (disabled — replaces the removed SYNAPSE_SANDBOX_ENABLED boolean).
- *  Centralized so the superRefine gate and the config assembly can't diverge. */
+ *  else "none" (disabled). Centralized so the superRefine gate and the config
+ *  assembly can't diverge. */
 export function resolveSandboxProviderName(env: {
   SANDBOX_PROVIDER?: string
 }): string {
@@ -1039,16 +1038,14 @@ if (
   )
 }
 
-// Migration hazard (P2 config fold): SYNAPSE_SANDBOX_ENABLED was replaced by
-// SANDBOX_PROVIDER. A deploy that only set the removed boolean goes silently
-// sandbox-OFF, so warn LOUDLY whenever the sandbox is disabled — the runtime
+// A "none" provider means the sandbox is OFF for every session, which is easy to
+// hit unintentionally, so warn LOUDLY whenever it is disabled — the runtime
 // backstop for the docs' "set SANDBOX_PROVIDER explicitly" instruction.
 if (config.sandbox.provider === "none") {
   log.warn(
     'per-session sandbox is DISABLED (SANDBOX_PROVIDER="none" or unset). ' +
       "Set SANDBOX_PROVIDER=local (same-host device-runtime) or =docker " +
-      "(DooD cloud-sandbox image) to enable it. NOTE: SYNAPSE_SANDBOX_ENABLED " +
-      "was removed — a deploy that only set it now runs with the sandbox OFF."
+      "(DooD cloud-sandbox image) to enable it."
   )
 } else if (
   !isRegisteredSandboxAdapterKey(

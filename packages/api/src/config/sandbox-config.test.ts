@@ -1,6 +1,6 @@
 // Unit tests for the P2 sandbox config fold (§8.2): the SANDBOX_PROVIDER /
 // SANDBOX_MODE resolution + the docker boot-reject gate that replaced the old
-// dockerBackendOptionsFromEnv fail-fast (ex docker-backend-options.test.ts).
+// dockerSandboxOptionsFromEnv fail-fast.
 //
 // These drive envSchema.safeParse + the resolvers directly (config itself is a
 // module singleton frozen at import, so it can't be re-evaluated per test).

@@ -115,9 +115,11 @@ export function encodeSandboxDataPlaneCredentials(
 
 /**
  * Decrypt the persisted envelope (§1.3, F7). A MISS — rotated key, tampered AAD
- * (blob swapped onto another row), corrupt/legacy bytes — returns null and NEVER
- * throws, so the caller degrades to a token-less/re-mint heal instead of a
- * hard-deny. Returns a BRANDED (redacted) bag on success.
+ * (blob swapped onto another row), or genuinely corrupt bytes — returns null and
+ * NEVER throws, so the caller degrades to a token-less/re-mint heal instead of a
+ * hard-deny. This is a security/robustness fail-safe, NOT old-data tolerance:
+ * there is one envelope format (`enc:b1:`), so a well-formed current blob always
+ * decrypts. Returns a BRANDED (redacted) bag on success.
  */
 export function decodeSandboxDataPlaneCredentials(
   envelope: string | null | undefined,

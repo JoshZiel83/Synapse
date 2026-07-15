@@ -227,6 +227,7 @@ test(
                 original: "/actor/x.txt",
                 sidecar: "/actor/.synapse-conflicts/deadbeef",
                 kind: "file",
+                contentSha: "deadbeefsha",
               },
             ],
           }
@@ -269,6 +270,7 @@ test(
             original: "/actor/x.txt",
             sidecar: "/actor/.synapse-conflicts/deadbeef",
             kind: "file",
+            contentSha: "deadbeefsha",
           },
         ],
         "partial sidecar from a failed reconcile must still be surfaced"
@@ -353,6 +355,7 @@ test(
               original: "/actor/x.txt",
               sidecar: "/actor/.synapse-conflicts/deadbeef",
               kind: "file",
+              contentSha: "deadbeefsha",
             },
           ],
         }),
@@ -477,6 +480,7 @@ test(
                 original: "/actor/x.txt",
                 sidecar: "/actor/.synapse-conflicts/cafe",
                 kind: "file",
+                contentSha: "cafesha",
               },
             ],
           }
@@ -816,7 +820,10 @@ test(
       // The agent's loser is preserved at a sidecar (so it isn't lost).
       const sc = result.sidecarsBySubpath.actor?.[0]
       assert.equal(sc?.original, "/actor/x.txt", "loser preserved at a sidecar")
-      assert.ok(sc?.contentSha, "sidecar carries the CAS-durable content sha")
+      assert.ok(
+        sc?.kind === "file" && sc.contentSha,
+        "file sidecar carries the CAS-durable content sha"
+      )
       // base advanced to latest (equals-latest branch).
       const mounts = await getActiveMountsForSession(db, sessionId)
       const actorMount = mounts.find((m) => m.mountSubpath === "actor")!

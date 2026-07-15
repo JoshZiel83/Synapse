@@ -1,6 +1,6 @@
 # Synapse Device Runtime — cloud-sandbox image (self-contained multi-stage).
 #
-# Run via the docker SandboxBackend (DooD) — or any host_provider. On first
+# Run via the docker sandbox adapter (DooD) — or any host_provider. On first
 # boot the entrypoint runs `synapse-device bootstrap` to exchange the injected
 # SYNAPSE_BOOTSTRAP_TOKEN for long-term credentials, then `synapse-device run`.
 #

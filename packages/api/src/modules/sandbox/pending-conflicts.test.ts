@@ -3,7 +3,10 @@ import assert from "node:assert/strict"
 import {
   decodePendingConflicts,
   mergePendingConflicts,
+  toConflictSidecarRef,
 } from "./pending-conflicts.js"
+import type { PendingCommitConflict } from "./pending-conflicts.js"
+import type { ConflictSidecar } from "@synapse/device-runtime"
 
 /**
  * decodePendingConflicts is a STRICT Zod decode of the stashed pending-commit-conflict
@@ -59,6 +62,44 @@ test("decodePendingConflicts: a malformed blob fails SAFE to {} — no per-field
   assert.deepEqual(decodePendingConflicts({ conversation: ["/a.txt"] }), {})
 })
 
+test("decodePendingConflicts: the per-variant payload is REQUIRED (strict union) — a payload-less or unknown-kind ref fails the whole blob", () => {
+  const base = { original: "/c/a", sidecar: "/c/.synapse-conflicts/a" }
+  // file with no contentSha → rejected (payload required, not defaulted).
+  assert.deepEqual(
+    decodePendingConflicts({
+      c: { paths: [], sidecars: [{ ...base, kind: "file" }] },
+    }),
+    {}
+  )
+  // symlink with no target → rejected.
+  assert.deepEqual(
+    decodePendingConflicts({
+      c: { paths: [], sidecars: [{ ...base, kind: "symlink" }] },
+    }),
+    {}
+  )
+  // unknown kind → the discriminated union has no matching member → rejected.
+  assert.deepEqual(
+    decodePendingConflicts({
+      c: {
+        paths: [],
+        sidecars: [{ ...base, kind: "dir", contentSha: "x" }],
+      },
+    }),
+    {}
+  )
+  // an unknown EXTRA key → strictObject rejects (no silent strip).
+  assert.deepEqual(
+    decodePendingConflicts({
+      c: {
+        paths: [],
+        sidecars: [{ ...base, kind: "file", contentSha: "x", extra: 1 }],
+      },
+    }),
+    {}
+  )
+})
+
 /**
  * mergePendingConflicts is the at-least-once-safe union used when a NEW turn-end
  * commit conflict arrives while a prior turn's notice is still undelivered (its
@@ -97,7 +138,7 @@ test("mergePendingConflicts: same-original distinct sidecars BOTH survive (round
   // sidecar leaves (content discriminator); both recovery copies must persist.
   // Dedup is by SIDECAR path, so a re-record of the SAME sidecar is idempotent
   // but a new distinct sidecar for the same original is kept.
-  const prev = {
+  const prev: Record<string, PendingCommitConflict> = {
     conversation: {
       paths: ["/a.txt"],
       sidecars: [
@@ -105,6 +146,7 @@ test("mergePendingConflicts: same-original distinct sidecars BOTH survive (round
           original: "/conversation/a.txt",
           sidecar: "/conversation/.synapse-conflicts/hash1",
           kind: "file",
+          contentSha: "sha1",
         },
       ],
     },
@@ -118,12 +160,14 @@ test("mergePendingConflicts: same-original distinct sidecars BOTH survive (round
           original: "/conversation/a.txt",
           sidecar: "/conversation/.synapse-conflicts/hash1",
           kind: "file",
+          contentSha: "sha1",
         },
         // SAME original, DIFFERENT content → distinct leaf → must be KEPT.
         {
           original: "/conversation/a.txt",
           sidecar: "/conversation/.synapse-conflicts/hash2",
           kind: "file",
+          contentSha: "sha2",
         },
       ],
     },
@@ -141,7 +185,7 @@ test("mergePendingConflicts: same-original distinct sidecars BOTH survive (round
 })
 
 test("mergePendingConflicts: empty prev returns the incoming verbatim", () => {
-  const incoming = {
+  const incoming: Record<string, PendingCommitConflict> = {
     actor: {
       paths: ["/x"],
       sidecars: [
@@ -149,9 +193,77 @@ test("mergePendingConflicts: empty prev returns the incoming verbatim", () => {
           original: "/actor/x",
           sidecar: "/actor/.synapse-conflicts/x",
           kind: "file",
+          contentSha: "shax",
         },
       ],
     },
   }
   assert.deepEqual(mergePendingConflicts({}, incoming), incoming)
+})
+
+/**
+ * toConflictSidecarRef validates + prefixes the wire ConflictSidecar (flat,
+ * optional payload) into the durable ref (strict union, required payload). It
+ * THROWS on a payload the fs-helper is proven to always supply, so a Rust
+ * regression fails LOUD instead of persisting an unrecoverable ref.
+ */
+test("toConflictSidecarRef: maps a file sidecar + prefixes the mount subpath", () => {
+  const wire: ConflictSidecar = {
+    original: "/a.txt",
+    sidecar: "/.synapse-conflicts/h1",
+    kind: "file",
+    content_sha: "a".repeat(64),
+  }
+  assert.deepEqual(toConflictSidecarRef(wire, "actor"), {
+    kind: "file",
+    original: "/actor/a.txt",
+    sidecar: "/actor/.synapse-conflicts/h1",
+    contentSha: "a".repeat(64),
+  })
+})
+
+test("toConflictSidecarRef: maps a symlink sidecar (target payload)", () => {
+  const wire: ConflictSidecar = {
+    original: "/link",
+    sidecar: "/.synapse-conflicts/h2",
+    kind: "symlink",
+    target: "../elsewhere",
+  }
+  assert.deepEqual(toConflictSidecarRef(wire, "conversation"), {
+    kind: "symlink",
+    original: "/conversation/link",
+    sidecar: "/conversation/.synapse-conflicts/h2",
+    target: "../elsewhere",
+  })
+})
+
+test("toConflictSidecarRef: THROWS on a missing payload or unknown kind (fail-loud invariant)", () => {
+  assert.throws(
+    () =>
+      toConflictSidecarRef(
+        { original: "/a", sidecar: "/.synapse-conflicts/a", kind: "file" },
+        "actor"
+      ),
+    /file.*no content_sha/
+  )
+  assert.throws(
+    () =>
+      toConflictSidecarRef(
+        { original: "/l", sidecar: "/.synapse-conflicts/l", kind: "symlink" },
+        "actor"
+      ),
+    /symlink.*no target/
+  )
+  assert.throws(
+    () =>
+      toConflictSidecarRef(
+        {
+          original: "/d",
+          sidecar: "/.synapse-conflicts/d",
+          kind: "dir",
+        } as unknown as ConflictSidecar,
+        "actor"
+      ),
+    /unrecognized kind/
+  )
 })

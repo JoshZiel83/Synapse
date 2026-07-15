@@ -85,8 +85,9 @@ import {
   type SidecarRestoreFailureReason,
 } from "./model.js"
 import {
-  isSidecarPayloadIrrecoverable,
+  isSidecarPathUnroutable,
   parseSidecarRoute,
+  toConflictSidecarRef,
 } from "./pending-conflicts.js"
 import type {
   ConflictSidecarRef,
@@ -95,13 +96,14 @@ import type {
 } from "./pending-conflicts.js"
 
 export {
-  isSidecarPayloadIrrecoverable,
+  isSidecarPathUnroutable,
   mergePendingConflicts,
   mergePendingRefreshConflicts,
   decodePendingConflicts,
   decodePendingRefresh,
   parseSidecarRoute,
   SIDECAR_ROUTE_RE,
+  toConflictSidecarRef,
 } from "./pending-conflicts.js"
 export type {
   ConflictSidecarRef,
@@ -175,7 +177,7 @@ type SessionContext = repo.SessionContext
  *
  * NOTE: this is the LOCAL adapter's provision. The docker adapter does NOT read
  * spec.serverOrigin — it builds its own from the same env in
- * dockerBackendOptionsFromEnv (opts.serverOrigin) — so this never affects it.
+ * dockerSandboxOptionsFromEnv (opts.serverOrigin) — so this never affects it.
  */
 export function sandboxLocalServerOrigin(): string {
   return config.sandbox.serverOrigin
@@ -209,7 +211,7 @@ export function sandboxSpecVolumeSubpath(
  * has to stay reapable even after the API fell back to the local adapter, had
  * sandboxes disabled, or lost its FRP_SHARED_TOKEN — so its connect() is the env-free
  * connectDockerSandbox (docker CLI + persisted container id, no image/network/volume/
- * frp config), never the eager provisionDockerSandbox(dockerBackendOptionsFromEnv()).
+ * frp config), never the eager provisionDockerSandbox(dockerSandboxOptionsFromEnv()).
  */
 function adapterForKind(
   ref: SandboxRef,
@@ -1298,8 +1300,8 @@ export async function provisionSandbox(
     // this is the FIRST safe point to write file_mounts.sandbox_id (the mount's sole
     // identity) and the sandbox row's resource_id/host_pid. resource_id/host_pid live
     // ONLY on the sandboxes row now (P3) — the container id arrives before the docker
-    // consume mints the row, so it is written HERE (post-create), not from
-    // onResourceCreated (which would 0-row-UPDATE a not-yet-existent row).
+    // consume mints the row, so it is written HERE (post-create); a create-time
+    // callback couldn't carry it (it would 0-row-UPDATE a not-yet-existent row).
     await persistAll({ sandboxId: runtimeId })
     // R3.6: for a LOCAL sandbox capture the child pid's durable identity token
     // ('<boot_id>:<starttime>') the instant we know the pid, so recovery/teardown
@@ -1745,13 +1747,7 @@ export async function refreshSpaces(
       // the CAS-durable recovery payload (round-11 #1) so the sidecar can be
       // re-materialized after teardown.
       const mountSidecars: ConflictSidecarRef[] = sync.conflict_sidecars.map(
-        (c) => ({
-          original: `/${mount.mountSubpath}${c.original}`,
-          sidecar: `/${mount.mountSubpath}${c.sidecar}`,
-          kind: c.kind,
-          contentSha: c.content_sha ?? undefined,
-          target: c.target ?? undefined,
-        })
+        (c) => toConflictSidecarRef(c, mount.mountSubpath)
       )
       if (mountSidecars.length > 0) {
         sidecarsBySubpath[mount.mountSubpath] = mountSidecars
@@ -1932,13 +1928,9 @@ function defaultCommitDeps(): CommitDeps {
           toManifestSha256: committedManifestSha,
           deferConflictApply: true,
         })
-        const sidecars = res.conflict_sidecars.map((c) => ({
-          original: `/${mount.mountSubpath}${c.original}`,
-          sidecar: `/${mount.mountSubpath}${c.sidecar}`,
-          kind: c.kind,
-          contentSha: c.content_sha ?? undefined,
-          target: c.target ?? undefined,
-        }))
+        const sidecars = res.conflict_sidecars.map((c) =>
+          toConflictSidecarRef(c, mount.mountSubpath)
+        )
         if (res.incomplete) {
           // Partial reconcile: surface the sidecars written so far, but signal
           // NOT-ok so the caller leaves base unadvanced (round-9 #2 + round-7 #A)
@@ -2067,8 +2059,8 @@ export const clearPendingRefreshConflicts = repo.clearPendingRefreshConflicts
  * the freshly-provisioned live dirs (round-11 #1). The pending notices reference
  * `/<subpath>/.synapse-conflicts/<hash>` paths that a prior teardown deleted;
  * rebuild each from its CAS-durable payload so the agent-visible path resolves
- * again. Best-effort per sidecar — a missing payload (e.g. a pre-round-11 record
- * without contentSha) is skipped with a warning rather than failing provision.
+ * again. Best-effort per sidecar — an unroutable sidecar path is skipped with a
+ * warning (marked permanent) rather than failing provision.
  */
 async function restorePendingSidecars(
   sessionId: string,
@@ -2126,18 +2118,18 @@ export async function restorePendingSidecarsImpl(
   for (const ref of allRefs) {
     if (seen.has(ref.sidecar)) continue
     seen.add(ref.sidecar)
-    // Intrinsic (mount-INDEPENDENT) unrecoverability FIRST: a ref whose own
-    // record can never rebuild — missing payload, unknown kind, OR a sidecar path
-    // that isn't a safe /<mount>/.synapse-conflicts/<flat-leaf> — is PERMANENT
-    // regardless of mount state. Checking it up front (via the shared predicate,
-    // the same one partitionSidecars uses) keeps the two in exact lockstep AND
-    // (P1) guarantees restore can only ever write inside the .synapse-conflicts
-    // scratch namespace, never onto a real tree path.
-    if (isSidecarPayloadIrrecoverable(ref)) {
+    // Intrinsic (mount-INDEPENDENT) unroutability FIRST: a ref whose own sidecar
+    // path isn't a safe /<mount>/.synapse-conflicts/<flat-leaf> can never be
+    // written, so it is PERMANENT regardless of mount state (the payload is now
+    // required per variant, so a missing-payload/unknown-kind ref cannot decode in
+    // the first place). Checking it up front (via the shared predicate, the same
+    // one partitionSidecars uses) keeps the two in exact lockstep AND (P1)
+    // guarantees restore can only ever write inside the .synapse-conflicts scratch
+    // namespace, never onto a real tree path.
+    if (isSidecarPathUnroutable(ref)) {
       console.warn(
         `[sandbox] cannot restore sidecar ${JSON.stringify(ref.sidecar)} ` +
-          `(kind=${ref.kind}, irrecoverable record — missing payload, unknown ` +
-          `kind, or non-sidecar/unsafe path); skipping permanently`
+          `(kind=${ref.kind}, non-sidecar/unsafe path); skipping permanently`
       )
       fail(ref.sidecar, "permanent")
       continue
@@ -2155,13 +2147,13 @@ export async function restorePendingSidecarsImpl(
       continue
     }
     try {
-      await restoreSidecar({
-        dir,
-        sidecarVfs: leaf,
-        kind: ref.kind,
-        contentSha: ref.contentSha,
-        target: ref.target,
-      })
+      // Narrow on the discriminant: each variant supplies exactly its payload
+      // (file→contentSha, symlink→target) to the flat fs-helper restore boundary.
+      await restoreSidecar(
+        ref.kind === "file"
+          ? { dir, sidecarVfs: leaf, kind: "file", contentSha: ref.contentSha }
+          : { dir, sidecarVfs: leaf, kind: "symlink", target: ref.target }
+      )
     } catch (err) {
       // A write/IO error — the payload exists, so a retry next provision may
       // succeed. TRANSIENT.

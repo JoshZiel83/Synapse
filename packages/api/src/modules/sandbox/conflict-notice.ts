@@ -10,16 +10,18 @@
 //   - transient: the payload exists (file bytes in CAS, symlink target recorded)
 //     but couldn't be written this provision (no live mount for the subpath yet,
 //     or a transient fs error). A later turn may restore it → promise a retry.
-//   - permanent: the durable record itself lacks the payload (pre-round-11 /
-//     corrupt: no contentSha / no target / unparseable path). It will NEVER
-//     restore → must NOT promise a retry; tell the agent the copy is unrecoverable.
+//   - permanent: the sidecar's own path is UNROUTABLE (not a safe
+//     /<mount>/.synapse-conflicts/<flat-leaf> path), so it can never be written.
+//     It will NEVER restore → must NOT promise a retry; tell the agent the copy
+//     is unrecoverable. (A missing payload is no longer a cause: the durable ref
+//     is a strict discriminated union, so a payload-less ref cannot decode.)
 //
 // This module splits a sidecar list into restored / transiently-unrestored /
 // permanently-unrestored and renders each, so the worker and its tests share one
 // source of truth.
 
 import {
-  isSidecarPayloadIrrecoverable,
+  isSidecarPathUnroutable,
   type ConflictSidecarRef,
 } from "./pending-conflicts.js"
 import type { SidecarRestoreFailureReason } from "./model.js"
@@ -42,15 +44,14 @@ export interface PartitionedSidecars {
  * restore as NOT-ok but produced NO per-sidecar list (e.g. the failure-
  * collection itself threw). In that case we cannot trust that any sidecar was
  * restored, so none is presented as readable. But we DON'T blindly call them all
- * transient: a ref that is intrinsically unrecoverable by its own shape (file
- * with no contentSha, symlink with no target, unknown/corrupt kind, or a sidecar
- * path that isn't a safe `/<mount>/.synapse-conflicts/<flat-leaf>` —
- * `isSidecarPayloadIrrecoverable`) is still PERMANENT, exactly as the normal
- * restore path would classify it (P3 truthfulness — never tell the agent a
- * corrupt copy "will be retried"). Only refs that COULD plausibly restore later
- * are bucketed transient. The caller blocks clearing the pending store whenever
- * any transient OR the unknown flag is set, so a permanent-only unknown turn
- * still doesn't lose a transient notice.
+ * transient: a ref whose own sidecar path is UNROUTABLE (not a safe
+ * `/<mount>/.synapse-conflicts/<flat-leaf>` path — `isSidecarPathUnroutable`) can
+ * never be written and is still PERMANENT, exactly as the normal restore path
+ * would classify it (P3 truthfulness — never tell the agent an unrecoverable copy
+ * "will be retried"). Only refs that COULD plausibly restore later are bucketed
+ * transient. The caller blocks clearing the pending store whenever any transient
+ * OR the unknown flag is set, so a permanent-only unknown turn still doesn't lose
+ * a transient notice.
  */
 export function partitionSidecars(
   sidecars: ConflictSidecarRef[],
@@ -65,7 +66,7 @@ export function partitionSidecars(
       // Fail-closed: status unknown → never "restored". Classify by shape first
       // so an intrinsically-corrupt ref is still permanent (not over-promised as
       // retryable); everything else is transient (assume not on disk, retryable).
-      if (isSidecarPayloadIrrecoverable(s)) permanent.push(s)
+      if (isSidecarPathUnroutable(s)) permanent.push(s)
       else transient.push(s)
       continue
     }
@@ -112,7 +113,7 @@ export function transientUnrestoredSentence(
 
 /**
  * The standalone sentence for sidecars that failed restore PERMANENTLY — the
- * durable record lacks the payload, so the copy is UNRECOVERABLE (it will never
+ * saved sidecar path is unroutable, so the copy is UNRECOVERABLE (it will never
  * come back). Returns "" when there are none. Makes NO retry promise.
  */
 export function permanentUnrestoredSentence(
@@ -121,8 +122,8 @@ export function permanentUnrestoredSentence(
   if (permanent.length === 0) return ""
   const paths = permanent.map((s) => s.original).join("; ")
   return (
-    `Your pre-conflict copy of these paths is UNRECOVERABLE — the saved record ` +
-    `is incomplete/corrupt and cannot be restored (do NOT try to read the ` +
+    `Your pre-conflict copy of these paths is UNRECOVERABLE — the saved sidecar ` +
+    `record is invalid and cannot be restored (do NOT try to read the ` +
     `sidecar path; it will not come back). Treat your earlier change to these ` +
     `paths as lost and redo it from the current version if still needed: ${paths}.`
   )

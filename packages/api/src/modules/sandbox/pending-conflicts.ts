@@ -8,23 +8,79 @@
 
 import { z } from "zod"
 
-/** A conflicting file whose pre-conflict local copy was preserved at a sidecar. */
-export interface ConflictSidecarRef {
-  original: string
-  sidecar: string
-  /** "file" = readable bytes; "symlink" = readable JSON metadata (round-10 #3). */
-  kind: string
-  /**
-   * CAS-durable recovery payload (round-11 #1) so the sidecar survives teardown
-   * (which deletes the live dir; .synapse-conflicts is scan-excluded so never in
-   * CAS via the snapshot path). For a FILE sidecar this is the content sha256
-   * (the bytes are already in CAS from the scan). For a SYMLINK sidecar the
-   * `target` string is the payload (no CAS bytes). On the next provision the
-   * sidecar is re-materialized into the fresh live dir from these.
-   */
-  contentSha?: string
-  /** Symlink target (round-11 #1), present only for kind="symlink". */
-  target?: string
+import type { ConflictSidecar } from "@synapse/device-runtime"
+
+/**
+ * A conflicting file whose pre-conflict local copy was preserved at a sidecar.
+ *
+ * STRICT discriminated union on `kind` — the recovery payload is REQUIRED per
+ * variant (a FILE sidecar always carries `contentSha`, a SYMLINK sidecar always
+ * carries `target`) because the sole producer, the Rust fs-helper
+ * (sidecars/fs-helper/src/manifest.rs), ALWAYS emits it: a file/symlink sidecar
+ * with a missing payload is not a representable runtime state, so it is not
+ * modelled as an optional-that-degrades. The payload is CAS-durable (round-11
+ * #1) so the sidecar survives the teardown that deletes the live dir
+ * (.synapse-conflicts is scan-excluded, never entering CAS via the snapshot):
+ * for a FILE it is the content sha256 (bytes already in CAS from the scan), for
+ * a SYMLINK it is the link target (no CAS bytes). On the next provision the
+ * sidecar is re-materialized into the fresh live dir from it.
+ *
+ * `z.strictObject` REJECTS unknown keys (no silent strip) and
+ * `z.discriminatedUnion` REJECTS an unrecognized `kind` — a malformed blob then
+ * fails the top-level decode and falls SAFE to empty, never a per-field coercion.
+ */
+const ConflictSidecarRefSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    original: z.string(),
+    sidecar: z.string(),
+    kind: z.literal("file"),
+    /** CAS content sha256 of the preserved bytes (recovery payload). */
+    contentSha: z.string(),
+  }),
+  z.strictObject({
+    original: z.string(),
+    sidecar: z.string(),
+    kind: z.literal("symlink"),
+    /** Symlink target read back from the JSON metadata leaf (recovery payload). */
+    target: z.string(),
+  }),
+])
+
+export type ConflictSidecarRef = z.infer<typeof ConflictSidecarRefSchema>
+
+/**
+ * Validate + map a wire {@link ConflictSidecar} (flat struct: kind:string,
+ * content_sha?/target? optional) into the durable {@link ConflictSidecarRef},
+ * prefixing the mount subpath onto the VFS paths. THROWS on a payload the writer
+ * is proven to always supply (file without content_sha, symlink without target)
+ * or an unknown kind — a fail-LOUD contract for an impossible state (a Rust
+ * regression), never a silent "irrecoverable ref" persisted as old code did.
+ */
+export function toConflictSidecarRef(
+  c: ConflictSidecar,
+  mountSubpath: string
+): ConflictSidecarRef {
+  const original = `/${mountSubpath}${c.original}`
+  const sidecar = `/${mountSubpath}${c.sidecar}`
+  if (c.kind === "file") {
+    if (c.content_sha === undefined) {
+      throw new Error(
+        `conflict sidecar '${sidecar}' (file) has no content_sha (fs-helper invariant broken)`
+      )
+    }
+    return { kind: "file", original, sidecar, contentSha: c.content_sha }
+  }
+  if (c.kind === "symlink") {
+    if (c.target === undefined) {
+      throw new Error(
+        `conflict sidecar '${sidecar}' (symlink) has no target (fs-helper invariant broken)`
+      )
+    }
+    return { kind: "symlink", original, sidecar, target: c.target }
+  }
+  throw new Error(
+    `conflict sidecar '${sidecar}' has unrecognized kind '${c.kind}' (fs-helper invariant broken)`
+  )
 }
 
 /** Per-subpath pending commit conflicts: the lost paths + their sidecars. */
@@ -84,16 +140,14 @@ export function parseSidecarRoute(
 }
 
 /**
- * Whether a sidecar ref is INTRINSICALLY unrecoverable from its own shape. This
- * is shared by restore and notice partitioning so they never disagree.
+ * Whether a sidecar's own path is UNROUTABLE — it is not a well-formed, safe
+ * `/<mount>/.synapse-conflicts/<flat-leaf>` VFS path, so restore can never write
+ * it. This is the SOLE intrinsic-permanent cause now that the payload is required
+ * per variant (a decoded ref always carries its contentSha/target). Shared by
+ * restore and notice partitioning so they never disagree.
  */
-export function isSidecarPayloadIrrecoverable(
-  ref: ConflictSidecarRef
-): boolean {
-  if (parseSidecarRoute(ref.sidecar) === null) return true
-  if (ref.kind === "file") return !ref.contentSha
-  if (ref.kind === "symlink") return ref.target === undefined
-  return true
+export function isSidecarPathUnroutable(ref: ConflictSidecarRef): boolean {
+  return parseSidecarRoute(ref.sidecar) === null
 }
 
 /**
@@ -118,23 +172,6 @@ export function mergePendingConflicts(
   }
   return merged
 }
-
-/**
- * Strict sidecar-ref schema. original/sidecar/kind are REQUIRED (the writer always
- * supplies them — a missing one is corruption, not old data). contentSha/target stay
- * OPTIONAL: they are kind-discriminated RUNTIME states (a file with no contentSha, or a
- * symlink with no target, is a genuinely irrecoverable sidecar — surfaced as PERMANENT
- * by isSidecarPayloadIrrecoverable, NOT an old-data default). `kind` is a plain string
- * (not an enum) so an unrecognized kind is decoded + handled as irrecoverable rather
- * than nuking the whole blob. Default strip tolerates benign additive keys.
- */
-const ConflictSidecarRefSchema: z.ZodType<ConflictSidecarRef> = z.object({
-  original: z.string(),
-  sidecar: z.string(),
-  kind: z.string(),
-  contentSha: z.string().optional(),
-  target: z.string().optional(),
-})
 
 const PendingCommitConflictSchema = z.record(
   z.string(),

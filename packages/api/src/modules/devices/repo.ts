@@ -310,8 +310,8 @@ export async function consumeCloudBootstrapTx(args: {
       // createCloudDevicePairing). assert_runtime_detail_consistency (DEFERRED)
       // is satisfied: exactly one sandboxes detail for this runtime. ──
       // (R4 #10.3) FAIL-CLOSED on a corrupt sandbox pairing context. The docker
-      // sandbox backend ALWAYS writes a non-empty adapter + a valid mode
-      // (docker-sandbox-backend.ts create() → createCloudDevicePairing). A missing
+      // sandbox adapter ALWAYS writes a non-empty adapter + a valid mode
+      // (docker-sandbox.ts create() → createCloudDevicePairing). A missing
       // or invalid one means the pairing was authored wrong — mint NOTHING rather
       // than SILENTLY defaulting to a docker/resident identity that may not match
       // the real substrate (the old `?? "docker"/"resident"` masked the corruption).

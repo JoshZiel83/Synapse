@@ -46,8 +46,8 @@ import { deleteRuntime, mintLocalSandboxRuntime } from "../devices/service.js"
 export type SandboxLiveness = "alive" | "dead" | "unknown"
 
 /**
- * Everything provisionSandbox hands a backend to stand up one sandbox. The
- * backend owns its pairing handshake (local: startPairing+pair; docker:
+ * Everything provisionSandbox hands the adapter to stand up one sandbox. The
+ * adapter owns its pairing handshake (local: startPairing+pair; docker:
  * createCloudDevicePairing+bootstrap) — the spine only supplies session-scoped
  * facts and lifecycle callbacks.
  */
@@ -61,13 +61,10 @@ export interface SandboxSpecBase {
    * local: mintLocalSandboxRuntimeTx). Carries the runtime id (the sandboxes.id ==
    * runtimes.id) so the spine can back-fill the mount's sole identity column,
    * file_mounts.sandbox_id. MUST be awaited; idempotent; a throw aborts create()
-   * (which then runs its own cleanup). Renamed from onDeviceClaimed (a sandbox runtime
-   * has no `devices` row — the identity is the runtime).
-   *
-   * (P3: the former onPairingCreated / onResourceCreated staged-persistence callbacks
-   * are gone — pairing + resource id live on the sandboxes row, written at mint /
-   * post-create, and a pre-bootstrap docker container is reaped by its session label,
-   * not a mount column. The mount carries only sandbox_id now.)
+   * (which then runs its own cleanup). This is the SOLE staged-persistence
+   * callback: pairing + resource id live on the sandboxes row (written at mint /
+   * post-create), and a pre-bootstrap docker container is reaped by its session
+   * label, not a mount column — so the mount carries only sandbox_id.
    */
   onRuntimeReady?: (runtimeId: string) => Promise<void>
 }

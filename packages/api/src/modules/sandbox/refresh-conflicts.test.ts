@@ -23,6 +23,12 @@ import {
   mergePendingRefreshConflicts,
   decodePendingRefresh,
 } from "./pending-conflicts.js"
+import type { PendingRefreshConflicts } from "./pending-conflicts.js"
+
+type RefreshMergeInput = Pick<
+  PendingRefreshConflicts,
+  "deferredConflictsBySubpath" | "sidecarsBySubpath"
+>
 
 let helperAvailable = true
 try {
@@ -45,7 +51,7 @@ function rid(): string {
  */
 
 test("mergePendingRefreshConflicts: unions deferred paths + sidecars across turns", () => {
-  const prev = {
+  const prev: RefreshMergeInput = {
     deferredConflictsBySubpath: { conversation: ["/a.txt"] },
     sidecarsBySubpath: {
       conversation: [
@@ -53,6 +59,7 @@ test("mergePendingRefreshConflicts: unions deferred paths + sidecars across turn
           original: "/conversation/a.txt",
           sidecar: "/conversation/.synapse-conflicts/h1",
           kind: "file",
+          contentSha: "sha1",
         },
       ],
     },
@@ -65,6 +72,7 @@ test("mergePendingRefreshConflicts: unions deferred paths + sidecars across turn
           original: "/conversation/b.txt",
           sidecar: "/conversation/.synapse-conflicts/h2",
           kind: "file",
+          contentSha: "sha2",
         },
       ],
     },
@@ -79,7 +87,7 @@ test("mergePendingRefreshConflicts: unions deferred paths + sidecars across turn
 })
 
 test("mergePendingRefreshConflicts: same-original distinct sidecars both survive (round-10 #2)", () => {
-  const prev = {
+  const prev: RefreshMergeInput = {
     deferredConflictsBySubpath: { actor: ["/x.txt"] },
     sidecarsBySubpath: {
       actor: [
@@ -87,6 +95,7 @@ test("mergePendingRefreshConflicts: same-original distinct sidecars both survive
           original: "/actor/x.txt",
           sidecar: "/actor/.synapse-conflicts/h1",
           kind: "file",
+          contentSha: "sha1",
         },
       ],
     },
@@ -100,12 +109,14 @@ test("mergePendingRefreshConflicts: same-original distinct sidecars both survive
           original: "/actor/x.txt",
           sidecar: "/actor/.synapse-conflicts/h1",
           kind: "file",
+          contentSha: "sha1",
         },
         // same original, different content → distinct leaf → kept
         {
           original: "/actor/x.txt",
           sidecar: "/actor/.synapse-conflicts/h2",
           kind: "file",
+          contentSha: "sha2",
         },
       ],
     },
@@ -309,6 +320,7 @@ test(
               original: "/x.txt",
               sidecar: "/.synapse-conflicts/h1",
               kind: "file",
+              content_sha: "a".repeat(64),
             },
           ],
           new_base_manifest_sha256: headScan.manifest_sha256,

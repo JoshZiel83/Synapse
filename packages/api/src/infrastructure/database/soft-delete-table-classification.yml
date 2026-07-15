@@ -367,7 +367,6 @@ tables:
     liveValues:
       - provisioning
       - active
-      - committing
     deleteWhitelist:
       - securityDefinerFn
   file_parse_outputs:

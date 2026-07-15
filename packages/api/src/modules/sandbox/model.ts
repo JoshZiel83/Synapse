@@ -27,10 +27,10 @@ export interface SidecarRestoreFailure {
    * safe (file bytes in CAS, symlink target recorded) but couldn't be written
    * this turn (no live mount for the subpath yet, or a transient fs error). The
    * notice may promise a retry.
-   * "permanent" = the durable record itself LACKS the payload needed to rebuild
-   * the sidecar (a pre-round-11 / corrupt record: no contentSha for a file, no
-   * target for a symlink, or an unparseable sidecar path). It will NEVER restore;
-   * the notice must NOT promise a retry.
+   * "permanent" = the sidecar's own path is UNROUTABLE (not a safe
+   * /<mount>/.synapse-conflicts/<flat-leaf> path), so it can never be written. It
+   * will NEVER restore; the notice must NOT promise a retry. (The payload itself
+   * can't be missing — the durable ref is a strict discriminated union.)
    */
   reason: SidecarRestoreFailureReason
 }
