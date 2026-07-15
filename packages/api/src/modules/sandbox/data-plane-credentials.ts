@@ -23,7 +23,7 @@ import {
   encryptWithAad,
 } from "../../infrastructure/crypto/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
-import type { SandboxDataPlaneCredentials } from "./sandbox-backend.js"
+import type { SandboxDataPlaneCredentials } from "./sandbox-lifecycle.js"
 
 const log = createLogger("sandbox.credentials")
 

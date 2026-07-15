@@ -15,8 +15,8 @@ import {
   runDockerCapture,
   SandboxResourceGoneError,
   buildBareDockerRunArgs,
-} from "./docker-sandbox-backend.js"
-import type { SandboxSpec, SandboxHostSpec } from "./sandbox-backend.js"
+} from "./docker-sandbox.js"
+import type { SandboxSpec, SandboxHostSpec } from "./sandbox-lifecycle.js"
 import { WHOLE_SCOPE } from "@synapse/device-runtime"
 import {
   makeDockerBareAdapter,

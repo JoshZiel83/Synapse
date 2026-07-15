@@ -1,7 +1,8 @@
-// Docker sandbox backend (DooD) — implements the SandboxBackend lifecycle by
-// `docker run`-ing the cloud-sandbox image and bridging the bootstrap-on-boot
-// handshake (createCloudDevicePairing → container self-registers via
-// /api/v1/devices/bootstrap → poll the pairing session until consumed).
+// Docker sandbox (DooD) — the docker adapter's provision/connect lifecycle functions
+// (provisionDockerSandbox / connectDockerSandbox), by `docker run`-ing the cloud-sandbox
+// image and bridging the bootstrap-on-boot handshake (createCloudDevicePairing →
+// container self-registers via /api/v1/devices/bootstrap → poll the pairing session
+// until consumed).
 //
 // The data plane is unchanged: the container's device-runtime opens the frp
 // tunnel + dispatches tools over MCP exactly like any cloud device. This file
@@ -23,20 +24,19 @@ import {
   cancelPendingPairingSession,
 } from "./repo.js"
 import {
-  SandboxBackendError,
+  SandboxAdapterError,
   requireHostSpec,
-  type SandboxBackend,
   type SandboxHandle,
   type SandboxHostSpec,
   type SandboxInfo,
   type SandboxLiveness,
   type SandboxRef,
   type SandboxSpec,
-} from "./sandbox-backend.js"
+} from "./sandbox-lifecycle.js"
 
 export type SpawnImpl = typeof nodeSpawn
 
-export interface DockerSandboxBackendOptions {
+export interface DockerSandboxOptions {
   /** The cloud-sandbox image to run (SANDBOX_DOCKER_IMAGE). */
   image: string
   /** Docker network the sandbox attaches to (SANDBOX_DOCKER_NETWORK).
@@ -105,196 +105,159 @@ const STOP_GRACE_S = 5
  *  reap label-only orphans (a container created before its id was persisted). */
 export const SANDBOX_SESSION_LABEL = "synapse.sandbox.session"
 
-export function createDockerSandboxBackend(
-  opts: DockerSandboxBackendOptions
-): SandboxBackend {
+export async function provisionDockerSandbox(
+  spec: SandboxSpec,
+  opts: DockerSandboxOptions
+): Promise<SandboxHandle> {
   const spawnImpl = opts.spawnImpl ?? nodeSpawn
   const bootstrapTimeoutMs =
     opts.bootstrapTimeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS
-
   const docker = (args: string[]) => runDocker(spawnImpl, args)
-
   const createPairing = opts.createPairing ?? defaultCreatePairing
-  const failCleanup: NonNullable<DockerSandboxBackendOptions["failCleanup"]> =
+  const failCleanup: NonNullable<DockerSandboxOptions["failCleanup"]> =
     opts.failCleanup ?? ((args) => defaultDockerFailCleanup(docker, args))
 
-  return {
-    async create(spec: SandboxSpec): Promise<SandboxHandle> {
-      // Track every fact we create so a failure at ANY point (incl. a staged
-      // callback throwing) cleans up ALL of them — honoring the SandboxSpec
-      // contract: "a callback that throws aborts create() (which then runs its
-      // own cleanup)". Without this a mid-create failure leaks the pairing
-      // session, the container, and/or the bootstrapped device.
-      let pairingSessionId: string | null = null
-      let containerId: string | null = null
-      let runtimeId: string | null = null
-      try {
-        // ① mint a one-time bootstrap token + pending runtime id. P2 fork: this
-        // pairing mints a device-less kind='sandbox' runtime — the consume tx
-        // reads adapter/mode/session_id/capability_descriptor from context.
-        let pairing: CreateCloudDeviceResult
-        try {
-          pairing = await createPairing({
-            workspaceId: spec.workspaceId,
-            title: spec.title ?? `Sandbox ${spec.sessionId.slice(0, 8)}`,
-            targetRuntimeKind: "sandbox",
-            adapter: "docker",
-            mode: "resident",
-            sessionId: spec.sessionId,
-            capabilityDescriptor: {},
-          })
-        } catch (err) {
-          throw new SandboxBackendError(
-            `createCloudDevicePairing failed: ${errMsg(err)}`
-          )
-        }
-        pairingSessionId = pairing.pairingSessionId
-
-        const containerName = `synapse-sbx-${sanitizeName(spec.sessionId)}`
-
-        // ② best-effort remove a stale same-name container (verify it's ours by
-        // the session label before deleting).
-        await removeStaleContainer(docker, containerName, spec.sessionId).catch(
-          () => {}
-        )
-
-        // ③ docker run -d. The CMD overrides the image default with the full
-        // `run` command (fs-root etc. are CLI-only flags, not env).
-        const runArgs = buildDockerRunArgs({
-          opts,
-          spec,
-          containerName,
-          bootstrapToken: pairing.bootstrapToken,
-        })
-
-        try {
-          const out = await docker(runArgs)
-          containerId = out.stdout.trim().split("\n").pop()!.trim()
-          if (!containerId) {
-            throw new SandboxBackendError("docker run returned no container id")
-          }
-        } catch (err) {
-          throw err instanceof SandboxBackendError
-            ? err
-            : new SandboxBackendError(`docker run failed: ${errMsg(err)}`)
-        }
-
-        // ④ wait for the container to consume its bootstrap token (it self-
-        // registers the sandbox runtime on first boot). Surface docker logs on
-        // early exit.
-        let resolved: { runtimeId: string; runtimeServiceId: string }
-        try {
-          resolved = await (
-            opts.pollBootstrapConsumed ?? defaultPollBootstrapConsumed
-          )(pairing.pairingSessionId, bootstrapTimeoutMs)
-        } catch (err) {
-          const logs = await docker(["logs", "--tail", "50", containerId])
-            .then((r) => `${r.stdout}\n${r.stderr}`.trim())
-            .catch(() => "(docker logs unavailable)")
-          throw new SandboxBackendError(
-            `sandbox container did not bootstrap within ${bootstrapTimeoutMs}ms: ${errMsg(err)}\n--- container logs ---\n${logs}`
-          )
-        }
-        runtimeId = resolved.runtimeId
-        await spec.onRuntimeReady?.(resolved.runtimeId)
-
-        return makeDockerHandle({
-          docker,
-          spawnImpl,
-          sessionId: spec.sessionId,
-          containerId,
-          runtimeId: resolved.runtimeId,
-          runtimeServiceId: resolved.runtimeServiceId,
-          pairingSessionId: pairing.pairingSessionId,
-        })
-      } catch (err) {
-        // Comprehensive self-cleanup of everything created before the failure:
-        // the bootstrapped device (cascades its services/exposures/grants), the
-        // pending pairing session (so the token can't be reused), and the
-        // container. Idempotent + best-effort; the original error is rethrown.
-        await failCleanup({
-          workspaceId: spec.workspaceId,
-          containerId,
-          pairingSessionId,
-          runtimeId,
-        }).catch(() => {})
-        throw err
-      }
-    },
-
-    async connect(ref: SandboxRef): Promise<SandboxHandle> {
-      if (ref.adapter !== "docker") {
-        throw new SandboxBackendError(
-          `docker backend cannot connect to a ${ref.adapter} sandbox`
-        )
-      }
-      if (!ref.resourceId) {
-        throw new SandboxBackendError(
-          "docker connect: SandboxRef has no container id (resourceId)"
-        )
-      }
-      return makeDockerHandle({
-        docker,
-        spawnImpl,
-        sessionId: ref.sandboxId,
-        containerId: ref.resourceId,
-        runtimeId: ref.runtimeId,
-        runtimeServiceId: ref.runtimeServiceId ?? "",
-        pairingSessionId: ref.pairingSessionId,
+  // Track every fact we create so a failure at ANY point (incl. a staged
+  // callback throwing) cleans up ALL of them — honoring the SandboxSpec
+  // contract: "a callback that throws aborts create() (which then runs its
+  // own cleanup)". Without this a mid-create failure leaks the pairing
+  // session, the container, and/or the bootstrapped device.
+  let pairingSessionId: string | null = null
+  let containerId: string | null = null
+  let runtimeId: string | null = null
+  try {
+    // ① mint a one-time bootstrap token + pending runtime id. P2 fork: this
+    // pairing mints a device-less kind='sandbox' runtime — the consume tx
+    // reads adapter/mode/session_id/capability_descriptor from context.
+    let pairing: CreateCloudDeviceResult
+    try {
+      pairing = await createPairing({
+        workspaceId: spec.workspaceId,
+        title: spec.title ?? `Sandbox ${spec.sessionId.slice(0, 8)}`,
+        targetRuntimeKind: "sandbox",
+        adapter: "docker",
+        mode: "resident",
+        sessionId: spec.sessionId,
+        capabilityDescriptor: {},
       })
-    },
+    } catch (err) {
+      throw new SandboxAdapterError(
+        `createCloudDevicePairing failed: ${errMsg(err)}`
+      )
+    }
+    pairingSessionId = pairing.pairingSessionId
+
+    const containerName = `synapse-sbx-${sanitizeName(spec.sessionId)}`
+
+    // ② best-effort remove a stale same-name container (verify it's ours by
+    // the session label before deleting).
+    await removeStaleContainer(docker, containerName, spec.sessionId).catch(
+      () => {}
+    )
+
+    // ③ docker run -d. The CMD overrides the image default with the full
+    // `run` command (fs-root etc. are CLI-only flags, not env).
+    const runArgs = buildDockerRunArgs({
+      opts,
+      spec,
+      containerName,
+      bootstrapToken: pairing.bootstrapToken,
+    })
+
+    try {
+      const out = await docker(runArgs)
+      containerId = out.stdout.trim().split("\n").pop()!.trim()
+      if (!containerId) {
+        throw new SandboxAdapterError("docker run returned no container id")
+      }
+    } catch (err) {
+      throw err instanceof SandboxAdapterError
+        ? err
+        : new SandboxAdapterError(`docker run failed: ${errMsg(err)}`)
+    }
+
+    // ④ wait for the container to consume its bootstrap token (it self-
+    // registers the sandbox runtime on first boot). Surface docker logs on
+    // early exit.
+    let resolved: { runtimeId: string; runtimeServiceId: string }
+    try {
+      resolved = await (
+        opts.pollBootstrapConsumed ?? defaultPollBootstrapConsumed
+      )(pairing.pairingSessionId, bootstrapTimeoutMs)
+    } catch (err) {
+      const logs = await docker(["logs", "--tail", "50", containerId])
+        .then((r) => `${r.stdout}\n${r.stderr}`.trim())
+        .catch(() => "(docker logs unavailable)")
+      throw new SandboxAdapterError(
+        `sandbox container did not bootstrap within ${bootstrapTimeoutMs}ms: ${errMsg(err)}\n--- container logs ---\n${logs}`
+      )
+    }
+    runtimeId = resolved.runtimeId
+    await spec.onRuntimeReady?.(resolved.runtimeId)
+
+    return makeDockerHandle({
+      docker,
+      spawnImpl,
+      sessionId: spec.sessionId,
+      containerId,
+      runtimeId: resolved.runtimeId,
+      runtimeServiceId: resolved.runtimeServiceId,
+      pairingSessionId: pairing.pairingSessionId,
+    })
+  } catch (err) {
+    // Comprehensive self-cleanup of everything created before the failure:
+    // the bootstrapped device (cascades its services/exposures/grants), the
+    // pending pairing session (so the token can't be reused), and the
+    // container. Idempotent + best-effort; the original error is rethrown.
+    await failCleanup({
+      workspaceId: spec.workspaceId,
+      containerId,
+      pairingSessionId,
+      runtimeId,
+    }).catch(() => {})
+    throw err
   }
 }
 
 /**
- * A CONNECT-ONLY docker backend for teardown / cross-process kill / liveness.
- * Unlike createDockerSandboxBackend it needs NONE of the provision env (image /
- * network / volume / frp token) — connect()/isRunning()/kill() only shell out to
- * `docker inspect|stop|rm` against the persisted container id. This is what
- * teardown + isSandboxRuntimeAlive use so a docker sandbox is still reapable
- * after the API has fallen back to the local backend, disabled sandboxes, or
- * lost its FRP_SHARED_TOKEN — none of which should strand a running container.
- *
- * create() is intentionally unsupported (throws): a reconnect backend never
- * stands a new sandbox up.
+ * CONNECT to an existing docker sandbox from a persisted SandboxRef (teardown /
+ * cross-process kill / liveness). Needs NONE of the provision env (image / network /
+ * volume / frp token) — it only shells out to `docker inspect|stop|rm` against the
+ * persisted container id, so a docker sandbox stays reapable after the API fell back to
+ * the local adapter, disabled sandboxes, or lost its FRP_SHARED_TOKEN — none of which
+ * should strand a running container. (F-A env-free reconnect — now STRUCTURAL: connect
+ * simply takes no provision options, so there is no separate "reconnect backend" object
+ * to keep env-free.)
  */
-export function createDockerReconnectBackend(
+export async function connectDockerSandbox(
+  ref: SandboxRef,
   opts: { spawnImpl?: SpawnImpl } = {}
-): SandboxBackend {
+): Promise<SandboxHandle> {
   const spawnImpl = opts.spawnImpl ?? nodeSpawn
   const docker = (args: string[]) => runDocker(spawnImpl, args)
-  return {
-    async create(): Promise<SandboxHandle> {
-      throw new SandboxBackendError(
-        "createDockerReconnectBackend.create() is unsupported — it is connect-only"
-      )
-    },
-    async connect(ref: SandboxRef): Promise<SandboxHandle> {
-      if (ref.adapter !== "docker") {
-        throw new SandboxBackendError(
-          `docker backend cannot connect to a ${ref.adapter} sandbox`
-        )
-      }
-      if (!ref.resourceId) {
-        throw new SandboxBackendError(
-          "docker connect: SandboxRef has no container id (resourceId)"
-        )
-      }
-      return makeDockerHandle({
-        docker,
-        spawnImpl,
-        sessionId: ref.sandboxId,
-        containerId: ref.resourceId,
-        runtimeId: ref.runtimeId,
-        runtimeServiceId: ref.runtimeServiceId ?? "",
-        pairingSessionId: ref.pairingSessionId,
-      })
-    },
+  if (ref.adapter !== "docker") {
+    throw new SandboxAdapterError(
+      `docker adapter cannot connect to a ${ref.adapter} sandbox`
+    )
   }
+  if (!ref.resourceId) {
+    throw new SandboxAdapterError(
+      "docker connect: SandboxRef has no container id (resourceId)"
+    )
+  }
+  return makeDockerHandle({
+    docker,
+    spawnImpl,
+    sessionId: ref.sandboxId,
+    containerId: ref.resourceId,
+    runtimeId: ref.runtimeId,
+    runtimeServiceId: ref.runtimeServiceId ?? "",
+    pairingSessionId: ref.pairingSessionId,
+  })
 }
 
 function buildDockerRunArgs(params: {
-  opts: DockerSandboxBackendOptions
+  opts: DockerSandboxOptions
   spec: SandboxSpec
   containerName: string
   bootstrapToken: string
@@ -331,7 +294,7 @@ function buildDockerRunArgs(params: {
     // Defensive: the docker backend is selected with tunnel=frp only (enforced
     // by dockerBackendOptionsFromEnv). A 'none' here would boot a container the
     // API can never dispatch to, so refuse rather than ship a dead sandbox.
-    throw new SandboxBackendError(
+    throw new SandboxAdapterError(
       `docker backend requires tunnel='frp' (got '${opts.tunnel}'); a docker ` +
         `sandbox has no co-located loopback path`
     )
@@ -412,13 +375,13 @@ async function defaultPollBootstrapConsumed(
         status === "cancelled" ||
         status === "rejected"
       ) {
-        throw new SandboxBackendError(
+        throw new SandboxAdapterError(
           `pairing session ${pairingSessionId} is ${status} (container never bootstrapped)`
         )
       }
     }
     if (Date.now() >= deadline) {
-      throw new SandboxBackendError("bootstrap poll timed out")
+      throw new SandboxAdapterError("bootstrap poll timed out")
     }
     await sleep(POLL_INTERVAL_MS)
   }
@@ -568,12 +531,12 @@ function makeDockerHandle(args: {
     },
     pairingSessionId: args.pairingSessionId,
     getHost(): string {
-      throw new SandboxBackendError(
+      throw new SandboxAdapterError(
         "getHost: user-port exposure is not configured for the docker sandbox backend"
       )
     },
     async setTimeout(): Promise<void> {
-      throw new SandboxBackendError(
+      throw new SandboxAdapterError(
         "setTimeout is not supported by the docker sandbox backend"
       )
     },
@@ -859,7 +822,7 @@ function runDocker(
       if (code === 0) resolvePromise({ stdout, stderr })
       else
         reject(
-          new SandboxBackendError(
+          new SandboxAdapterError(
             `docker ${args[0]} exited ${code}: ${stderr.slice(0, 400)}`
           )
         )
@@ -875,7 +838,7 @@ function runDocker(
 function volumeSubpathFor(spec: SandboxHostSpec): string {
   const subpath = spec.storageVolumeSubpath?.trim()
   if (!subpath) {
-    throw new SandboxBackendError(
+    throw new SandboxAdapterError(
       `docker backend: spec.storageVolumeSubpath is required (session ${spec.sessionId}) ` +
         `so the volume-subpath mount resolves the materialized sandbox root`
     )

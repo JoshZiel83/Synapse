@@ -83,7 +83,7 @@ import {
   reapOffBoxSandboxOrphans,
   keepAliveOffBoxSandboxes,
 } from "./modules/sandbox/index.js"
-import { reapDockerSandboxOrphans } from "./modules/sandbox/docker-sandbox-backend.js"
+import { reapDockerSandboxOrphans } from "./modules/sandbox/docker-sandbox.js"
 import {
   defaultDbh,
   hasDockerMountHistory,

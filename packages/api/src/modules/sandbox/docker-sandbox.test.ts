@@ -3,17 +3,35 @@ import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import { assertIsoInstant } from "@synapse/shared/datetime"
 import {
-  createDockerSandboxBackend,
-  createDockerReconnectBackend,
+  provisionDockerSandbox,
+  connectDockerSandbox,
   reapDockerSandboxOrphans,
   probeDockerContainerLiveness,
-} from "./docker-sandbox-backend.js"
+  type DockerSandboxOptions,
+  type SpawnImpl,
+} from "./docker-sandbox.js"
 import {
-  SandboxBackendError,
+  SandboxAdapterError,
   type SandboxSpec,
+  type SandboxRef,
   type SandboxHostSpec,
-} from "./sandbox-backend.js"
+} from "./sandbox-lifecycle.js"
 import { toSandboxVolumeSubpath } from "./service.js"
+
+/** The docker adapter's provision lifecycle as the {create, connect} pair, so each test
+ *  reads naturally against the free provision/connect functions. */
+function dockerBackend(opts: DockerSandboxOptions) {
+  return {
+    create: (spec: SandboxSpec) => provisionDockerSandbox(spec, opts),
+    connect: (ref: SandboxRef) =>
+      connectDockerSandbox(ref, { spawnImpl: opts.spawnImpl }),
+  }
+}
+
+/** The ENV-FREE reconnect lifecycle (connect only — provision needs no such object). */
+function dockerReconnect(opts: { spawnImpl?: SpawnImpl } = {}) {
+  return { connect: (ref: SandboxRef) => connectDockerSandbox(ref, opts) }
+}
 
 // A fake `docker` CLI: records argv, returns scripted stdout/exit per subcommand.
 function fakeDocker(
@@ -91,7 +109,7 @@ test("docker create(): builds a correct `docker run` argv + completes the staged
     return { stdout: "" }
   })
   const staged: string[] = []
-  const backend = createDockerSandboxBackend({
+  const backend = dockerBackend({
     ...baseOpts,
     spawnImpl,
     createPairing: fakePairing(),
@@ -155,7 +173,7 @@ test("docker create(): tunnel=frp injects SYNAPSE_TUNNEL_* env", async () => {
     if (args[0] === "run") return { stdout: "cid\n" }
     return { stdout: "" }
   })
-  const backend = createDockerSandboxBackend({
+  const backend = dockerBackend({
     ...baseOpts,
     tunnel: "frp",
     tunnelAuthToken: "tok-123",
@@ -196,7 +214,7 @@ test("docker create(): omits SYNAPSE_TUNNEL_INTERNAL_BASE_URL when not configure
     if (args[0] === "run") return { stdout: "cid\n" }
     return { stdout: "" }
   })
-  const backend = createDockerSandboxBackend({
+  const backend = dockerBackend({
     ...baseOpts,
     tunnel: "frp",
     tunnelAuthToken: "tok-123",
@@ -217,7 +235,7 @@ test("docker create(): omits SYNAPSE_TUNNEL_INTERNAL_BASE_URL when not configure
 
 // ── R4 #2: a connect-only docker backend needs no provision env.
 
-test("createDockerReconnectBackend: connect + kill by container id (no provision opts)", async () => {
+test("connectDockerSandbox: connect + kill by container id (no provision opts)", async () => {
   const seen: string[][] = []
   const { spawnImpl } = fakeDocker((args) => {
     seen.push(args)
@@ -225,7 +243,7 @@ test("createDockerReconnectBackend: connect + kill by container id (no provision
     return { stdout: "" }
   })
   // Note: NO image/network/volume/frp opts — just the spawn seam.
-  const backend = createDockerReconnectBackend({ spawnImpl })
+  const backend = dockerReconnect({ spawnImpl })
   const handle = await backend.connect({
     adapter: "docker",
     mode: "resident",
@@ -307,18 +325,9 @@ test("R3.4 probeDockerContainerLiveness: a daemon/transport error → 'unknown' 
   assert.equal(await probeDockerContainerLiveness(spawnErr, "cid"), "unknown")
 })
 
-test("createDockerReconnectBackend: create() is unsupported (connect-only)", async () => {
+test("connectDockerSandbox: rejects a non-docker ref + a ref without container id", async () => {
   const { spawnImpl } = fakeDocker(() => ({ stdout: "" }))
-  const backend = createDockerReconnectBackend({ spawnImpl })
-  await assert.rejects(
-    () => backend.create(baseSpec()),
-    /connect-only|unsupported/
-  )
-})
-
-test("createDockerReconnectBackend: rejects a non-docker ref + a ref without container id", async () => {
-  const { spawnImpl } = fakeDocker(() => ({ stdout: "" }))
-  const backend = createDockerReconnectBackend({ spawnImpl })
+  const backend = dockerReconnect({ spawnImpl })
   await assert.rejects(
     () =>
       backend.connect({
@@ -328,7 +337,7 @@ test("createDockerReconnectBackend: rejects a non-docker ref + a ref without con
         resourceId: "c",
         runtimeId: "d",
       }),
-    SandboxBackendError
+    SandboxAdapterError
   )
   await assert.rejects(
     () =>
@@ -355,7 +364,7 @@ test("docker create(): bootstrap timeout self-cleans container + pairing + devic
     return { stdout: "" }
   })
   const cleaned: Array<Record<string, unknown>> = []
-  const backend = createDockerSandboxBackend({
+  const backend = dockerBackend({
     ...baseOpts,
     spawnImpl,
     createPairing: fakePairing(),
@@ -386,7 +395,7 @@ test("docker create(): a throwing onDeviceClaimed self-cleans the bootstrapped d
     return { stdout: "" }
   })
   const cleaned: Array<Record<string, unknown>> = []
-  const backend = createDockerSandboxBackend({
+  const backend = dockerBackend({
     ...baseOpts,
     spawnImpl,
     createPairing: fakePairing(),
@@ -421,7 +430,7 @@ test("docker create(): a throwing onDeviceClaimed self-cleans the bootstrapped d
 
 test("docker connect(): rejects non-docker ref + requires a container id", async () => {
   const { spawnImpl } = fakeDocker(() => ({ stdout: "" }))
-  const backend = createDockerSandboxBackend({ ...baseOpts, spawnImpl })
+  const backend = dockerBackend({ ...baseOpts, spawnImpl })
   await assert.rejects(
     () =>
       backend.connect({
@@ -431,7 +440,7 @@ test("docker connect(): rejects non-docker ref + requires a container id", async
         resourceId: "",
         runtimeId: "d",
       }),
-    SandboxBackendError
+    SandboxAdapterError
   )
   await assert.rejects(
     () =>
@@ -452,7 +461,7 @@ test("docker connect: empty runtimeId still kills the container (half-provisione
     seen.push(args)
     return { stdout: "" }
   })
-  const backend = createDockerSandboxBackend({ ...baseOpts, spawnImpl })
+  const backend = dockerBackend({ ...baseOpts, spawnImpl })
   // Crash after `docker run` but before the runtime was ready: container id known,
   // runtimeId is "". teardown must still reap the container.
   const handle = await backend.connect({
@@ -476,7 +485,7 @@ test("docker handle: kill() stops + removes the container; isRunning inspects", 
     if (args[0] === "inspect") return { stdout: "true\n" }
     return { stdout: "" }
   })
-  const backend = createDockerSandboxBackend({ ...baseOpts, spawnImpl })
+  const backend = dockerBackend({ ...baseOpts, spawnImpl })
   const handle = await backend.connect({
     adapter: "docker",
     mode: "resident",
@@ -500,7 +509,7 @@ test("docker handle: kill() stops + removes the container; isRunning inspects", 
 
 test("docker handle: setTimeout + getHost throw (no silent no-op / fake host)", async () => {
   const { spawnImpl } = fakeDocker(() => ({ stdout: "" }))
-  const backend = createDockerSandboxBackend({ ...baseOpts, spawnImpl })
+  const backend = dockerBackend({ ...baseOpts, spawnImpl })
   const handle = await backend.connect({
     adapter: "docker",
     mode: "resident",
@@ -508,8 +517,8 @@ test("docker handle: setTimeout + getHost throw (no silent no-op / fake host)", 
     resourceId: "c",
     runtimeId: "d",
   })
-  await assert.rejects(() => handle.setTimeout(1000), SandboxBackendError)
-  assert.throws(() => handle.getHost(8080), SandboxBackendError)
+  await assert.rejects(() => handle.setTimeout(1000), SandboxAdapterError)
+  assert.throws(() => handle.getHost(8080), SandboxAdapterError)
 })
 
 // ── compose-layout coverage (Fix #1): the volume-subpath the container mounts
@@ -561,7 +570,7 @@ test("docker create(): spec without storageVolumeSubpath fails loud (never mount
     return { stdout: "" }
   })
   const cleaned: Array<Record<string, unknown>> = []
-  const backend = createDockerSandboxBackend({
+  const backend = dockerBackend({
     ...baseOpts,
     spawnImpl,
     createPairing: fakePairing(),

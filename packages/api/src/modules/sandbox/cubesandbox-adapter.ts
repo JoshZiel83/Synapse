@@ -17,14 +17,14 @@ import { config } from "../../config/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
 import { deleteRuntime, mintBareSandboxRuntime } from "../devices/service.js"
 import {
-  SandboxBackendError,
+  SandboxAdapterError,
   type SandboxDataPlaneCredentials,
   type SandboxHandle,
   type SandboxInfo,
   type SandboxLiveness,
   type SandboxRef,
   type SandboxSpec,
-} from "./sandbox-backend.js"
+} from "./sandbox-lifecycle.js"
 import {
   registerBareDataPlane,
   unregisterBareDataPlane,
@@ -282,7 +282,7 @@ export function makeCubesandboxBareAdapter(
   const envdFactory = deps.envdFactory ?? makeEnvdClient
   const metaEntry = sandboxAdapterMetadata("cubesandbox", "bare")
   if (!metaEntry) {
-    throw new SandboxBackendError(
+    throw new SandboxAdapterError(
       "no adapter-metadata leaf for 'cubesandbox:bare' (registry/metadata drift)"
     )
   }
@@ -331,13 +331,13 @@ export function makeCubesandboxBareAdapter(
           metadata: createMetadata,
         })
         .catch((err) => {
-          throw new SandboxBackendError(
+          throw new SandboxAdapterError(
             `cubesandbox create failed: ${errMessage(err)}`
           )
         })
       const sandboxID = created.sandboxID
       if (!sandboxID) {
-        throw new SandboxBackendError(
+        throw new SandboxAdapterError(
           "cubesandbox create returned no sandbox id"
         )
       }
@@ -371,7 +371,7 @@ export function makeCubesandboxBareAdapter(
         // VM down and the spine retries — rather than persisting a guessed arch.
         const platformArch = await detectCubePlatformArchOrNull(envd)
         if (!platformArch) {
-          throw new SandboxBackendError(
+          throw new SandboxAdapterError(
             "cubesandbox platform/arch probe failed after retries — refusing to " +
               "persist a guessed architecture (would misgrant platform-specific tool bundles)"
           )
@@ -445,7 +445,7 @@ export function makeCubesandboxBareAdapter(
     },
     async connect(ref: SandboxRef): Promise<SandboxHandle> {
       if (ref.adapter !== "cubesandbox" || ref.mode !== "bare") {
-        throw new SandboxBackendError(
+        throw new SandboxAdapterError(
           `cubesandbox:bare adapter cannot connect to a ${ref.adapter}:${ref.mode} sandbox`
         )
       }
@@ -722,7 +722,7 @@ function makeCubesandboxBareHandle(args: {
       dataPlaneEndpoint: `envd:${args.sandboxID}`,
     },
     getHost(): string {
-      throw new SandboxBackendError(
+      throw new SandboxAdapterError(
         "getHost is not supported (cubesandbox:bare)"
       )
     },
@@ -775,7 +775,7 @@ function makeCubesandboxBareRefHandle(
       dataPlaneEndpoint: `envd:${sandboxID}`,
     },
     getHost(): string {
-      throw new SandboxBackendError(
+      throw new SandboxAdapterError(
         "getHost is not supported (cubesandbox:bare)"
       )
     },

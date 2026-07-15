@@ -36,7 +36,7 @@ import {
   hasLiveLocalSandboxMount,
 } from "../devices/repo.js"
 import { validateTunnelInternalUrl } from "../devices/control-plane.js"
-import { reapDockerSandboxOrphans } from "./docker-sandbox-backend.js"
+import { reapDockerSandboxOrphans } from "./docker-sandbox.js"
 import {
   isSandboxRuntimeAlive,
   reconcileSandboxes,

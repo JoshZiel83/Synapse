@@ -4,15 +4,27 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
-  createLocalSandboxBackend,
+  provisionLocalSandbox,
+  connectLocalSandbox,
   readHostPidIdentity,
   verifyPidIdentity,
-  SandboxBackendError,
+  SandboxAdapterError,
+  type LocalProvisionDeps,
   type SandboxSpec,
+  type SandboxRef,
   type SandboxHostSpec,
-} from "./sandbox-backend.js"
+} from "./sandbox-lifecycle.js"
 import type { HostProvider, RunHandle } from "./host-provider.js"
 import type { mintLocalSandboxRuntime } from "../devices/service.js"
+
+/** The local adapter's lifecycle as the {create, connect} pair the adapter exposes, so
+ *  each test reads naturally against the free provision/connect functions. */
+function localBackend(deps: LocalProvisionDeps) {
+  return {
+    create: (spec: SandboxSpec) => provisionLocalSandbox(spec, deps),
+    connect: (ref: SandboxRef) => connectLocalSandbox(ref),
+  }
+}
 
 // Direct-mint (§4.6): the local backend authors a device-less sandbox-kind
 // runtime + broker identity in-process (no pairing round-trip). These tests
@@ -74,7 +86,7 @@ function spyMint(box: { args?: MintArgs }): typeof mintLocalSandboxRuntime {
 test("local backend create(): mints a device-less runtime + fires onRuntimeReady + builds the runtimeLink handle", async () => {
   const box: { args?: MintArgs } = {}
   const calls: string[] = []
-  const backend = createLocalSandboxBackend({
+  const backend = localBackend({
     hostProvider: stubProvider(),
     mintRuntime: spyMint(box),
   })
@@ -108,7 +120,7 @@ test("local backend: mint failure self-cleans (runtimeId null — nothing minted
     brokerDir: string
   }> = []
   let ran = false
-  const backend = createLocalSandboxBackend({
+  const backend = localBackend({
     hostProvider: stubProvider({
       async run(): Promise<RunHandle> {
         ran = true
@@ -136,7 +148,7 @@ test("local backend: run failure self-cleans the minted runtime (no leak)", asyn
     runtimeId: string | null
     brokerDir: string
   }> = []
-  const backend = createLocalSandboxBackend({
+  const backend = localBackend({
     hostProvider: stubProvider({
       async run(): Promise<RunHandle> {
         throw new Error("run boom")
@@ -158,7 +170,7 @@ test("local backend: run failure self-cleans the minted runtime (no leak)", asyn
 test("local backend: a throwing onRuntimeReady self-cleans + aborts create()", async () => {
   const box: { args?: MintArgs } = {}
   const cleaned: Array<{ runtimeId: string | null }> = []
-  const backend = createLocalSandboxBackend({
+  const backend = localBackend({
     hostProvider: stubProvider(),
     mintRuntime: spyMint(box),
     failCleanup: async (a) => {
@@ -181,30 +193,30 @@ test("local backend: a throwing onRuntimeReady self-cleans + aborts create()", a
 })
 
 test("local handle: setTimeout throws unsupported (never a silent no-op)", async () => {
-  const backend = createLocalSandboxBackend({
+  const backend = localBackend({
     hostProvider: stubProvider(),
     mintRuntime: spyMint({}),
   })
   const handle = await backend.create(makeSpec())
   await assert.rejects(
     () => handle.setTimeout(1000),
-    SandboxBackendError,
+    SandboxAdapterError,
     "setTimeout must throw, not silently no-op"
   )
 })
 
 test("local handle: getHost throws (no user-port routing in v1)", async () => {
-  const backend = createLocalSandboxBackend({
+  const backend = localBackend({
     hostProvider: stubProvider(),
     mintRuntime: spyMint({}),
   })
   const handle = await backend.create(makeSpec())
-  assert.throws(() => handle.getHost(3000), SandboxBackendError)
+  assert.throws(() => handle.getHost(3000), SandboxAdapterError)
 })
 
 test("local handle: kill() delegates to the RunHandle.stop", async () => {
   let stopped = false
-  const backend = createLocalSandboxBackend({
+  const backend = localBackend({
     hostProvider: stubProvider({
       async run(): Promise<RunHandle> {
         return {
@@ -223,7 +235,7 @@ test("local handle: kill() delegates to the RunHandle.stop", async () => {
 })
 
 test("local backend connect(): rejects a non-local ref", async () => {
-  const backend = createLocalSandboxBackend({
+  const backend = localBackend({
     hostProvider: stubProvider(),
     mintRuntime: spyMint({}),
   })
@@ -236,7 +248,7 @@ test("local backend connect(): rejects a non-local ref", async () => {
         resourceId: "container-abc",
         runtimeId: "rt-1",
       }),
-    SandboxBackendError
+    SandboxAdapterError
   )
 })
 
@@ -266,7 +278,7 @@ test("R3.6 verifyPidIdentity: null token → unknown; matching → match; wrong 
 })
 
 test("R3.6 local ref kill REFUSES to signal on an identity mismatch (never SIGTERMs a reused pid)", async () => {
-  const backend = createLocalSandboxBackend({
+  const backend = localBackend({
     hostProvider: stubProvider(),
     mintRuntime: spyMint({}),
   })
@@ -301,7 +313,7 @@ test("R3.6 local ref kill REFUSES to signal on an identity mismatch (never SIGTE
 })
 
 test("R3.6 local ref probeLiveness: NULL identity token → unknown (shield, never signal)", async () => {
-  const backend = createLocalSandboxBackend({
+  const backend = localBackend({
     hostProvider: stubProvider(),
     mintRuntime: spyMint({}),
   })
@@ -338,7 +350,7 @@ function isSelfAlive(): boolean {
 }
 
 test("local backend connect(): rebuilds a kill-capable handle from a ref", async () => {
-  const backend = createLocalSandboxBackend({
+  const backend = localBackend({
     hostProvider: stubProvider(),
     mintRuntime: spyMint({}),
   })

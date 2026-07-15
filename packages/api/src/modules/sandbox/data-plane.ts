@@ -43,11 +43,11 @@ import {
   runDockerCapture,
   SandboxResourceGoneError,
   type SpawnImpl,
-} from "./docker-sandbox-backend.js"
+} from "./docker-sandbox.js"
 import type { McpDispatchResult } from "../devices/dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
 import type { SandboxCapabilityDescriptor } from "./model.js"
-import type { SandboxDataPlaneCredentials } from "./sandbox-backend.js"
+import type { SandboxDataPlaneCredentials } from "./sandbox-lifecycle.js"
 
 /** Mount roots the whole-scope search fans out over (== SANDBOX_MOUNT_POINTS). */
 const MOUNT_ROOTS: readonly string[] = [...SANDBOX_MOUNT_POINTS]

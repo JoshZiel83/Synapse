@@ -1,6 +1,6 @@
-// Sandbox ADAPTER registry (§4.1 / §4.7.2). Supersedes the P2 `selectSandboxBackend`
-// (which forked ONLY on provider and never on mode — so SANDBOX_MODE=bare was
-// inert). An adapter is keyed `${provider}:${mode}` and carries the metadata the
+// Sandbox ADAPTER registry (§4.1 / §4.7.2). The SandboxAdapter is the SOLE lifecycle
+// abstraction — it carries create/connect directly (there is no second wrapper
+// interface). An adapter is keyed `${provider}:${mode}` and carries the metadata the
 // provision spine forks on (capabilities, meta.offBox / kind) plus the lifecycle
 // (create/connect). The bare data plane is rebuilt lazily by bare-dispatch on a
 // registry miss (adapter-bound endpoint scheme, P1.3); it is NOT carried on the
@@ -12,14 +12,14 @@
 // guard, which is why the adapter.rebuildDataPlane + off-box working-set seam are
 // built + VALIDATED alongside it (R4).
 //
-// F-A (preserved): a docker adapter's teardown/liveness/reconnect NEVER forces
-// the provision config to evaluate. `create()` (provision) is backed by
-// createDockerSandboxBackend(dockerBackendOptionsFromEnv()) evaluated LAZILY only
-// when create() is actually invoked; `connect()` (teardown/liveness/reconnect) is
-// backed by the env-free createDockerReconnectBackend. So a docker sandbox stays
-// reapable after a fallback to local / SANDBOX_PROVIDER=none / a lost
-// FRP_SHARED_TOKEN. adapterForRow ALWAYS resolves from the persisted row, never
-// current config (inv-45).
+// F-A (preserved): a docker adapter's teardown/liveness/reconnect NEVER forces the
+// provision config to evaluate. `create()` (provision) calls
+// provisionDockerSandbox(dockerBackendOptionsFromEnv()) with the env read LAZILY only
+// when create() is actually invoked; `connect()` (teardown/liveness/reconnect) calls the
+// env-free connectDockerSandbox (it takes no provision options at all). So a docker
+// sandbox stays reapable after a fallback to local / SANDBOX_PROVIDER=none / a lost
+// FRP_SHARED_TOKEN. adapterForRow ALWAYS resolves from the persisted row, never current
+// config (inv-45).
 
 import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
@@ -31,10 +31,10 @@ import { createLogger } from "../../infrastructure/logger/index.js"
 import { deleteRuntime, mintBareSandboxRuntime } from "../devices/service.js"
 import { bwrapAvailable, detectRipgrep } from "@synapse/device-runtime"
 import {
-  createLocalSandboxBackend,
+  provisionLocalSandbox,
+  connectLocalSandbox,
   requireHostSpec,
-  SandboxBackendError,
-  type SandboxBackend,
+  SandboxAdapterError,
   type SandboxDataPlaneCredentials,
   type SandboxHandle,
   type WorkingSetHandle,
@@ -42,17 +42,17 @@ import {
   type SandboxLiveness,
   type SandboxRef,
   type SandboxSpec,
-} from "./sandbox-backend.js"
+} from "./sandbox-lifecycle.js"
 import {
-  createDockerSandboxBackend,
-  createDockerReconnectBackend,
+  provisionDockerSandbox,
+  connectDockerSandbox,
   buildBareDockerRunArgs,
   runDockerCapture,
   probeDockerContainerLiveness,
   SANDBOX_SESSION_LABEL,
-  type DockerSandboxBackendOptions,
+  type DockerSandboxOptions,
   type SpawnImpl,
-} from "./docker-sandbox-backend.js"
+} from "./docker-sandbox.js"
 import { createLocalHostProvider, type HostProvider } from "./host-provider.js"
 import {
   createLocalBareDataPlane,
@@ -299,7 +299,7 @@ function metaFor(
 } {
   const entry = sandboxAdapterMetadata(provider, mode)
   if (!entry) {
-    throw new SandboxBackendError(
+    throw new SandboxAdapterError(
       `no adapter-metadata leaf for '${provider}:${mode}' (registry/metadata drift)`
     )
   }
@@ -315,7 +315,7 @@ function metaFor(
  *  (Relocated from service.ts so the registry can build the LAZY provision backend
  *  without a value cycle. Consumed HERE only — the docker:resident factory below;
  *  service.ts no longer imports it.) */
-export function dockerBackendOptionsFromEnv(): DockerSandboxBackendOptions {
+export function dockerBackendOptionsFromEnv(): DockerSandboxOptions {
   const dk = config.sandbox.docker
   const tunnel: "frp" = "frp"
   return {
@@ -362,7 +362,6 @@ function makeLocalResidentAdapter(deps?: {
   readiness?: ResidentReadinessWaiters
 }): SandboxAdapter {
   const hostProvider = deps?.hostProvider ?? createLocalHostProvider()
-  const backend: SandboxBackend = createLocalSandboxBackend({ hostProvider })
   const { meta, endpoint, kind } = metaFor("local", "resident")
   return {
     key: "local:resident",
@@ -372,8 +371,8 @@ function makeLocalResidentAdapter(deps?: {
     capabilities: null,
     meta,
     endpoint,
-    create: (spec) => backend.create(spec),
-    connect: (ref) => backend.connect(ref),
+    create: (spec) => provisionLocalSandbox(spec, { hostProvider }),
+    connect: (ref) => connectLocalSandbox(ref),
     ready: (handle, opts) => residentReady(deps?.readiness, handle, opts),
     // R4 Phase 1c: resident sandboxes are CAS-materialized on the host; the
     // product bridge is the existing pass-through spine primitive.
@@ -387,12 +386,10 @@ function makeDockerResidentAdapter(deps?: {
   dockerSpawnImpl?: SpawnImpl
   readiness?: ResidentReadinessWaiters
 }): SandboxAdapter {
-  // F-A: connect (teardown/liveness/reconnect) uses the ENV-FREE reconnect
-  // backend; create (provision) lazily builds the provision backend ONLY when
-  // invoked. The two never share the provision factory on the teardown path.
-  const reconnect = createDockerReconnectBackend({
-    spawnImpl: deps?.dockerSpawnImpl,
-  })
+  // F-A: connect (teardown/liveness/reconnect) is ENV-FREE — connectDockerSandbox
+  // takes only the spawnImpl seam, no provision env; create (provision) reads
+  // dockerBackendOptionsFromEnv() LAZILY, ONLY when invoked. The teardown path never
+  // touches the provision env.
   const { meta, endpoint, kind } = metaFor("docker", "resident")
   return {
     key: "docker:resident",
@@ -403,8 +400,9 @@ function makeDockerResidentAdapter(deps?: {
     meta,
     endpoint,
     create: (spec) =>
-      createDockerSandboxBackend(dockerBackendOptionsFromEnv()).create(spec),
-    connect: (ref) => reconnect.connect(ref),
+      provisionDockerSandbox(spec, dockerBackendOptionsFromEnv()),
+    connect: (ref) =>
+      connectDockerSandbox(ref, { spawnImpl: deps?.dockerSpawnImpl }),
     ready: (handle, opts) => residentReady(deps?.readiness, handle, opts),
     workingSet: () => createProductWorkingSetBridge(),
     // R4 Phase 1d: the docker label reaper (reapDockerSandboxOrphans) stays in
@@ -529,7 +527,7 @@ export function makeLocalBareAdapter(
     },
     async connect(ref: SandboxRef): Promise<SandboxHandle> {
       if (ref.adapter !== "local" || ref.mode !== "bare") {
-        throw new SandboxBackendError(
+        throw new SandboxAdapterError(
           `local:bare adapter cannot connect to a ${ref.adapter}:${ref.mode} sandbox`
         )
       }
@@ -583,12 +581,12 @@ function makeLocalBareHandle(args: {
       dataPlaneEndpoint: args.dataPlaneEndpoint,
     },
     getHost(): string {
-      throw new SandboxBackendError(
+      throw new SandboxAdapterError(
         "getHost: user-port exposure is not configured for the local:bare sandbox adapter"
       )
     },
     async setTimeout(): Promise<void> {
-      throw new SandboxBackendError(
+      throw new SandboxAdapterError(
         "setTimeout is not supported by the local:bare sandbox adapter"
       )
     },
@@ -635,10 +633,10 @@ function makeLocalBareRefHandle(ref: SandboxRef): SandboxHandle {
       dataPlaneEndpoint: `inprocess:${ref.runtimeId}`,
     },
     getHost(): string {
-      throw new SandboxBackendError("getHost is not supported (local:bare)")
+      throw new SandboxAdapterError("getHost is not supported (local:bare)")
     },
     async setTimeout(): Promise<void> {
-      throw new SandboxBackendError("setTimeout is not supported (local:bare)")
+      throw new SandboxAdapterError("setTimeout is not supported (local:bare)")
     },
     async probeLiveness(): Promise<SandboxLiveness> {
       return getLiveBareDataPlane(ref.runtimeId) !== undefined
@@ -772,7 +770,7 @@ export function makeDockerBareAdapter(
       const apiUid =
         typeof process.getuid === "function" ? process.getuid() : undefined
       if (apiUid !== undefined && (runOpts.runAsUid ?? 0) !== apiUid) {
-        throw new SandboxBackendError(
+        throw new SandboxAdapterError(
           `docker:bare uid-parity violation: runAsUid=${runOpts.runAsUid ?? 0} != API uid ${apiUid}${
             apiUid === 0
               ? " (API runs as root → the container also runs as root; run the API unprivileged for real isolation)"
@@ -787,7 +785,7 @@ export function makeDockerBareAdapter(
         m.replace(/^\//, "")
       ).filter((name) => existsSync(join(host.sandboxRoot, name)))
       if (mountPoints.length === 0) {
-        throw new SandboxBackendError(
+        throw new SandboxAdapterError(
           `docker:bare: no mount-point dirs exist under ${host.sandboxRoot}`
         )
       }
@@ -804,18 +802,18 @@ export function makeDockerBareAdapter(
         mountPoints,
       })
       const runRes = await runDockerCapture(spawnImpl, runArgs).catch((err) => {
-        throw new SandboxBackendError(
+        throw new SandboxAdapterError(
           `docker run (bare) failed: ${err instanceof Error ? err.message : String(err)}`
         )
       })
       if (runRes.code !== 0) {
-        throw new SandboxBackendError(
+        throw new SandboxAdapterError(
           `docker run (bare) exited ${runRes.code}: ${runRes.stderr.slice(0, 300)}`
         )
       }
       const containerId = runRes.stdout.trim().split("\n").pop()?.trim() ?? ""
       if (!containerId) {
-        throw new SandboxBackendError(
+        throw new SandboxAdapterError(
           "docker run (bare) returned no container id"
         )
       }
@@ -834,7 +832,7 @@ export function makeDockerBareAdapter(
           { containerId }
         )
         if (probe.code !== 0) {
-          throw new SandboxBackendError(
+          throw new SandboxAdapterError(
             `docker:bare image '${runOpts.bareImage}' lacks timeout/bash (exec probe exit ${probe.code})`
           )
         }
@@ -885,7 +883,7 @@ export function makeDockerBareAdapter(
     },
     async connect(ref: SandboxRef): Promise<SandboxHandle> {
       if (ref.adapter !== "docker" || ref.mode !== "bare") {
-        throw new SandboxBackendError(
+        throw new SandboxAdapterError(
           `docker:bare adapter cannot connect to a ${ref.adapter}:${ref.mode} sandbox`
         )
       }
@@ -958,10 +956,10 @@ function makeDockerBareHandle(args: {
       dataPlaneEndpoint: `docker-exec:${args.containerId}`,
     },
     getHost(): string {
-      throw new SandboxBackendError("getHost is not supported (docker:bare)")
+      throw new SandboxAdapterError("getHost is not supported (docker:bare)")
     },
     async setTimeout(): Promise<void> {
-      throw new SandboxBackendError("setTimeout is not supported (docker:bare)")
+      throw new SandboxAdapterError("setTimeout is not supported (docker:bare)")
     },
     async probeLiveness(): Promise<SandboxLiveness> {
       return probeDockerContainerLiveness(args.spawnImpl, args.containerId)
@@ -1004,10 +1002,10 @@ function makeDockerBareRefHandle(
       dataPlaneEndpoint: `docker-exec:${containerId}`,
     },
     getHost(): string {
-      throw new SandboxBackendError("getHost is not supported (docker:bare)")
+      throw new SandboxAdapterError("getHost is not supported (docker:bare)")
     },
     async setTimeout(): Promise<void> {
-      throw new SandboxBackendError("setTimeout is not supported (docker:bare)")
+      throw new SandboxAdapterError("setTimeout is not supported (docker:bare)")
     },
     async probeLiveness(): Promise<SandboxLiveness> {
       return probeDockerContainerLiveness(spawnImpl, containerId)
@@ -1135,7 +1133,7 @@ export function adapterForRow(
   const key = `${adapter}:${mode}`
   const factory = ADAPTER_FACTORIES[key]
   if (!factory) {
-    throw new SandboxBackendError(
+    throw new SandboxAdapterError(
       `adapterForRow: unknown persisted adapter key '${key}' (fail-closed; no legacy downgrade)`
     )
   }

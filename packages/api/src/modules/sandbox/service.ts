@@ -59,12 +59,9 @@ import {
   type SandboxLiveness,
   type SandboxRef,
   type SandboxSpec,
-} from "./sandbox-backend.js"
+} from "./sandbox-lifecycle.js"
 import type { OffBoxWorkingSetBridge } from "./data-plane.js"
-import {
-  reapDockerSandboxOrphans,
-  type SpawnImpl,
-} from "./docker-sandbox-backend.js"
+import { reapDockerSandboxOrphans, type SpawnImpl } from "./docker-sandbox.js"
 import {
   markBareDataPlaneClosing,
   clearBareDataPlaneClosing,
@@ -176,7 +173,7 @@ type SessionContext = repo.SessionContext
  * child doesn't have to round-trip the public domain (DNS/hairpin-NAT). Falls
  * back to config.app.baseUrl (the prior unconditional value) when unset.
  *
- * NOTE: this is the LOCAL backend's source. The docker backend does NOT read
+ * NOTE: this is the LOCAL adapter's provision. The docker adapter does NOT read
  * spec.serverOrigin — it builds its own from the same env in
  * dockerBackendOptionsFromEnv (opts.serverOrigin) — so this never affects it.
  */
@@ -185,13 +182,13 @@ export function sandboxLocalServerOrigin(): string {
 }
 
 /**
- * The spec.storageVolumeSubpath value for a given backend. It is a DOCKER-ONLY
- * field (the docker backend mounts the session's subpath of the shared storage
- * volume into the container; the local backend ignores it). Computing it for
- * the local backend was a latent bug: toSandboxVolumeSubpath REQUIRES STORAGE_DIR
+ * The spec.storageVolumeSubpath value for a given adapter. It is a DOCKER-ONLY
+ * field (the docker adapter mounts the session's subpath of the shared storage
+ * volume into the container; the local adapter ignores it). Computing it for
+ * the local adapter was a latent bug: toSandboxVolumeSubpath REQUIRES STORAGE_DIR
  * to live under the volume mount point (default /app/storage) and throws
  * otherwise — which on a bare-metal API (default STORAGE_DIR=/tmp/synapse-storage)
- * aborts provision before the backend even starts. So compute it only for docker;
+ * aborts provision before the adapter even starts. So compute it only for docker;
  * local gets undefined.
  *
  * Pure (takes storageDir/mountPoint explicitly rather than reading the module
@@ -210,16 +207,16 @@ export function sandboxSpecVolumeSubpath(
  *
  * Crucially this must NOT depend on the current provision env: a docker sandbox
  * has to stay reapable even after the API fell back to the local adapter, had
- * sandboxes disabled, or lost its FRP_SHARED_TOKEN — so we use the connect-only
- * docker adapter (docker CLI + persisted container id, no image/network/volume/
- * frp config), never createDockerSandboxBackend(dockerBackendOptionsFromEnv()).
+ * sandboxes disabled, or lost its FRP_SHARED_TOKEN — so its connect() is the env-free
+ * connectDockerSandbox (docker CLI + persisted container id, no image/network/volume/
+ * frp config), never the eager provisionDockerSandbox(dockerBackendOptionsFromEnv()).
  */
 function adapterForKind(
   ref: SandboxRef,
   dockerSpawnImpl?: SpawnImpl
 ): SandboxAdapter {
   // Row-driven (adapter + mode), NEVER current config (inv-45). For docker this
-  // resolves the ENV-FREE reconnect backend (F-A); create() is never called on a
+  // resolves the ENV-FREE connect path (F-A); create() is never called on a
   // connect-only adapter. adapterForRow keeps that split.
   return adapterForRow(ref.adapter, ref.mode, { dockerSpawnImpl })
 }
@@ -415,7 +412,7 @@ export async function sandboxUnauthorizedDeny(
  * BEFORE the sandboxes row was minted (docker pre-bootstrap), so no row can build a
  * killable ref — are reaped separately via {@link reapDockerSandboxOrphans}, which
  * scans `docker ps` by the session LABEL and removes any whose session isn't in the
- * live set. Only runs when the docker backend has history. Bounded; best-effort; logs.
+ * live set. Only runs when the docker adapter has history. Bounded; best-effort; logs.
  */
 /**
  * Deps for reconcileSandboxes — all default to production. The reaper-survival
@@ -954,7 +951,7 @@ async function ensureSessionSpaces(ctx: SessionContext): Promise<SpaceSpec[]> {
 }
 
 export interface ProvisionSandboxOptions {
-  /** Inject a HostProvider (local backend wraps it). Test seam. */
+  /** Inject a HostProvider (local adapter wraps it). Test seam. */
   hostProvider?: HostProvider
   /** Max ms to wait for the runtime catalog to sync. */
   catalogTimeoutMs?: number
@@ -1118,7 +1115,7 @@ export async function provisionSandbox(
   // crashed mid-flight, the runtime died behind active mounts, OR the runtime is
   // alive but never re-registered a dispatchable tunnel endpoint (post-restart).
   // Recover by tearing the stale sandbox down first — teardown commits any dirty
-  // state, kills the (possibly dead) runtime via the persisted backend, and
+  // state, kills the (possibly dead) runtime via the persisted adapter, and
   // closes the mounts — so the fresh provision below starts from a clean slate.
   // Live dirs are preserved by teardown's commit path; their content is
   // re-materialized from CAS on re-provision.
@@ -1135,7 +1132,7 @@ export async function provisionSandbox(
     if (existing.some((m) => m.status === "provisioning")) {
       // (R6 H-3) Resolve the in-flight row by SESSION_ID, NOT via runtimeIdFromMounts
       // (mount.sandbox_id). sandbox_id is back-filled onto the mount only AFTER the
-      // sandboxes row is minted inside backend.create(); during that window
+      // sandboxes row is minted inside the adapter's create(); during that window
       // runtimeIdFromMounts(existing) is null, so the old guard saw no in-flight row and
       // fell through to teardownSandbox — killing the first worker's fresh VM (the
       // double-create → unsandboxed turn). A session-scoped lookup sees the
@@ -1230,7 +1227,7 @@ export async function provisionSandbox(
   // Hoisted so the catch can tear down whatever was created.
   let handle: SandboxHandle | null = null
   try {
-    // ⑥ stand up the runtime via the selected backend. Staged-persistence
+    // ⑥ stand up the runtime via the selected adapter. Staged-persistence
     // callbacks write each fact onto ALL mounts the instant it exists so a
     // mid-provision crash leaves the startup reconciler enough to reattach or
     // safely clean up. Each callback is idempotent across the session's mounts.
@@ -1278,9 +1275,9 @@ export async function provisionSandbox(
             sessionId,
           }),
           fsHelperPath,
-          // The device dials back to the API. LOCAL backend: SANDBOX_SERVER_ORIGIN
+          // The device dials back to the API. LOCAL adapter: SANDBOX_SERVER_ORIGIN
           // (loopback for a containerized local deploy) or config.app.baseUrl. The
-          // docker backend ignores this and builds its own origin from env.
+          // docker adapter ignores this and builds its own origin from env.
           serverOrigin: sandboxLocalServerOrigin(),
           // ALWAYS run this per-session device in sandbox mode (--cmd-sandbox),
           // even when bwrap is unavailable. The device-runtime's --cmd-sandbox
@@ -1376,7 +1373,7 @@ export async function provisionSandbox(
     // catalog ONLY when ITS OWN host can confine commands (bwrap+userns). So the
     // resolved catalog — not a probe of the API process's PATH — is the single
     // source of truth for whether to pre-authorize the commandline grant. This
-    // is correct for BOTH backends: the local device runs on the API host, while
+    // is correct for BOTH adapters: the local device runs on the API host, while
     // the docker device runs in the cloud-sandbox image (which has bubblewrap)
     // even though the API image ships only the docker CLI.
     const builtins = await resolveRuntimeBuiltinIds(runtimeId)
@@ -1425,7 +1422,7 @@ export async function provisionSandbox(
     // Best-effort cleanup of everything provisioned before the failure — the
     // mounts get marked 'failed' (so getActiveMountsForSession excludes them
     // and teardown can't recover), which means cleanup MUST happen here:
-    //  - kill the runtime the backend started + drop its in-process handle,
+    //  - kill the runtime the adapter started + drop its in-process handle,
     //  - revoke any partial grants + soft-delete the sandbox runtime,
     //  - mark the sandboxes row 'failed',
     //  - remove the on-disk scratch dirs (CAS untouched).
@@ -2948,7 +2945,7 @@ export async function teardownSandbox(
   // drain→reconnect→PULL→commit→gate-DELETE ordering. Host adapters (compute-only,
   // bytes in the host dir throughout) keep the kill-then-commit order below.
   // adapterForRow is wrapped so an unknown/legacy tag can't throw — it falls
-  // through to the host path (which resolves its own connect-only backend).
+  // through to the host path (which resolves its own connect-only adapter).
   if (runtimeId) {
     // (R6 #5) resolve the ref from the PINNED runtime so the reconnect/PULL/DELETE
     // targets exactly the runtime we flipped, never a newer session sandbox.
@@ -3544,7 +3541,7 @@ async function ensureRuntimeStoppedForRecovery(
     return false
   }
   // 'alive' — try to stop it. Prefer the in-process handle; else rebuild a ref and
-  // kill via the owning backend (docker rm / identity-gated pid signal).
+  // kill via the owning adapter (docker rm / identity-gated pid signal).
   console.warn(
     `[sandbox] recovery: runtime for session ${sessionId} is still alive; attempting to stop before commit`
   )

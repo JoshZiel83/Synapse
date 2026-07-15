@@ -24,7 +24,7 @@ import {
   decodeSandboxCapabilityDescriptor,
 } from "./model.js"
 import { decodeSandboxDataPlaneCredentials } from "./data-plane-credentials.js"
-import type { SandboxDataPlaneCredentials } from "./sandbox-backend.js"
+import type { SandboxDataPlaneCredentials } from "./sandbox-lifecycle.js"
 
 // Re-export the Executor type so module files (e.g. grants.ts) can accept an
 // injectable executor WITHOUT importing the forbidden kysely.js path.

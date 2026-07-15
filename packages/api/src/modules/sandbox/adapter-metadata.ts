@@ -68,7 +68,7 @@ export interface AdapterEndpointContract {
 
 // ── adapter metadata (folds adapter-keys.ts) ────────────────────────────────────
 
-/** (§1.1 2h) adapter-declared metadata REPLACES `readonly kind: SandboxBackendKind`.
+/** (§1.1 2h) adapter-declared metadata REPLACES `readonly kind: SandboxAdapterKind`.
  *  The persisted adapter tag is just `provider` (written to sandboxes.adapter). */
 export interface SandboxAdapterMeta {
   /** persisted adapter tag (== provider); written to sandboxes.adapter. */

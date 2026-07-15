@@ -16,9 +16,9 @@ import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
 import { config } from "../../config/index.js"
 import { adapterForRow } from "./adapter-registry.js"
 import {
-  SandboxBackendError,
+  SandboxAdapterError,
   type SandboxDataPlaneCredentials,
-} from "./sandbox-backend.js"
+} from "./sandbox-lifecycle.js"
 import { sandboxAdapterMetadata } from "./adapter-metadata.js"
 import type { McpDispatchResult } from "../devices/dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
@@ -284,7 +284,7 @@ async function rebuildBarePlane(opts: {
 }): Promise<SandboxDataPlane> {
   const adapter = adapterForRow(opts.adapter, "bare")
   if (!adapter.rebuildDataPlane) {
-    throw new SandboxBackendError(
+    throw new SandboxAdapterError(
       `bare adapter '${opts.adapter}' has no rebuildDataPlane seam`
     )
   }
