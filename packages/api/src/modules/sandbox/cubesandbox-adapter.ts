@@ -274,7 +274,10 @@ export interface MakeCubesandboxBareAdapterDeps {
 
 export function makeCubesandboxBareAdapter(
   deps: MakeCubesandboxBareAdapterDeps = {}
-): OffBoxBareAdapter {
+): OffBoxBareAdapter & {
+  readonly key: "cubesandbox:bare"
+  readonly provider: "cubesandbox"
+} {
   const mint = deps.mintRuntime ?? mintBareSandboxRuntime
   const runOpts = deps.optionsOverride ?? cubesandboxBareOptionsFromEnv()
   const descriptor = deps.descriptorOverride ?? buildCubesandboxBareDescriptor()

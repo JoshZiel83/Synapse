@@ -79,6 +79,7 @@ import {
   type AdapterEndpointContract,
   type SandboxAdapterKey,
   type KindForKey,
+  type ProviderForKey,
 } from "./adapter-metadata.js"
 import type { SandboxCapabilityDescriptor } from "./model.js"
 
@@ -240,14 +241,19 @@ export type SandboxAdapter =
  *  non-null endpoint (bare-dispatch's rebuild-on-miss narrows to this). */
 export type BareAdapter = HostBareAdapter | OffBoxBareAdapter
 
-/** The exact SandboxAdapter variant a given registered key K must produce — the union
- *  member whose `kind` is the key's leaf kind (KindForKey<K>). ADAPTER_FACTORIES keys off
- *  this so a factory returning the wrong variant is a COMPILE error (closes over any
- *  future kind automatically — no hand-maintained per-kind branch). */
+/** The exact SandboxAdapter a given registered key K must produce: the union member whose
+ *  `kind` is the key's leaf kind (KindForKey<K>), AND whose `key`/`provider` are pinned to
+ *  K / the leaf's provider. So ADAPTER_FACTORIES catches not just a wrong KIND but a factory
+ *  reused in the wrong slot (right kind, wrong key/provider — e.g. a new `future:resident`
+ *  reusing the local-resident factory) — a COMPILE error. Closes over any future kind
+ *  automatically (no hand-maintained per-kind branch). */
 export type AdapterForKey<K extends SandboxAdapterKey> = Extract<
   SandboxAdapter,
   { kind: KindForKey<K> }
->
+> & {
+  readonly key: K
+  readonly provider: ProviderForKey<K>
+}
 
 /** (#13) Narrow a SandboxAdapter to its OFF-BOX variant on the discriminant. SOUND: the
  *  only union member with kind 'offBoxBare' is OffBoxBareAdapter, which DECLARES every
@@ -348,7 +354,10 @@ async function residentReady(
 function makeLocalResidentAdapter(deps?: {
   hostProvider?: HostProvider
   readiness?: ResidentReadinessWaiters
-}): ResidentAdapter {
+}): ResidentAdapter & {
+  readonly key: "local:resident"
+  readonly provider: "local"
+} {
   const hostProvider = deps?.hostProvider ?? createLocalHostProvider()
   const { meta } = residentMetaFor("local")
   return {
@@ -371,7 +380,10 @@ function makeLocalResidentAdapter(deps?: {
 function makeDockerResidentAdapter(deps?: {
   dockerSpawnImpl?: SpawnImpl
   readiness?: ResidentReadinessWaiters
-}): ResidentAdapter {
+}): ResidentAdapter & {
+  readonly key: "docker:resident"
+  readonly provider: "docker"
+} {
   // F-A: connect (teardown/liveness/reconnect) is ENV-FREE — connectDockerSandbox
   // takes only the spawnImpl seam, no provision env; create (provision) reads
   // dockerSandboxOptionsFromEnv() LAZILY, ONLY when invoked. The teardown path never
@@ -449,7 +461,10 @@ export interface MakeLocalBareAdapterDeps {
 
 export function makeLocalBareAdapter(
   deps: MakeLocalBareAdapterDeps = {}
-): HostBareAdapter {
+): HostBareAdapter & {
+  readonly key: "local:bare"
+  readonly provider: "local"
+} {
   const mint = deps.mintRuntime ?? mintBareSandboxRuntime
   const descriptor = deps.descriptorOverride ?? buildLocalBareDescriptor()
   const { meta, endpoint } = bareMetaFor("local")
@@ -727,7 +742,10 @@ function sanitizeContainerName(sessionId: string): string {
 
 export function makeDockerBareAdapter(
   deps: MakeDockerBareAdapterDeps = {}
-): HostBareAdapter {
+): HostBareAdapter & {
+  readonly key: "docker:bare"
+  readonly provider: "docker"
+} {
   const mint = deps.mintRuntime ?? mintBareSandboxRuntime
   const spawnImpl = deps.dockerSpawnImpl ?? nodeSpawn
   const runOpts = deps.optionsOverride ?? dockerBareOptionsFromEnv()

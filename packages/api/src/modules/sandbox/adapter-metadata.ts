@@ -68,30 +68,53 @@ export interface AdapterEndpointContract {
 
 // ── adapter metadata (folds adapter-keys.ts) ────────────────────────────────────
 
-/** Config-facing metadata for a registered adapter. The union discriminant lives on
- *  the entry's `kind` (SandboxAdapterMetadataEntry.kind), NOT here — `meta` carries only
- *  the persisted tag + the env/validate contract. The persisted adapter tag is just
- *  `provider` (written to sandboxes.adapter). */
-export interface SandboxAdapterMeta {
+export type AdapterMode = "resident" | "bare"
+
+/** The SandboxAdapter union discriminant (resident | hostBare | offBoxBare). */
+export type SandboxAdapterKind = "resident" | "hostBare" | "offBoxBare"
+
+/** The provider / mode a registered key K = `${provider}:${mode}` DECODES to (the key is
+ *  the single source; provider/mode/tag are derived from it, so they cannot contradict).
+ *  Falls back to the wide type for a non-literal key (the generic-entry default). */
+export type KeyProvider<K extends string> =
+  K extends `${infer P}:${AdapterMode}` ? P : string
+export type KeyMode<K extends string> =
+  K extends `${string}:${infer M extends AdapterMode}` ? M : AdapterMode
+
+/** Config-facing metadata for a registered adapter. `meta` carries only the persisted
+ *  tag + the env/validate contract; the discriminant `kind` lives on the entry. The
+ *  persisted adapter tag is just `provider` (written to sandboxes.adapter). */
+export interface SandboxAdapterMeta<K extends string = string> {
   /** persisted adapter tag (== provider); written to sandboxes.adapter. */
-  readonly tag: string
+  readonly tag: KeyProvider<K>
   /** env keys this adapter reads + a validate() the boot superRefine dispatches to. */
   readonly config: AdapterConfigContract
 }
 
-/** One registered `${provider}:${mode}` adapter's full metadata leaf. This table is
- *  the SINGLE source of truth for the adapter discriminant `kind` — the SandboxAdapter
- *  union variant each factory returns is pinned to its table entry AT COMPILE TIME by the
- *  ADAPTER_FACTORIES mapped type (AdapterForKey<K>). */
-export interface SandboxAdapterMetadataEntry {
-  readonly key: string
-  readonly provider: string
-  readonly mode: "resident" | "bare"
-  /** The SandboxAdapter union discriminant (resident | hostBare | offBoxBare). */
-  readonly kind: "resident" | "hostBare" | "offBoxBare"
-  readonly meta: SandboxAdapterMeta
+/** One registered adapter's metadata leaf, keyed `${provider}:${mode}`. Parameterized by
+ *  its OWN key K so provider / mode / meta.tag are FORCED to decode from K (they cannot
+ *  contradict the key). SANDBOX_ADAPTER_METADATA is the SINGLE source of truth for the
+ *  discriminant `kind`; the ADAPTER_FACTORIES mapped type pins each factory's kind + key
+ *  + provider to its leaf AT COMPILE TIME (AdapterForKey<K>). */
+export interface SandboxAdapterMetadataEntry<K extends string = string> {
+  readonly provider: KeyProvider<K>
+  readonly mode: KeyMode<K>
+  readonly kind: SandboxAdapterKind
+  readonly meta: SandboxAdapterMeta<K>
   /** endpoint scheme + R3.2 identity predicate; null for resident. */
   readonly endpoint: AdapterEndpointContract | null
+}
+
+/** Assemble the metadata table as a Record keyed by `${provider}:${mode}`. The generic
+ *  binds each value to SandboxAdapterMetadataEntry<ITS OWN KEY>, so a value whose
+ *  provider / mode / meta.tag disagrees with its key is a COMPILE error, and a duplicate
+ *  key is a duplicate object-literal property (TS1117) — key uniqueness is structural. */
+function defineAdapterTable<
+  T extends {
+    readonly [K in keyof T]: SandboxAdapterMetadataEntry<K & string>
+  },
+>(table: T): T {
+  return table
 }
 
 // ── validate helpers (verbatim-behavior copies of the config superRefine) ───────
@@ -219,9 +242,8 @@ const ENDPOINT_ENVD: AdapterEndpointContract = {
  * (config boot validation, the ADAPTER_FACTORIES registry, the P1.2 fail-closed
  * guard, bare-dispatch identity resolution) derives from this table.
  */
-export const SANDBOX_ADAPTER_METADATA = [
-  {
-    key: "local:resident",
+export const SANDBOX_ADAPTER_METADATA = defineAdapterTable({
+  "local:resident": {
     provider: "local",
     mode: "resident",
     kind: "resident",
@@ -235,8 +257,7 @@ export const SANDBOX_ADAPTER_METADATA = [
     },
     endpoint: null,
   },
-  {
-    key: "docker:resident",
+  "docker:resident": {
     provider: "docker",
     mode: "resident",
     kind: "resident",
@@ -317,8 +338,7 @@ export const SANDBOX_ADAPTER_METADATA = [
     },
     endpoint: null,
   },
-  {
-    key: "local:bare",
+  "local:bare": {
     provider: "local",
     mode: "bare",
     kind: "hostBare",
@@ -332,8 +352,7 @@ export const SANDBOX_ADAPTER_METADATA = [
     },
     endpoint: ENDPOINT_INPROCESS,
   },
-  {
-    key: "docker:bare",
+  "docker:bare": {
     provider: "docker",
     mode: "bare",
     kind: "hostBare",
@@ -404,8 +423,7 @@ export const SANDBOX_ADAPTER_METADATA = [
     },
     endpoint: ENDPOINT_DOCKER_EXEC,
   },
-  {
-    key: "cubesandbox:bare",
+  "cubesandbox:bare": {
     provider: "cubesandbox",
     mode: "bare",
     kind: "offBoxBare",
@@ -480,31 +498,35 @@ export const SANDBOX_ADAPTER_METADATA = [
     },
     endpoint: ENDPOINT_ENVD,
   },
-] as const satisfies readonly SandboxAdapterMetadataEntry[]
+})
 
-/** The registered `${provider}:${mode}` literal-key union, derived from the `as const`
- *  table (the SOLE source). The factory map keys off this so a missing/extra adapter is
- *  a compile error (see AdapterForKey / ADAPTER_FACTORIES). */
-export type SandboxAdapterKey = (typeof SANDBOX_ADAPTER_METADATA)[number]["key"]
+/** The registered `${provider}:${mode}` literal-key union — the Record's own keys (the
+ *  SOLE source). Key uniqueness is structural (object literal). The factory map keys off
+ *  this so a missing/extra adapter is a compile error (see AdapterForKey / ADAPTER_FACTORIES). */
+export type SandboxAdapterKey = keyof typeof SANDBOX_ADAPTER_METADATA
 
-/** The union discriminant `kind` the leaf declares for a specific key K (literal, via the
- *  `as const` table). ADAPTER_FACTORIES uses it to force each factory's returned variant
- *  to match its key's leaf kind at compile time. */
-export type KindForKey<K extends SandboxAdapterKey> = Extract<
-  (typeof SANDBOX_ADAPTER_METADATA)[number],
-  { key: K }
->["kind"]
+/** The discriminant `kind` the leaf declares for key K — a SINGLE literal (keys are unique,
+ *  so this can never degrade to a union). ADAPTER_FACTORIES uses it to force each factory's
+ *  returned variant to match its key's leaf kind at compile time. */
+export type KindForKey<K extends SandboxAdapterKey> =
+  (typeof SANDBOX_ADAPTER_METADATA)[K]["kind"]
 
-export const SANDBOX_ADAPTER_KEYS: readonly SandboxAdapterKey[] =
-  SANDBOX_ADAPTER_METADATA.map((m) => m.key)
+/** The provider a registered key K's leaf declares (== the key's provider segment).
+ *  ADAPTER_FACTORIES uses it to pin each factory's returned `key`/`provider` to its slot. */
+export type ProviderForKey<K extends SandboxAdapterKey> =
+  (typeof SANDBOX_ADAPTER_METADATA)[K]["provider"]
+
+export const SANDBOX_ADAPTER_KEYS: readonly SandboxAdapterKey[] = Object.keys(
+  SANDBOX_ADAPTER_METADATA
+) as SandboxAdapterKey[]
 
 /** True iff `${provider}:${mode}` names a registered adapter. A type guard so callers
  *  narrow an untrusted persisted string to SandboxAdapterKey before indexing the strict
- *  factory map. */
+ *  factory map / the metadata Record. */
 export function isRegisteredSandboxAdapterKey(
   key: string
 ): key is SandboxAdapterKey {
-  return SANDBOX_ADAPTER_METADATA.some((m) => m.key === key)
+  return Object.prototype.hasOwnProperty.call(SANDBOX_ADAPTER_METADATA, key)
 }
 
 /** Resolve the metadata leaf for a `${provider}:${mode}` — undefined if unknown.
@@ -514,5 +536,7 @@ export function sandboxAdapterMetadata(
   mode: "resident" | "bare"
 ): SandboxAdapterMetadataEntry | undefined {
   const key = `${provider}:${mode}`
-  return SANDBOX_ADAPTER_METADATA.find((m) => m.key === key)
+  return isRegisteredSandboxAdapterKey(key)
+    ? SANDBOX_ADAPTER_METADATA[key]
+    : undefined
 }

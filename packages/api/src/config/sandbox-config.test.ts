@@ -184,9 +184,8 @@ test("resolveSandboxMode: cubesandbox is the only bare-forcing provider; explici
 
 import { SANDBOX_ADAPTER_METADATA } from "../modules/sandbox/adapter-metadata.js"
 
-const cubeValidateProduction = SANDBOX_ADAPTER_METADATA.find(
-  (m) => m.key === "cubesandbox:bare"
-)!.meta.config.validateProduction
+const cubeValidateProduction =
+  SANDBOX_ADAPTER_METADATA["cubesandbox:bare"].meta.config.validateProduction
 
 function cubeProdIssues(over: Record<string, string>): string[] {
   const env = {
@@ -251,9 +250,8 @@ test("#10: a public non-loopback https config is NOT a false positive", () => {
 
 // ── R6 H-6: deployment-id fail-closed on an authenticated (shared) Cube account ──
 
-const cubeValidate = SANDBOX_ADAPTER_METADATA.find(
-  (m) => m.key === "cubesandbox:bare"
-)!.meta.config.validate
+const cubeValidate =
+  SANDBOX_ADAPTER_METADATA["cubesandbox:bare"].meta.config.validate
 
 function cubeIssues(over: Record<string, string>): string[] {
   const env = {
