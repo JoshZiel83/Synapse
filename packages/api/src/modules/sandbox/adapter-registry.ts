@@ -4,13 +4,13 @@
 // provision spine forks on (capabilities, kind) plus the lifecycle
 // (create/connect). The bare data plane is rebuilt lazily by bare-dispatch on a
 // registry miss (adapter-bound endpoint scheme, P1.3); it is NOT carried on the
-// adapter (the dead `dataPlane?()` method was removed in P1.2). P1.2 INVARIANT
-// (machine-enforced by adapter-registry-fail-closed.test.ts): every BARE adapter
-// declares the two dispatch seams — adapter.rebuildDataPlane (rebuild-on-miss) +
-// a non-null endpoint contract (R3.2 scheme/identity). R4 INVERTED the old
-// host-side-only rule: an off-box adapter (cubesandbox:bare, confinedFs:
-// 'unsupported') is now first-class, carrying the off-box working-set + orphan
-// seams instead of a host-dir materialize.
+// adapter (the dead `dataPlane?()` method was removed in P1.2). Every BARE adapter
+// declares the two dispatch seams — adapter.rebuildDataPlane (rebuild-on-miss) + a
+// non-null endpoint contract (R3.2 scheme/identity) — COMPILE-enforced by the
+// HostBareAdapter/OffBoxBareAdapter interfaces + the ADAPTER_FACTORIES mapped type (R9),
+// not a runtime test. R4 INVERTED the old host-side-only rule: an off-box adapter
+// (cubesandbox:bare, confinedFs:'unsupported') is now first-class, carrying the off-box
+// working-set + orphan seams instead of a host-dir materialize.
 //
 // F-A (preserved): a docker adapter's teardown/liveness/reconnect NEVER forces the
 // provision config to evaluate. `create()` (provision) calls
@@ -74,8 +74,11 @@ import {
 import { buildBareCoreCatalog } from "./core-catalog.js"
 import {
   sandboxAdapterMetadata,
+  isRegisteredSandboxAdapterKey,
   type SandboxAdapterMeta,
   type AdapterEndpointContract,
+  type SandboxAdapterKey,
+  type KindForKey,
 } from "./adapter-metadata.js"
 import type { SandboxCapabilityDescriptor } from "./model.js"
 
@@ -143,8 +146,9 @@ export interface SandboxReconnectOptions {
  * variant declares ONLY the lifecycle methods it implements — so the compiler enforces
  * the per-substrate method set (a value with kind:"offBoxBare" CANNOT exist without the
  * off-box methods, which is what makes {@link isOffBoxAdapter} sound). The `kind`
- * literals mirror the SINGLE-source metadata table (SANDBOX_ADAPTER_METADATA); a
- * kind-invariant test pins every factory's kind to its table entry.
+ * literals mirror the SINGLE-source metadata table (SANDBOX_ADAPTER_METADATA); the
+ * ADAPTER_FACTORIES mapped type (AdapterForKey<K>) pins every factory's kind to its
+ * table entry AT COMPILE TIME (no runtime kind-invariant test needed).
  *   - 'resident'   → Mode-A (local/docker resident); no bare data plane, no orphans.
  *   - 'hostBare'   → Mode-B on THIS host (local/docker bare); a rebuildable plane +
  *                    reconnect (host mints no token), but no provider resources to reap.
@@ -235,6 +239,15 @@ export type SandboxAdapter =
 /** The two BARE variants (host + off-box): both carry a rebuildable data plane + a
  *  non-null endpoint (bare-dispatch's rebuild-on-miss narrows to this). */
 export type BareAdapter = HostBareAdapter | OffBoxBareAdapter
+
+/** The exact SandboxAdapter variant a given registered key K must produce — the union
+ *  member whose `kind` is the key's leaf kind (KindForKey<K>). ADAPTER_FACTORIES keys off
+ *  this so a factory returning the wrong variant is a COMPILE error (closes over any
+ *  future kind automatically — no hand-maintained per-kind branch). */
+export type AdapterForKey<K extends SandboxAdapterKey> = Extract<
+  SandboxAdapter,
+  { kind: KindForKey<K> }
+>
 
 /** (#13) Narrow a SandboxAdapter to its OFF-BOX variant on the discriminant. SOUND: the
  *  only union member with kind 'offBoxBare' is OffBoxBareAdapter, which DECLARES every
@@ -335,7 +348,7 @@ async function residentReady(
 function makeLocalResidentAdapter(deps?: {
   hostProvider?: HostProvider
   readiness?: ResidentReadinessWaiters
-}): SandboxAdapter {
+}): ResidentAdapter {
   const hostProvider = deps?.hostProvider ?? createLocalHostProvider()
   const { meta } = residentMetaFor("local")
   return {
@@ -358,7 +371,7 @@ function makeLocalResidentAdapter(deps?: {
 function makeDockerResidentAdapter(deps?: {
   dockerSpawnImpl?: SpawnImpl
   readiness?: ResidentReadinessWaiters
-}): SandboxAdapter {
+}): ResidentAdapter {
   // F-A: connect (teardown/liveness/reconnect) is ENV-FREE — connectDockerSandbox
   // takes only the spawnImpl seam, no provision env; create (provision) reads
   // dockerSandboxOptionsFromEnv() LAZILY, ONLY when invoked. The teardown path never
@@ -436,7 +449,7 @@ export interface MakeLocalBareAdapterDeps {
 
 export function makeLocalBareAdapter(
   deps: MakeLocalBareAdapterDeps = {}
-): SandboxAdapter {
+): HostBareAdapter {
   const mint = deps.mintRuntime ?? mintBareSandboxRuntime
   const descriptor = deps.descriptorOverride ?? buildLocalBareDescriptor()
   const { meta, endpoint } = bareMetaFor("local")
@@ -714,7 +727,7 @@ function sanitizeContainerName(sessionId: string): string {
 
 export function makeDockerBareAdapter(
   deps: MakeDockerBareAdapterDeps = {}
-): SandboxAdapter {
+): HostBareAdapter {
   const mint = deps.mintRuntime ?? mintBareSandboxRuntime
   const spawnImpl = deps.dockerSpawnImpl ?? nodeSpawn
   const runOpts = deps.optionsOverride ?? dockerBareOptionsFromEnv()
@@ -1011,12 +1024,22 @@ function makeDockerBareRefHandle(
 let warnedNullResolve = false
 
 /**
- * The SINGLE `${provider}:${mode}` → adapter-factory map (P8B). Both the
- * provision resolver (resolveSandboxAdapter) and the persisted-row resolver
- * (adapterForRow) consume it, so the 4-key adapter set is declared ONCE and the
- * fail-closed default falls out of a single lookup — there is no second switch
- * to drift. cubesandbox:bare IS the registered off-box adapter (R4); a miss is the
- * fail-closed case both consumers key off of.
+ * The SINGLE `${provider}:${mode}` → adapter-factory map (P8B). Both the provision
+ * resolver (resolveSandboxAdapter) and the persisted-row resolver (adapterForRow)
+ * consume it, so the adapter set is declared ONCE and the fail-closed default falls out
+ * of a single lookup — there is no second switch to drift. cubesandbox:bare IS the
+ * registered off-box adapter (R4); a miss is the fail-closed case both consumers key off.
+ *
+ * COMPILE-TIME REGISTRATION CLOSURE (R9): the map type `{ [K in SandboxAdapterKey]:
+ * (deps?) => AdapterForKey<K> }` proves all three sync arms the metadata leaf implies —
+ *  (a) EXACTLY the leaf's keys are registered (a missing OR extra factory is a type
+ *      error, since SandboxAdapterKey is derived from the `as const` table),
+ *  (b) each factory returns the variant whose `kind` is that key's leaf kind (a wrong
+ *      kind is a type error — the factory's concrete return type is checked against
+ *      AdapterForKey<K>), and
+ *  (c) adding a metadata leaf FORCES a matching factory (K gains a member ⇒ the mapped
+ *      type demands its slot).
+ * So the registration invariant is now the compiler's, not a runtime test's.
  */
 interface AdapterFactoryDeps {
   hostProvider?: HostProvider
@@ -1026,10 +1049,9 @@ interface AdapterFactoryDeps {
   readiness?: ResidentReadinessWaiters
 }
 
-const ADAPTER_FACTORIES: Record<
-  string,
-  (deps?: AdapterFactoryDeps) => SandboxAdapter
-> = {
+const ADAPTER_FACTORIES: {
+  [K in SandboxAdapterKey]: (deps?: AdapterFactoryDeps) => AdapterForKey<K>
+} = {
   "local:resident": (deps) =>
     makeLocalResidentAdapter({
       hostProvider: deps?.hostProvider,
@@ -1069,8 +1091,9 @@ export function resolveSandboxAdapter(
   deps?: AdapterFactoryDeps
 ): SandboxAdapter | null {
   const key = `${provider}:${mode}`
-  const factory = ADAPTER_FACTORIES[key]
-  if (factory) return factory(deps)
+  // Narrow the untrusted config string to a registered key before indexing the strict
+  // map (the type guard closes over the leaf key set — no separate allowlist to drift).
+  if (isRegisteredSandboxAdapterKey(key)) return ADAPTER_FACTORIES[key](deps)
   // cubesandbox:bare IS the registered off-box adapter (R4). An unknown tag denies.
   if (provider !== "none" && !warnedNullResolve) {
     warnedNullResolve = true
@@ -1101,11 +1124,12 @@ export function adapterForRow(
   deps?: { dockerSpawnImpl?: SpawnImpl }
 ): SandboxAdapter {
   const key = `${adapter}:${mode}`
-  const factory = ADAPTER_FACTORIES[key]
-  if (!factory) {
+  // Narrow the untrusted PERSISTED string before indexing the strict map; an unknown
+  // key fail-closes (THROWS) rather than silently downgrading to a local resident.
+  if (!isRegisteredSandboxAdapterKey(key)) {
     throw new SandboxAdapterError(
       `adapterForRow: unknown persisted adapter key '${key}' (fail-closed; no silent downgrade)`
     )
   }
-  return factory(deps)
+  return ADAPTER_FACTORIES[key](deps)
 }

@@ -481,14 +481,28 @@ export const SANDBOX_ADAPTER_METADATA = [
   },
 ] as const satisfies readonly SandboxAdapterMetadataEntry[]
 
-export const SANDBOX_ADAPTER_KEYS = SANDBOX_ADAPTER_METADATA.map(
-  (m) => m.key
-) as readonly string[]
-
+/** The registered `${provider}:${mode}` literal-key union, derived from the `as const`
+ *  table (the SOLE source). The factory map keys off this so a missing/extra adapter is
+ *  a compile error (see AdapterForKey / ADAPTER_FACTORIES). */
 export type SandboxAdapterKey = (typeof SANDBOX_ADAPTER_METADATA)[number]["key"]
 
-/** True iff `${provider}:${mode}` names a registered adapter. */
-export function isRegisteredSandboxAdapterKey(key: string): boolean {
+/** The union discriminant `kind` the leaf declares for a specific key K (literal, via the
+ *  `as const` table). ADAPTER_FACTORIES uses it to force each factory's returned variant
+ *  to match its key's leaf kind at compile time. */
+export type KindForKey<K extends SandboxAdapterKey> = Extract<
+  (typeof SANDBOX_ADAPTER_METADATA)[number],
+  { key: K }
+>["kind"]
+
+export const SANDBOX_ADAPTER_KEYS: readonly SandboxAdapterKey[] =
+  SANDBOX_ADAPTER_METADATA.map((m) => m.key)
+
+/** True iff `${provider}:${mode}` names a registered adapter. A type guard so callers
+ *  narrow an untrusted persisted string to SandboxAdapterKey before indexing the strict
+ *  factory map. */
+export function isRegisteredSandboxAdapterKey(
+  key: string
+): key is SandboxAdapterKey {
   return SANDBOX_ADAPTER_METADATA.some((m) => m.key === key)
 }
 
