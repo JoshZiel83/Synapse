@@ -3785,14 +3785,15 @@ CREATE TABLE sandboxes (
   data_plane_cert_fingerprint TEXT,
   -- R4 #6: off-box data-plane credentials, AES-256-GCM envelope (nonce‖ct‖tag,
   -- base64; AAD bound to sandboxId(‖workspaceId)). Nullable: NULL for host-side/
-  -- resident adapters and any adapter whose meta.credentialed=false. (R6 H-9) A
-  -- NON-NULL value MUST be the `enc:b1:` envelope — a cheap internal-integrity CHECK
-  -- that fail-closes a plaintext/corrupt write at the DB layer (the decrypt-at-repo-
-  -- exit path already rejects a non-`enc:b1:` value, so this is defense-in-depth).
+  -- resident adapters and any adapter whose meta.credentialed=false. (R6 H-9 / R8) A
+  -- NON-NULL value MUST be the `enc:b1:` envelope WITH a non-empty payload — a cheap
+  -- internal-integrity CHECK that fail-closes a plaintext/corrupt/empty write at the
+  -- DB layer (the encoder always emits base64 of nonce‖tag, so the payload is never
+  -- empty; `_%` requires ≥1 char after the prefix, rejecting a bare `enc:b1:`).
   data_plane_credentials_encrypted TEXT
     CHECK (
       data_plane_credentials_encrypted IS NULL
-      OR data_plane_credentials_encrypted LIKE 'enc:b1:%'
+      OR data_plane_credentials_encrypted LIKE 'enc:b1:_%'
     ),
   -- Runtime platform facts for the capability projection's bundle/OS-guard logic.
   -- local adapter: the API host's process.platform/process.arch; docker: 'linux' +
