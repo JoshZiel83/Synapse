@@ -158,7 +158,7 @@ export interface SandboxRef {
    * cross-process kill path signals hostPid ONLY when the LIVE pid's identity
    * still matches this — so a recycled pid (our child exited, the OS reissued the
    * number to an unrelated process) is never signalled. NULL/absent on a
-   * non-Linux host or a legacy row ⇒ identity is 'unknown' ⇒ never signalled.
+   * non-Linux host or an unreadable /proc ⇒ identity is 'unknown' ⇒ never signalled.
    */
   hostPidIdentity?: string | null
 }

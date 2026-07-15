@@ -277,15 +277,14 @@ async function buildSandboxRefFromSandboxRow(
     }
   }
   // No owning sandbox row resolvable (crash before the sandbox was minted, or a
-  // mount with no runtime yet) → nothing killable. The pre-P2 device-shaped
-  // file_mounts fallback is gone (P3): the sandboxes row is the sole identity.
+  // mount with no runtime yet) → nothing killable. The sandboxes row is the sole
+  // mount→runtime identity.
   return null
 }
 
 /**
- * Source the runtime id from a session's mounts: the P2/P3 back-filled sandbox_id
- * (== runtimeId). The pre-P2 device_id fallback is gone (P3) — every live mount has
- * a sandbox_id.
+ * Source the runtime id from a session's mounts via the back-filled sandbox_id
+ * (== runtimeId) — the mount's sole runtime identity. "" when no mount has one yet.
  */
 function runtimeIdFromMounts(mounts: FileMountRow[]): string {
   return mounts.find((m) => m.sandboxId)?.sandboxId ?? ""
@@ -405,7 +404,7 @@ export async function sandboxUnauthorizedDeny(
  *   ---------------   -----------     ------------------------
  *   (no row yet)      —               nothing to kill; close mounts
  *   provisioning      set             docker rm by resource id; close mounts
- *   active/committing set/null        normal teardown (commit→kill runtime)
+ *   active            set/null        normal teardown (commit→kill runtime)
  *   failed/closing    set/null        state-agnostic resolve still kills it
  *
  * Label-only orphans — a container the API `docker run` started but crashed
@@ -557,7 +556,7 @@ export interface ReapStuckProvisioningResult {
  * R3.P2b — periodic TTL reaper for sandboxes STUCK in 'provisioning' past their
  * deadline_at (a provisionSandbox that crashed/hung before its CAS active flip).
  * RESTRICTED to state='provisioning' ONLY (the idx_sandboxes_reap partial index) —
- * active/committing/closing are boot-reconcile's job, NEVER this periodic sweep.
+ * active/closing are boot-reconcile's job, NEVER this periodic sweep.
  *
  * For each stuck row it does a CAS 'provisioning'→'failed' (so a provision that
  * flips to 'active' at the same instant WINS and the reaper no-ops on it — the
@@ -565,7 +564,7 @@ export interface ReapStuckProvisioningResult {
  * revokes its grants + marks its mounts 'failed' + best-effort kills the
  * in-process handle if THIS process happens to hold one. It NEVER calls the
  * liveness-based teardown (host-scoped, boot-only) and never touches an
- * active/committing/closing row. Best-effort + idempotent.
+ * active/closing row. Best-effort + idempotent.
  */
 export async function reapStuckProvisioningSandboxes(
   deps: {
@@ -979,8 +978,8 @@ export async function provisionSandbox(
   const existing = await getActiveMountsForSession(repo.defaultDbh(), sessionId)
   // Fast path only when ALL mounts are 'active' (not mid-provision/commit) AND
   // the runtime is actually alive. getActiveMountsForSession returns the LIVE
-  // set (status NOT IN closed/failed) which also includes 'provisioning' and
-  // 'committing'; short-circuiting on those would hand back a half-built or
+  // set (status NOT IN closed/failed/recovering) which also includes 'provisioning';
+  // short-circuiting on a non-'active' mount would hand back a half-built or
   // tearing-down sandbox. A dead runtime behind active mounts means the daemon
   // crashed — we recover by tearing the stale device down and re-provisioning
   // (the materialized live dirs are preserved across teardown's commit path).
@@ -1240,12 +1239,11 @@ export async function provisionSandbox(
         )
       )
     }
-    // P3: the mount no longer carries pairing_session_id / sandbox_resource_id /
-    // host_pid. Pairing + resource id live on the sandboxes row (docker consume
-    // sets pairing_session_id; resource_id is written post-create via
-    // updateSandboxRow below), and a pre-bootstrap docker container is reaped by
-    // its session LABEL (reapDockerSandboxOrphans), not by a mount column — so
-    // onPairingCreated / onResourceCreated have nothing to persist and are dropped.
+    // Pairing + resource id live on the sandboxes row (docker consume sets
+    // pairing_session_id; resource_id is written post-create via updateSandboxRow
+    // below), and a pre-bootstrap docker container is reaped by its session LABEL
+    // (reapDockerSandboxOrphans), so the mint callback only has to back-fill
+    // file_mounts.sandbox_id.
     // onRuntimeReady still back-fills the mount's sole identity column, sandbox_id.
     const onRuntimeReady = (runtimeId: string): Promise<void> =>
       persistAll({ sandboxId: runtimeId })
@@ -1324,14 +1322,15 @@ export async function provisionSandbox(
       deadlineAt: new Date(Date.now() + PROVISION_DEADLINE_MS),
     })
 
-    // ⑦/⑦b — readiness (R4 §1.5/§6.9). The old catalogSource fork moved INTO the
-    // adapter's ready(): resident → wait for device.catalog.sync + the tunnel
-    // endpoint to register (UNCHANGED Mode-A path, injected waiters); bare (host +
-    // off-box) → the API already authored + persisted the catalog synchronously in
-    // create() and there is NO tunnel/endpoint to register, so ready is immediate.
-    // (cube's health+version+domain negotiation is a later sub-phase; ready() → ok
-    // now to preserve behavior.) A `{ ok:false }` fails provision (the catch tears
-    // the half-built sandbox down) rather than flipping a broken sandbox active.
+    // ⑦/⑦b — readiness (R4 §1.5/§6.9). The catalog fork lives in the adapter's
+    // ready(): resident → wait for device.catalog.sync + the tunnel endpoint to
+    // register (Mode-A path, injected waiters); bare HOST (local/docker) → the API
+    // already authored + persisted the catalog in create() and there is no tunnel to
+    // register, so ready() is immediate; OFF-BOX (cube) → ready() negotiates control
+    // reachability + an envd-version gate + a domain-suffix (SSRF-inversion) guard +
+    // envd data-plane reachability before the active-flip. A `{ ok:false }` fails
+    // provision (the catch tears the half-built sandbox down) rather than flipping a
+    // broken sandbox active.
     const readiness = await adapter.ready(handle, {
       catalogTimeoutMs: options.catalogTimeoutMs ?? 30_000,
       tunnelTimeoutMs: options.tunnelTimeoutMs ?? 30_000,

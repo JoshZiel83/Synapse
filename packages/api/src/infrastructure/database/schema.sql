@@ -3868,8 +3868,8 @@ CREATE TABLE runtime_pairing_sessions (
   requested_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   runtime_id UUID REFERENCES runtimes(id) ON DELETE SET NULL,
   mode runtime_pairing_sessions_mode NOT NULL,
-  -- Which runtime kind this pairing will mint (drives the P2 consume fork).
-  -- P1 is unforked (always device-shaped); DEFAULT keeps the interim green.
+  -- Which runtime kind this pairing will mint — drives the consume fork (a docker
+  -- sandbox pairing sets 'sandbox'; a device pairing uses the 'device' DEFAULT).
   target_runtime_kind runtimes_kind NOT NULL DEFAULT 'device',
   server_base_url TEXT NOT NULL,
   requested_title VARCHAR(255),
@@ -5942,10 +5942,6 @@ CREATE TABLE file_mounts (
     CHECK (refresh_policy IN ('per_turn', 'on_teardown')),
   status file_mount_status NOT NULL DEFAULT 'provisioning',
   materialized_dir TEXT,
-  -- NOTE (P3): the mount no longer carries device_id / host_pid / sandbox_backend /
-  -- sandbox_resource_id / pairing_session_id. Backend adapter, resource id, host pid
-  -- and pairing all live on the owning `sandboxes` row (resolved via sandbox_id) —
-  -- the pre-P2 device-shaped mount identity is gone (no back-compat data).
   error_message TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

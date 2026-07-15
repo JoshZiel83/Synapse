@@ -128,15 +128,15 @@ export async function isFilesystemExposureHealthy(
 
 /**
  * Session ids that have at least one mount in a non-terminal lifecycle state
- * (provisioning/active/committing) — the reconcile sweep's candidate set. The
- * status `in [...]` predicate is load-bearing (excludes closed/failed).
+ * (provisioning/active) — the reconcile sweep's candidate set. The status
+ * `in [...]` predicate is load-bearing (excludes closed/failed/recovering).
  */
 export async function listReconcileCandidateSessionIds(
   run: Executor = db
 ): Promise<string[]> {
   // S10 UNION SUPERSET (§2.9/§E): candidates = live-mount arm ∪ live-sandbox arm.
-  // The union can only GROW liveSessionIds, so no live container drops out of the
-  // reaper shield during the mixed-shape interim. The sandboxes arm uses
+  // The union can only GROW liveSessionIds (a steady-state superset), so no live
+  // container ever drops out of the reaper shield. The sandboxes arm uses
   // `state NOT IN ('closed','failed')` (includes 'closing', matches
   // idx_sandboxes_reconcile — CORRECTION 8) so a 'closing' sandbox mid-teardown
   // with a live container is not reaped before its commit completes.
@@ -169,9 +169,9 @@ export async function listReconcileCandidateSessionIds(
  *      container and no-ops. **Must be read BEFORE the reconcile teardown loop closes
  *      the orphan's mounts**, else the signal is erased.
  *
- * Over-firing is a harmless no-op; under-firing leaks containers — exactly what
- * dropping the old file_mounts.sandbox_backend arm (P3d) reintroduced for arm (2),
- * restored here structurally.
+ * Over-firing is a harmless no-op; under-firing leaks containers — which is why arm
+ * (2) (a live mount with a NULL sandbox_id) is a structural part of the signal, not
+ * just the sandboxes-row arm (1).
  */
 export async function hasDockerMountHistory(
   run: Executor = db
@@ -619,8 +619,8 @@ export interface SandboxRow {
   /**
    * R3.6: durable process-identity token ('<boot_id>:<starttime>') for a LOCAL
    * sandbox's host_pid. The cross-process kill path signals host_pid ONLY when the
-   * live pid's identity still matches this. NULL for docker/off-box (no host pid),
-   * non-Linux hosts, and legacy rows minted before this column existed.
+   * live pid's identity still matches this. NULL for docker/off-box (no host pid) or
+   * a non-Linux host (no readable /proc identity) ⇒ the pid is never signalled.
    */
   hostPidIdentity: string | null
   pairingSessionId: string | null
@@ -831,7 +831,7 @@ export async function casCloseSandboxAtEpoch(
  * R3.P2b — TTL reaper candidate query. Sandboxes STILL 'provisioning' whose
  * deadline_at has passed: a provision that crashed/hung before its CAS active
  * flip. Restricted to state='provisioning' (the idx_sandboxes_reap partial index)
- * — active/committing/closing are boot-reconcile's job, never the periodic sweep.
+ * — active/closing are boot-reconcile's job, never the periodic sweep.
  */
 export async function listStuckProvisioningSandboxes(
   run: Executor = db

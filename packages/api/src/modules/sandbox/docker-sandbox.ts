@@ -464,8 +464,8 @@ export interface ReapDockerOrphansResult {
  * label whose session is NOT in `liveSessionIds` (the sessions that still have a
  * recoverable DB mount). This catches the crash window the DB-driven reconciler
  * can't — the API `docker run`s a container, then crashes BEFORE persisting its
- * `sandbox_resource_id`, so teardown can't build a killable ref from file_mounts
- * even though the container is up and labeled.
+ * container id onto the sandboxes row, so teardown can't build a killable ref even
+ * though the container is up and labeled.
  *
  * Ownership is proven by the label (set only by this backend). Best-effort: a
  * `docker ps`/`rm` failure is logged via the returned lists, never thrown. The

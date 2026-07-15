@@ -87,7 +87,7 @@ const closingBarePlanes = new Set<string>()
 // never sliced out of the free-string endpoint, so a hand-edited endpoint can't
 // redirect a plane at an arbitrary target. §6.1: the identity predicate is
 // resolved FROM THE CONFIG-FREE METADATA LEAF by the row's adapter tag — NOT via
-// adapterForRow (which THROWS on an unknown/legacy tag). An unknown adapter, a
+// adapterForRow (which THROWS on an unknown tag). An unknown adapter, a
 // scheme/adapter mismatch, an endpoint that doesn't bind its resource id, or a
 // null endpoint is row CORRUPTION → the leaf lookup returns undefined → clean
 // `false` deny, never a fall-through to the in-process local plane.
@@ -267,7 +267,7 @@ export interface DispatchBareRuntimeToolInput {
  * cubesandbox:bare builds the remote plane). The identity (resource_id) +
  * descriptor come from the row; deployment connection facts come from config.
  * ASYNC (§1.2 — an off-box rebuild may connect + re-mint tokens). adapterForRow
- * THROWS on an unknown/legacy tag, so the CALLER wraps this in try/catch to keep
+ * THROWS on an unknown tag, so the CALLER wraps this in try/catch to keep
  * dispatch a TOTAL function (identity is already validated pre-factory, so a throw
  * here is a genuine build failure, not a corrupt tag).
  */

@@ -569,8 +569,8 @@ export function makeCubesandboxBareAdapter(
           ),
       })
     },
-    // Token-bearing off-box reconnect (§6.2), for teardown/recovery pull (wired
-    // later). control.connect MAY re-mint tokens (E2B does; the local
+    // Token-bearing off-box reconnect (§6.2), driven by the teardown/recovery pull
+    // paths. control.connect MAY re-mint tokens (E2B does; the local
     // unauthenticated deploy returns none — live-verified). Prefer a FRESH token;
     // else fall back to the persisted decrypted creds. When the token CHANGED and
     // the sandbox is non-terminal, re-persist the fresh envelope via the injected

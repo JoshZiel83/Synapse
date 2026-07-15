@@ -86,10 +86,8 @@ export interface ReadinessReport {
   ok: boolean
   /** e.g. "envd_version_below_min", "unreachable". */
   reason?: string
-  /** (2e) provider fact; preferred over process.* (threaded in a later phase). */
-  platform?: string
-  arch?: string
-  /** off-box negotiation results (a later phase). */
+  /** (2e) off-box negotiation results surfaced by the off-box ready(): the VM's envd
+   *  version + its vhost domain (the cube adapter sets both on a successful probe). */
   envdVersion?: string
   domain?: string
 }
@@ -197,11 +195,12 @@ export interface SandboxAdapter {
 
   /**
    * (2a/§1.8) Reconstruct the data plane from a PERSISTED row on a bare-dispatch
-   * rebuild-on-miss. EVERY bare adapter implements it now: host adapters wrap
-   * createLocalBareDataPlane / createDockerBareDataPlane (the scheme forks moved
-   * off the spine INTO the adapters); off-box builds the remote plane. ASYNC (an
-   * off-box rebuild must connect + re-mint tokens — a later sub-phase). Resident
-   * adapters leave it undefined.
+   * rebuild-on-miss. EVERY bare adapter implements it: host adapters wrap
+   * createLocalBareDataPlane / createDockerBareDataPlane (the scheme forks live in the
+   * adapters, not the spine); off-box builds the remote envd plane from the row's
+   * persisted token (DB-read-only fast path). ASYNC because it constructs the remote
+   * envd transport; the connect + token re-mint path is the separate reconnectDataPlane
+   * seam (§6.2). Resident adapters leave it undefined.
    */
   rebuildDataPlane?(row: BareDataPlaneRebuildRow): Promise<SandboxDataPlane>
 
@@ -212,7 +211,7 @@ export interface SandboxAdapter {
    * plane; when the token CHANGED and the sandbox is non-terminal, re-persist the
    * fresh envelope via the injected executor (NEVER on the read-only dispatch fast
    * path unless it changed). host adapters wrap their existing plane (no secret).
-   * Wired by teardown/recovery in a later sub-phase.
+   * Wired by the teardown/recovery pull paths (service.ts reconnect → pull).
    */
   reconnectDataPlane?(
     ref: SandboxRef,
@@ -405,8 +404,8 @@ function makeDockerResidentAdapter(deps?: {
       connectDockerSandbox(ref, { spawnImpl: deps?.dockerSpawnImpl }),
     ready: (handle, opts) => residentReady(deps?.readiness, handle, opts),
     workingSet: () => createProductWorkingSetBridge(),
-    // R4 Phase 1d: the docker label reaper (reapDockerSandboxOrphans) stays in
-    // the reconcile spine for now; generalizing it through listOrphans is later.
+    // The docker label reaper (reapDockerSandboxOrphans) runs in the reconcile spine;
+    // docker does not use the adapter listOrphans path (that is the off-box seam).
     listOrphans: async () => [],
   }
 }
@@ -548,8 +547,9 @@ export function makeLocalBareAdapter(
         sandboxRoot: row.sandboxRoot,
         descriptor: row.descriptor,
       }),
-    // R4 Phase 1b: host wraps the existing in-process plane (no data-plane
-    // secret). Uncalled in Phase 1a; the teardown/recovery pull wires it later.
+    // Host wraps the existing in-process plane (no data-plane secret). Only the
+    // OFF-BOX reconnect path actually invokes reconnectDataPlane; host adapters expose
+    // it for symmetry.
     reconnectDataPlane: async (ref) => ({
       plane: createLocalBareDataPlane({
         sandboxRoot: sandboxRootForSession(ref.sandboxId),
@@ -904,8 +904,9 @@ export function makeDockerBareAdapter(
         containerId: row.resourceId ?? "",
         spawnImpl,
       }),
-    // R4 Phase 1b: host wraps the existing docker-exec plane (no data-plane
-    // secret). Uncalled in Phase 1a.
+    // Host wraps the existing docker-exec plane (no data-plane secret). Only the
+    // OFF-BOX reconnect path actually invokes reconnectDataPlane; host adapters expose
+    // it for symmetry.
     reconnectDataPlane: async (ref) => ({
       plane: createDockerBareDataPlane({
         sandboxRoot: sandboxRootForSession(ref.sandboxId),
@@ -915,7 +916,8 @@ export function makeDockerBareAdapter(
       }),
       credentials: null,
     }),
-    // R4 Phase 1d: the docker label reaper stays in the reconcile spine for now.
+    // The docker label reaper (reapDockerSandboxOrphans) runs in the reconcile spine;
+    // docker does not use the adapter listOrphans path (that is the off-box seam).
     listOrphans: async () => [],
   }
 }
@@ -1115,15 +1117,15 @@ export function resolveSandboxAdapter(
 /**
  * Resolve a teardown/liveness/reconnect adapter from a PERSISTED row's
  * (adapter, mode) — NEVER current config (inv-45). Its create() is never called
- * (connect-only), and for docker it uses the env-free reconnect backend (F-A).
+ * (connect-only), and for docker its connect() is the env-free connectDockerSandbox (F-A).
  *
  * FAIL-CLOSED (P8B): an unknown persisted adapter key THROWS rather than
  * silently downgrading to a local resident adapter. A silent downgrade would run
  * teardown / liveness / reconnect on the WRONG substrate (e.g. treat a persisted
  * docker/cubesandbox row as a local in-process runtime), potentially mis-reaping or
  * declaring a live sandbox dead. Throwing is safe because every teardown caller
- * try/catches with a hostPid fallback, so an unrecognized legacy row degrades to
- * that fallback instead of a wrong-substrate action.
+ * try/catches with a hostPid fallback, so an unrecognized row degrades to that
+ * fallback instead of a wrong-substrate action.
  */
 export function adapterForRow(
   adapter: string,
@@ -1134,7 +1136,7 @@ export function adapterForRow(
   const factory = ADAPTER_FACTORIES[key]
   if (!factory) {
     throw new SandboxAdapterError(
-      `adapterForRow: unknown persisted adapter key '${key}' (fail-closed; no legacy downgrade)`
+      `adapterForRow: unknown persisted adapter key '${key}' (fail-closed; no silent downgrade)`
     )
   }
   return factory(deps)
