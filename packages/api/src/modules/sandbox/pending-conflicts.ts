@@ -178,7 +178,7 @@ export function mergePendingConflicts(
 
 const PendingCommitConflictSchema = z.record(
   z.string(),
-  z.object({
+  z.strictObject({
     paths: z.array(z.string()),
     sidecars: z.array(ConflictSidecarRefSchema),
   })
@@ -258,7 +258,7 @@ export function mergePendingRefreshConflicts(
   return { deferredConflictsBySubpath, sidecarsBySubpath }
 }
 
-const PendingRefreshPersistedSchema = z.object({
+const PendingRefreshPersistedSchema = z.strictObject({
   deferredConflictsBySubpath: z.record(z.string(), z.array(z.string())),
   sidecarsBySubpath: z.record(z.string(), z.array(ConflictSidecarRefSchema)),
 })

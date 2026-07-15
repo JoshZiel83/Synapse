@@ -1,6 +1,6 @@
 # Docker-backend sandbox opt-in override.
 #
-# The docker SandboxBackend (Docker-out-of-Docker) launches each per-session
+# The docker sandbox provider (Docker-out-of-Docker) launches each per-session
 # cloud-sandbox container via the HOST docker daemon, which requires the host
 # docker socket inside the API container. That socket is host-root-equivalent,
 # so it is deliberately NOT in the base docker-compose.yml — mounting it

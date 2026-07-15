@@ -289,8 +289,8 @@ const envObjectSchema = z.object({
 
   // ===== Per-session actor sandbox (runtime + content-addressed mounts) =====
   // SANDBOX_PROVIDER selects the runtime substrate: local (same-host
-  // device-runtime child), docker (DooD cloud-sandbox image), or e2b/cube
-  // (future bare adapters). Default resolves to "none" => sandbox provisioning
+  // device-runtime child), docker (DooD cloud-sandbox image), or cubesandbox (the
+  // off-box bare adapter, P4b). Default resolves to "none" => sandbox provisioning
   // is DISABLED (a LOUD boot warning fires whenever the sandbox is off). The
   // shared transport facts (FRP_SHARED_TOKEN / SYNAPSE_TUNNEL_* /
   // SYNAPSE_DEVICE_TUNNEL_EDGE_URL) are read under their EXISTING keys — they

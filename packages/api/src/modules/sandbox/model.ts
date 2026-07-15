@@ -78,11 +78,13 @@ export interface SandboxCapabilityDescriptor {
    * on the API host when bwrap is absent). 'bwrap' = bubblewrap jail (local:bare).
    */
   isolation: "bwrap" | "container" | "provider" | null
-  /** Egress posture (provider-backed; unused in P4a's direct adapters). */
+  /** Egress posture: docker:bare sets none/named per SANDBOX_DOCKER_PURE_NETWORK;
+   *  cubesandbox sets 'named'. Absent ⇒ not applicable (e.g. local:bare). */
   egress?: "none" | "named"
   /** Whether the adapter supports connect()/reconnect after an API restart. */
   reconnectable: boolean
-  /** Provider-backed lifecycle knobs (unused/false in P4a). */
+  /** Lifecycle knobs. setTimeout: the off-box cubesandbox adapter exposes an idle-TTL
+   *  knob (true); pause/portIngress are not yet used by any adapter. */
   setTimeout?: boolean
   pause?: boolean
   portIngress?: boolean
@@ -95,15 +97,18 @@ export interface SandboxCapabilityDescriptor {
  * corrupt or hand-edited row — e.g. `maxWriteBytes:"corrupt"` — must NOT silently
  * disable a cap. `getBareSandboxForDispatch` safeParses at the repo exit and the
  * dispatch fork fails CLOSED on a decode miss rather than running with a NaN /
- * defaulted cap. NOT `.strict()` — forward-compat provider knobs (extra keys) are
- * tolerated; `isolation` MUST allow null (a no-commandline sandbox). Kept in sync
- * with SandboxCapabilityDescriptor by the `satisfies` assertion below.
+ * defaulted cap. STRICT (`z.strictObject`): the descriptor is API-AUTHORED at mint
+ * (buildLocalBareDescriptor et al.) — there are no external provider knobs, so an
+ * unknown key is corruption and must fail the decode, not be tolerated. `isolation`
+ * MUST allow null (a no-commandline sandbox); the four genuinely-per-adapter caps
+ * (egress/setTimeout/pause/portIngress) stay `.optional()`. Kept in sync with
+ * SandboxCapabilityDescriptor by the `satisfies` assertion below.
  */
-export const SandboxCapabilityDescriptorSchema = z.object({
+export const SandboxCapabilityDescriptorSchema = z.strictObject({
   mode: z.enum(["resident", "bare"]),
   transportDefault: z.enum(["direct", "indirect"]),
   confinedFs: z.enum(["native", "unsupported"]),
-  core: z.object({
+  core: z.strictObject({
     atomicWrite: z.boolean(),
     staleWriteGuard: z.enum(["strict", "advisory"]),
     rangeRead: z.boolean(),

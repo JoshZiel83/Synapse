@@ -1,6 +1,6 @@
 # Containerized-LOCAL sandbox opt-in override.
 #
-# The `local` SandboxBackend runs each session's device-runtime as a same-host
+# The `local` sandbox provider runs each session's device-runtime as a same-host
 # CHILD of the API process. When the API itself runs in THIS container, that
 # child's bwrap jail needs kernel privileges the default container profile
 # denies:

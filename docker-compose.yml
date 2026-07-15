@@ -238,7 +238,7 @@ services:
       # + dockerignored (kept out of the image); secrets stay in env_file via
       # ${ENV} interpolation. Follows the verdaccio/frp/nginx config-mount idiom.
       - ./packages/api/config:/app/packages/api/config:ro
-      # NOTE: the docker SandboxBackend (DooD) needs the host docker socket, but
+      # NOTE: the docker sandbox provider (DooD) needs the host docker socket, but
       # it is NOT mounted here — that would give EVERY production API container
       # host-root-equivalent access even though sandboxes default to
       # local/disabled. The socket is opt-in via the dedicated override:
@@ -862,7 +862,7 @@ services:
     profiles:
       - registry
 
-  # Build-only: produces the cloud-sandbox image the docker SandboxBackend runs
+  # Build-only: produces the cloud-sandbox image the docker sandbox provider runs
   # via DooD. NOT a long-running service. Build it with:
   #   docker compose --profile sandbox-build build sandbox-image
   # then set SANDBOX_DOCKER_IMAGE=synapse-device-runtime:latest. Self-contained
@@ -958,7 +958,7 @@ services:
       - observability
 
 volumes:
-  # Fixed name so the docker SandboxBackend's `--mount src=...` resolves the
+  # Fixed name so the docker sandbox provider's `--mount src=...` resolves the
   # volume regardless of the compose project prefix.
   api_storage:
     name: synapse_api_storage
