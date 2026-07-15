@@ -3770,7 +3770,8 @@ CREATE INDEX idx_runtimes_workspace ON runtimes(workspace_id, kind, created_at D
 -- ============ Sandbox detail (kind='sandbox') ============
 -- First-class per-session sandbox; NO deleted_at (inherits from runtimes).
 -- FKs (id→runtimes, session_id, pairing_session_id) live in the bottom-ALTER
--- block (targets defined later / CTI-cycle). Written by NOBODY until P2.
+-- block (targets defined later / CTI-cycle). Mint sites in devices/repo.ts INSERT
+-- the row; the provision/teardown paths in sandbox/repo.ts UPDATE it.
 CREATE TABLE sandboxes (
   id UUID PRIMARY KEY,
   workspace_id UUID NOT NULL,
@@ -3785,7 +3786,8 @@ CREATE TABLE sandboxes (
   data_plane_cert_fingerprint TEXT,
   -- R4 #6: off-box data-plane credentials, AES-256-GCM envelope (nonce‖ct‖tag,
   -- base64; AAD bound to sandboxId(‖workspaceId)). Nullable: NULL for host-side/
-  -- resident adapters and any adapter whose meta.credentialed=false. (R6 H-9 / R8) A
+  -- resident adapters and any bare adapter that mints no data-plane token — only the
+  -- off-box cubesandbox adapter persists a non-null envelope. (R6 H-9 / R8) A
   -- NON-NULL value MUST be the `enc:b1:` envelope WITH a non-empty payload — a cheap
   -- internal-integrity CHECK that fail-closes a plaintext/corrupt/empty write at the
   -- DB layer (the encoder always emits base64 of nonce‖tag, so the payload is never
@@ -5928,15 +5930,17 @@ CREATE TABLE file_mounts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
   session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE RESTRICT,
-  file_space_id UUID NOT NULL REFERENCES file_spaces(id) ON DELETE RESTRICT,
+  -- The mounted space, pinned to the mount's workspace by a COMPOSITE FK (below) so a
+  -- mount can never mount a cross-workspace space (mirrors the sandbox_id pin).
+  file_space_id UUID NOT NULL,
   mount_subpath TEXT NOT NULL
     CHECK (mount_subpath IN ('conversation', 'actor', 'actor-conversation')),
   -- The sandbox that owns this mount (CTI detail row; sandboxes.id == runtimes.id).
   -- This is the SOLE mount→runtime identity (P3): reconcile/teardown resolve the
   -- sandbox row from here and read adapter / resource_id / host_pid / pairing_session
-  -- off THAT row — never duplicated onto the mount. SET NULL so teardown never blocks
-  -- on a live mount and the mount audit survives the sandbox.
-  sandbox_id UUID REFERENCES sandboxes(id) ON DELETE SET NULL,
+  -- off THAT row — never duplicated onto the mount. Pinned to the mount's workspace by
+  -- a COMPOSITE FK (below) so a mount can never reference a cross-workspace sandbox.
+  sandbox_id UUID,
   base_snapshot_id UUID,
   result_snapshot_id UUID,
   refresh_policy TEXT NOT NULL DEFAULT 'per_turn'
@@ -5947,6 +5951,15 @@ CREATE TABLE file_mounts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   closed_at TIMESTAMPTZ,
+  -- Ownership pin: the space exists AND shares this mount's workspace.
+  FOREIGN KEY (file_space_id, workspace_id)
+    REFERENCES file_spaces(id, workspace_id) ON DELETE RESTRICT,
+  -- Ownership pin: the sandbox exists AND shares this mount's workspace. SET NULL
+  -- (sandbox_id only) so teardown of the sandbox never blocks on a live mount and the
+  -- mount audit survives; workspace_id (NOT NULL) is untouched. MATCH SIMPLE ⇒ when
+  -- sandbox_id is NULL (pre-backfill / post-teardown) the pin is inactive.
+  FOREIGN KEY (sandbox_id, workspace_id)
+    REFERENCES sandboxes(id, workspace_id) ON DELETE SET NULL (sandbox_id),
   -- base/result snapshots must belong to the mounted space.
   FOREIGN KEY (base_snapshot_id, file_space_id)
     REFERENCES file_snapshots(id, file_space_id) ON DELETE SET NULL,

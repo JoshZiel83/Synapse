@@ -3300,10 +3300,10 @@ foreignKeys:
     _child: file_mounts(session_id)
     _parent: sessions(id)
     _was: CASCADE
-  digest:9d543ae7cbb75324:
+  digest:5b2f02c100d79dbf:
     targetAction: RESTRICT
-    _child: file_mounts(file_space_id)
-    _parent: file_spaces(id)
+    _child: file_mounts(file_space_id, workspace_id)
+    _parent: file_spaces(id, workspace_id)
     _was: CASCADE
   digest:10782cbf8f2e2b30:
     targetAction: SET NULL
@@ -3718,13 +3718,13 @@ foreignKeys:
     _child: runtimes(workspace_id)
     _parent: workspaces(id)
     _was: RESTRICT
-  digest:f0e536d946568f96:
+  digest:ba5d382e812645be:
     targetAction: SET NULL
     setNull:
       canLose: true
       needsSnapshot: false
-    _child: file_mounts(sandbox_id)
-    _parent: sandboxes(id)
+    _child: file_mounts(sandbox_id, workspace_id)
+    _parent: sandboxes(id, workspace_id)
     _was: SET NULL
   digest:c80d90e51dc3e559:
     targetAction: SET NULL
