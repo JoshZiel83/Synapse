@@ -9,6 +9,9 @@
 import { z } from "zod"
 
 import type { ConflictSidecar } from "@synapse/device-runtime"
+import { createLogger } from "../../infrastructure/logger/index.js"
+
+const log = createLogger("sandbox.pending-conflicts")
 
 /**
  * A conflicting file whose pre-conflict local copy was preserved at a sidecar.
@@ -182,15 +185,37 @@ const PendingCommitConflictSchema = z.record(
 )
 
 /**
+ * Surface a PRESENT-but-malformed durable blob that the strict decode discarded whole
+ * (fail-safe empty). Absent (undefined/null) is the normal "no pending conflicts" read,
+ * so it stays silent — only a stored-but-unrecognized structure is logged, and only its
+ * shape (NEVER the blob, which carries VFS paths). This makes a genuine corruption
+ * visible for triage WITHOUT weakening the fail-safe or re-introducing per-field coercion.
+ */
+function warnDiscardedBlob(raw: unknown, kind: string): void {
+  if (raw == null) return
+  log.warn(
+    {
+      kind,
+      topLevelKeys:
+        typeof raw === "object" ? Object.keys(raw as object).length : 0,
+    },
+    "durable conflict blob failed strict decode; discarding whole (fail-safe empty)"
+  )
+}
+
+/**
  * Strict decode of the stored pending-conflicts blob. A blob that does not match the
  * current shape fails SAFE to {} (fail-closed, never a crash) — there is NO per-field
- * coercion of old/partial data.
+ * coercion of old/partial data. A present-but-malformed blob is logged (shape only)
+ * before it is discarded so a genuine corruption is not lost silently.
  */
 export function decodePendingConflicts(
   raw: unknown
 ): Record<string, PendingCommitConflict> {
   const parsed = PendingCommitConflictSchema.safeParse(raw)
-  return parsed.success ? parsed.data : {}
+  if (parsed.success) return parsed.data
+  warnDiscardedBlob(raw, "pending-commit-conflicts")
+  return {}
 }
 
 /**
@@ -241,7 +266,8 @@ const PendingRefreshPersistedSchema = z.object({
 /**
  * Strict decode of the stored pending-refresh blob (the persisted subset —
  * deferredConflictsBySubpath + sidecarsBySubpath). A blob that does not match the
- * current shape fails SAFE to empty maps, with no per-field coercion.
+ * current shape fails SAFE to empty maps, with no per-field coercion. A present-but-
+ * malformed blob is logged (shape only) before it is discarded.
  */
 export function decodePendingRefresh(
   raw: unknown
@@ -250,7 +276,7 @@ export function decodePendingRefresh(
   "deferredConflictsBySubpath" | "sidecarsBySubpath"
 > {
   const parsed = PendingRefreshPersistedSchema.safeParse(raw)
-  return parsed.success
-    ? parsed.data
-    : { deferredConflictsBySubpath: {}, sidecarsBySubpath: {} }
+  if (parsed.success) return parsed.data
+  warnDiscardedBlob(raw, "pending-refresh-conflicts")
+  return { deferredConflictsBySubpath: {}, sidecarsBySubpath: {} }
 }
