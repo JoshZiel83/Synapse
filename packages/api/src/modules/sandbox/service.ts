@@ -72,7 +72,7 @@ import {
   adapterForRow,
   isOffBoxAdapter,
   type SandboxAdapter,
-  type OffBoxSandboxAdapter,
+  type OffBoxBareAdapter,
 } from "./adapter-registry.js"
 import {
   resolveRuntimeBuiltinIds,
@@ -710,11 +710,11 @@ const RECOVERY_LEASE_TTL_SECONDS = 600
 
 /** Resolve the CURRENTLY-configured adapter when it is off-box, else null. Shared
  *  by the off-box sweep + keepalive so both target the same provider. Injectable.
- *  (#13) Returns the NARROWED OffBoxSandboxAdapter so the sweep/keepalive call the
+ *  (#13) Returns the NARROWED OffBoxBareAdapter so the sweep/keepalive call the
  *  off-box lifecycle methods without a truthiness guard. */
 function configuredOffBoxAdapter(
   injected?: SandboxAdapter | null
-): OffBoxSandboxAdapter | null {
+): OffBoxBareAdapter | null {
   const adapter =
     injected !== undefined
       ? injected
@@ -1023,7 +1023,9 @@ export async function provisionSandbox(
       // Host bare/resident keep VM/process reuse (their plane IS the host mirror).
       let offBox = false
       try {
-        offBox = adapterForRow(sandboxRow.adapter, sandboxRow.mode).meta.offBox
+        offBox = isOffBoxAdapter(
+          adapterForRow(sandboxRow.adapter, sandboxRow.mode)
+        )
       } catch {
         offBox = false
       }
@@ -1248,10 +1250,10 @@ export async function provisionSandbox(
     const onRuntimeReady = (runtimeId: string): Promise<void> =>
       persistAll({ sandboxId: runtimeId })
     // (R4 §1.10) Build the DISCRIMINATED spec. The spine builds the HOST variant
-    // only for a host-backed adapter (`!meta.offBox`); an OFF-BOX adapter
+    // only for a host-backed adapter (`!isOffBoxAdapter`); an OFF-BOX adapter
     // (cubesandbox) gets the core ONLY — no host path can reach it (the host-RCE
     // trap of mounting a session root into an off-box adapter is unrepresentable).
-    const spec: SandboxSpec = adapter.meta.offBox
+    const spec: SandboxSpec = isOffBoxAdapter(adapter)
       ? {
           offBox: true,
           sessionId,
@@ -1313,7 +1315,9 @@ export async function provisionSandbox(
       // where a '' -then-backfill would leave kill() DELETEing an empty id. Only
       // the host/resident path back-fills here (docker:resident's container id
       // genuinely arrives after the bootstrap-consume mints the row).
-      resourceId: adapter.meta.offBox ? undefined : handle.resourceId || null,
+      resourceId: isOffBoxAdapter(adapter)
+        ? undefined
+        : handle.resourceId || null,
       hostPid: handle.hostPid ?? null,
       hostPidIdentity,
       // R3.P2b: stamp the provision budget so a stuck 'provisioning' row is
@@ -1332,8 +1336,8 @@ export async function provisionSandbox(
     // provision (the catch tears the half-built sandbox down) rather than flipping a
     // broken sandbox active.
     const readiness = await adapter.ready(handle, {
-      catalogTimeoutMs: options.catalogTimeoutMs ?? 30_000,
-      tunnelTimeoutMs: options.tunnelTimeoutMs ?? 30_000,
+      primaryTimeoutMs: options.catalogTimeoutMs ?? 30_000,
+      reachabilityProbeTimeoutMs: options.tunnelTimeoutMs ?? 30_000,
     })
     if (!readiness.ok) {
       throw new SandboxServiceError(
@@ -1350,7 +1354,7 @@ export async function provisionSandbox(
     // and the turn's edits are computed against nothing. Host adapters need no push
     // (their plane reads/writes the SAME <sandboxRoot>/<subpath> the fs-helper
     // materialized), so the redundant second host materialize is gated off here.
-    if (adapter.meta.offBox) {
+    if (isOffBoxAdapter(adapter)) {
       const pushBridge = adapter.workingSet(handle)
       try {
         for (let i = 0; i < mounts.length; i++) {
@@ -1435,7 +1439,7 @@ export async function provisionSandbox(
     // terminal DELETE+soft-delete cleanup. Host adapters keep kill-then-fail
     // (compute-only; a stray host child is cheap to SIGTERM).
     let offBoxPreserve = false
-    if (handle && adapter.meta.offBox) {
+    if (handle && isOffBoxAdapter(adapter)) {
       const liveness = await handle.probeLiveness().catch(() => "unknown")
       offBoxPreserve = liveness !== "dead"
     }
@@ -1670,7 +1674,7 @@ async function sessionSandboxIsOffBox(
     .catch(() => null)
   if (!sb) return false
   try {
-    return adapterForRow(sb.adapter, sb.mode).meta.offBox
+    return isOffBoxAdapter(adapterForRow(sb.adapter, sb.mode))
   } catch {
     return false
   }
@@ -2595,7 +2599,7 @@ interface TeardownOffBoxArgs {
   runtimeId: string
   ref: SandboxRef
   // (#13) narrowed off-box adapter → reconnectDataPlane is called without a `!`.
-  adapter: OffBoxSandboxAdapter
+  adapter: OffBoxBareAdapter
   options: TeardownSandboxOptions
 }
 
@@ -3413,7 +3417,7 @@ async function recoverOffBoxSession(
   sessionMounts: FileMountRow[],
   ref: SandboxRef,
   // (#13) narrowed off-box adapter → reconnectDataPlane is called without a `!`.
-  adapter: OffBoxSandboxAdapter
+  adapter: OffBoxBareAdapter
 ): Promise<{ recovered: number; stillFailed: number }> {
   const run = repo.defaultDbh()
   const runtimeId = ref.runtimeId
@@ -3516,7 +3520,7 @@ async function ensureRuntimeStoppedForRecovery(
   const ref = await buildSandboxRefFromSandboxRow(mounts, repo.defaultDbh())
   if (ref) {
     try {
-      if (adapterForRow(ref.adapter, ref.mode).meta.offBox) {
+      if (isOffBoxAdapter(adapterForRow(ref.adapter, ref.mode))) {
         console.warn(
           `[sandbox] recovery: off-box runtime for session ${sessionId} reached the ` +
             `host-commit gate; skipping (off-box recovery pulls first)`

@@ -25,6 +25,7 @@ import {
 } from "./repo.js"
 import {
   SandboxAdapterError,
+  SandboxResourceGoneError,
   requireHostSpec,
   type SandboxHandle,
   type SandboxHostSpec,
@@ -646,21 +647,6 @@ export function buildBareDockerRunArgs(
   // server origin. It is a dumb keepalive the API execs into.
   args.push(opts.bareImage, "sleep", "infinity")
   return args
-}
-
-/**
- * Typed error for an externally-removed sandbox container (a `docker rm -f` mid
- * session). `docker exec` on a gone container exits 125 with "No such container";
- * runDockerCapture surfaces this so the dispatch fork can flip the sandbox to
- * state='failed' + preserve any uncommitted work (B13), rather than treating it
- * as an ordinary non-zero command result.
- */
-export class SandboxResourceGoneError extends Error {
-  readonly code = "resource_gone" as const
-  constructor(message: string) {
-    super(message)
-    this.name = "SandboxResourceGoneError"
-  }
 }
 
 /**

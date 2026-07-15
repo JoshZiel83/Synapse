@@ -20,7 +20,7 @@ import {
   type RemoteEnvdTransport,
 } from "./data-plane.js"
 import { CubeEnvdError, type ExecResult, type FileEntry } from "./types.js"
-import { SandboxResourceGoneError } from "../docker-sandbox.js"
+import { SandboxResourceGoneError } from "../sandbox-lifecycle.js"
 
 const descriptor = buildCubesandboxBareDescriptor()
 const VM_ROOT = "/workspace"

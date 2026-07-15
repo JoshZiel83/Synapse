@@ -13,24 +13,27 @@ import {
   keepAliveOffBoxSandboxes,
 } from "./service.js"
 import type { Executor } from "./repo.js"
-import type { OrphanResource, SandboxAdapter } from "./adapter-registry.js"
+import type {
+  OrphanResource,
+  OffBoxBareAdapter,
+  SandboxAdapter,
+} from "./adapter-registry.js"
 
 /** Minimal off-box adapter stub exposing only the orphan/keepalive seams. */
 function offBoxAdapter(overrides: {
   tag?: string
   offBox?: boolean
-  listOrphans?: SandboxAdapter["listOrphans"]
-  destroyResource?: SandboxAdapter["destroyResource"]
-  refreshResourceDeadline?: SandboxAdapter["refreshResourceDeadline"]
+  listOrphans?: OffBoxBareAdapter["listOrphans"]
+  destroyResource?: OffBoxBareAdapter["destroyResource"]
+  refreshResourceDeadline?: OffBoxBareAdapter["refreshResourceDeadline"]
 }): SandboxAdapter {
   const offBox = overrides.offBox ?? true
   return {
     key: `${overrides.tag ?? "cubesandbox"}:bare`,
-    // (#13) the discriminant configuredOffBoxAdapter now narrows on.
+    // (#13) `kind` is the SOLE off-box discriminant the sweep narrows on.
     kind: offBox ? "offBoxBare" : "hostBare",
     meta: {
       tag: overrides.tag ?? "cubesandbox",
-      offBox,
     },
     listOrphans: overrides.listOrphans,
     destroyResource: overrides.destroyResource,

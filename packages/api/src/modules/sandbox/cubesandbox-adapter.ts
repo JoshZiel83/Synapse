@@ -41,14 +41,14 @@ import type {
 } from "./data-plane.js"
 import type { StatCache } from "./working-set-bridge.js"
 import { createCubeEnvdWorkingSetBridge } from "./cubesandbox/working-set.js"
-import { sandboxAdapterMetadata } from "./adapter-metadata.js"
 import type {
   AdapterReadyOptions,
-  OffBoxSandboxAdapter,
+  OffBoxBareAdapter,
   OrphanResource,
   ReadinessReport,
   SandboxReconnectOptions,
 } from "./adapter-registry.js"
+import { bareMetaFor } from "./adapter-registry.js"
 import {
   brandRedactedCredentials,
   encodeSandboxDataPlaneCredentials,
@@ -274,18 +274,13 @@ export interface MakeCubesandboxBareAdapterDeps {
 
 export function makeCubesandboxBareAdapter(
   deps: MakeCubesandboxBareAdapterDeps = {}
-): OffBoxSandboxAdapter {
+): OffBoxBareAdapter {
   const mint = deps.mintRuntime ?? mintBareSandboxRuntime
   const runOpts = deps.optionsOverride ?? cubesandboxBareOptionsFromEnv()
   const descriptor = deps.descriptorOverride ?? buildCubesandboxBareDescriptor()
   const controlFactory = deps.controlClientFactory ?? makeControlClient
   const envdFactory = deps.envdFactory ?? makeEnvdClient
-  const metaEntry = sandboxAdapterMetadata("cubesandbox", "bare")
-  if (!metaEntry) {
-    throw new SandboxAdapterError(
-      "no adapter-metadata leaf for 'cubesandbox:bare' (registry/metadata drift)"
-    )
-  }
+  const { meta, endpoint } = bareMetaFor("cubesandbox")
 
   return {
     key: "cubesandbox:bare",
@@ -293,8 +288,8 @@ export function makeCubesandboxBareAdapter(
     mode: "bare",
     kind: "offBoxBare",
     capabilities: descriptor,
-    meta: metaEntry.meta,
-    endpoint: metaEntry.endpoint,
+    meta,
+    endpoint,
     async create(spec: SandboxSpec): Promise<SandboxHandle> {
       // NO host-mount-dir check (off-box has no host volume — the working set is
       // pushed later by the spine). ① stand up the VM via the control plane.
@@ -458,8 +453,8 @@ export function makeCubesandboxBareAdapter(
     // reachability, BEFORE the spine flips the sandbox active. On any failure
     // returns { ok:false, reason } — the spine's provision-fail fork then re-probes
     // liveness and LEAVES the (possibly-live) VM in 'closing' rather than DELETEing
-    // it (§6.9). `tunnelTimeoutMs <= 0` opts out of the envd reachability probe
-    // (test seam), mirroring the resident tunnel-wait opt-out.
+    // it (§6.9). `reachabilityProbeTimeoutMs <= 0` opts out of the envd reachability
+    // probe (test seam); off-box ignores primaryTimeoutMs (there is no catalog wait).
     async ready(
       handle: SandboxHandle,
       opts: AdapterReadyOptions
@@ -496,8 +491,8 @@ export function makeCubesandboxBareAdapter(
       }
       // (4) envd data-plane reachability. envd speaks the Connect protocol (no
       // plain GET /health on this deployment), so a proven unary fs RPC (stat the
-      // VM root) is the reachability signal. tunnelTimeoutMs<=0 skips it (test).
-      if (opts.tunnelTimeoutMs > 0) {
+      // VM root) is the reachability signal. reachabilityProbeTimeoutMs<=0 skips it.
+      if (opts.reachabilityProbeTimeoutMs > 0) {
         const envd = envdFactory(
           runOpts,
           sandboxID,

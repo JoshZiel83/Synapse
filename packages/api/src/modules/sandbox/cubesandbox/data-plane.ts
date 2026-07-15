@@ -53,7 +53,7 @@ import {
   type SandboxFileStat,
 } from "../data-plane.js"
 import type { SandboxCapabilityDescriptor } from "../model.js"
-import { SandboxResourceGoneError } from "../docker-sandbox.js"
+import { SandboxResourceGoneError } from "../sandbox-lifecycle.js"
 import { CubeEnvdError, CubeEnvdNotFoundError } from "./types.js"
 import type {
   ExecOptions,

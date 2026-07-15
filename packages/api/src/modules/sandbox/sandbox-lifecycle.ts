@@ -103,7 +103,7 @@ export interface SandboxHostSpec extends SandboxSpecBase {
 /**
  * (R4 §1.10) OFF-BOX spec (cubesandbox): the VM is the store, so NO host path
  * ever reaches it — it carries ONLY the shared core. The spine builds this
- * variant when `adapter.meta.offBox`, making the host-RCE trap (mounting a
+ * variant when `isOffBoxAdapter(adapter)`, making the host-RCE trap (mounting a
  * session root into an off-box adapter) impossible to express.
  */
 export interface SandboxOffBoxSpec extends SandboxSpecBase {
@@ -122,7 +122,7 @@ export type SandboxSpec = SandboxHostSpec | SandboxOffBoxSpec
 /**
  * Narrow a {@link SandboxSpec} to its host variant for a host-backed adapter.
  * Fail-closed: an off-box spec reaching a host adapter is a wiring bug (the
- * spine only builds the host variant for `!meta.offBox`), so throw rather than
+ * spine only builds the host variant for `!isOffBoxAdapter`), so throw rather than
  * read undefined host paths. Closure-safe (returns the narrowed value) so the
  * caller can read `host.sandboxRoot` inside nested callbacks.
  */
@@ -281,6 +281,23 @@ export class SandboxAdapterError extends Error {
   constructor(message: string) {
     super(message)
     this.name = "SandboxAdapterError"
+  }
+}
+
+/**
+ * Provider-NEUTRAL typed error: the sandbox's underlying resource is externally gone
+ * (a docker container `docker rm -f` mid-session; an off-box VM killed / TTL-expired,
+ * surfaced by the CubeProxy gone-mapper). Every data-plane consumer (dispatch →
+ * resource_gone, teardown, liveness) converges on this ONE error so a gone sandbox is
+ * flipped to state='failed' + its uncommitted work preserved, never treated as an
+ * ordinary command result. Lives here (the shared contract home) so neither the generic
+ * data plane nor the off-box adapter reverse-depends on the docker impl.
+ */
+export class SandboxResourceGoneError extends Error {
+  readonly code = "resource_gone" as const
+  constructor(message: string) {
+    super(message)
+    this.name = "SandboxResourceGoneError"
   }
 }
 

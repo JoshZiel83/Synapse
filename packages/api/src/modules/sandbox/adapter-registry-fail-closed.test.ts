@@ -1,12 +1,20 @@
 // P8(B) — fail-closed persisted-row adapter resolution. adapterForRow must THROW
 // on an unknown persisted adapter key instead of silently downgrading it to a
 // local resident adapter (which would run teardown/liveness/reconnect on the
-// WRONG substrate). The four registered keys still resolve. No DB needed.
+// WRONG substrate). Every registered key still resolves. No DB needed.
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { adapterForRow, listRegisteredAdapterKeys } from "./adapter-registry.js"
-import { SANDBOX_ADAPTER_KEYS } from "./adapter-metadata.js"
+import {
+  adapterForRow,
+  listRegisteredAdapterKeys,
+  isBareAdapter,
+  isOffBoxAdapter,
+} from "./adapter-registry.js"
+import {
+  SANDBOX_ADAPTER_KEYS,
+  sandboxAdapterMetadata,
+} from "./adapter-metadata.js"
 
 test("P8(B): adapterForRow throws (fail-closed) on an unknown persisted adapter key", () => {
   // e2b is residual and NOT registered (cubesandbox:bare IS, R4) — a persisted row
@@ -24,12 +32,13 @@ test("P8(B): adapterForRow throws (fail-closed) on an unknown persisted adapter 
   assert.throws(() => adapterForRow("totally-bogus", "resident"), /fail-closed/)
 })
 
-test("P8(B): adapterForRow still resolves each of the four registered keys", () => {
+test("P8(B): adapterForRow still resolves every registered key", () => {
   for (const [adapter, mode] of [
     ["local", "resident"],
     ["docker", "resident"],
     ["local", "bare"],
     ["docker", "bare"],
+    ["cubesandbox", "bare"],
   ] as const) {
     const a = adapterForRow(adapter, mode)
     assert.equal(a.provider, adapter, `${adapter}:${mode} → provider`)
@@ -82,6 +91,75 @@ test("P1.2: no registry key-drift; every registered bare adapter implements rebu
       )
       // Resident adapters have no bare data plane → no endpoint contract.
       assert.equal(a.endpoint, null, `${key} resident declares no endpoint`)
+    }
+  }
+})
+
+// R8 SINGLE-TRUTH-SOURCE INVARIANT: the adapter `kind` discriminant has exactly ONE
+// authoritative home — the metadata leaf's `kind` field. Each factory HARDCODES the
+// variant literal (resident | hostBare | offBoxBare); this test pins that literal
+// against the leaf so the two can never silently drift (the old failure was `kind`
+// being reconstructed from mode/offBox in two places). It also asserts the union is
+// STRUCTURALLY sound: the discriminant matches the methods actually present, so the
+// isBareAdapter / isOffBoxAdapter guards are provably total — a resident adapter can
+// NOT carry off-box seams, and an off-box adapter always carries all of them.
+test("R8: adapter.kind is single-sourced from the metadata leaf and structurally sound", () => {
+  for (const key of SANDBOX_ADAPTER_KEYS) {
+    const [provider, mode] = key.split(":") as [string, "resident" | "bare"]
+    const entry = sandboxAdapterMetadata(provider, mode)
+    assert.ok(entry, `${key} must have a metadata leaf`)
+    const a = adapterForRow(provider, mode)
+
+    // (1) factory literal === metadata leaf (the single truth source).
+    assert.equal(
+      a.kind,
+      entry.kind,
+      `${key}: factory kind '${a.kind}' must equal metadata-leaf kind '${entry.kind}'`
+    )
+
+    // (2) kind ↔ mode consistency.
+    if (mode === "resident") {
+      assert.equal(
+        a.kind,
+        "resident",
+        `${key}: resident mode ⇒ kind 'resident'`
+      )
+    } else {
+      assert.ok(
+        a.kind === "hostBare" || a.kind === "offBoxBare",
+        `${key}: bare mode ⇒ kind 'hostBare' | 'offBoxBare' (got '${a.kind}')`
+      )
+    }
+
+    // (3) discriminant ↔ methods: the type guards must agree with the literal, and
+    // the presence of the off-box-only seams must match the offBoxBare discriminant.
+    assert.equal(
+      isBareAdapter(a),
+      a.kind !== "resident",
+      `${key}: isBareAdapter must track (kind !== 'resident')`
+    )
+    assert.equal(
+      isOffBoxAdapter(a),
+      a.kind === "offBoxBare",
+      `${key}: isOffBoxAdapter must track (kind === 'offBoxBare')`
+    )
+    if (isOffBoxAdapter(a)) {
+      // An off-box adapter carries the full paid-resource lifecycle seam set.
+      assert.equal(
+        typeof a.listOrphans,
+        "function",
+        `${key}: off-box listOrphans`
+      )
+      assert.equal(
+        typeof a.destroyResource,
+        "function",
+        `${key}: off-box destroyResource`
+      )
+      assert.equal(
+        typeof a.refreshResourceDeadline,
+        "function",
+        `${key}: off-box refreshResourceDeadline`
+      )
     }
   }
 })

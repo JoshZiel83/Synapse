@@ -11,11 +11,8 @@ import { EventEmitter } from "node:events"
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import {
-  runDockerCapture,
-  SandboxResourceGoneError,
-  buildBareDockerRunArgs,
-} from "./docker-sandbox.js"
+import { runDockerCapture, buildBareDockerRunArgs } from "./docker-sandbox.js"
+import { SandboxResourceGoneError } from "./sandbox-lifecycle.js"
 import type { SandboxSpec, SandboxHostSpec } from "./sandbox-lifecycle.js"
 import { WHOLE_SCOPE } from "@synapse/device-runtime"
 import {

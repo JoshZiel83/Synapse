@@ -14,7 +14,7 @@ import type { OperationEnvelope } from "@synapse/device-protocol"
 import { fromExternalRfc3339 } from "@synapse/device-protocol/instant"
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
 import { config } from "../../config/index.js"
-import { adapterForRow } from "./adapter-registry.js"
+import { adapterForRow, isBareAdapter } from "./adapter-registry.js"
 import {
   SandboxAdapterError,
   type SandboxDataPlaneCredentials,
@@ -283,9 +283,9 @@ async function rebuildBarePlane(opts: {
   arch: string | null
 }): Promise<SandboxDataPlane> {
   const adapter = adapterForRow(opts.adapter, "bare")
-  if (!adapter.rebuildDataPlane) {
+  if (!isBareAdapter(adapter)) {
     throw new SandboxAdapterError(
-      `bare adapter '${opts.adapter}' has no rebuildDataPlane seam`
+      `bare adapter '${opts.adapter}' resolved to a non-bare variant (no rebuildDataPlane seam)`
     )
   }
   return adapter.rebuildDataPlane({
@@ -482,7 +482,9 @@ export async function dispatchBareRuntimeTool(
         // (#5-B) track off-box provenance for a REBUILT plane too (create() sets it
         // at register time; a cross-restart rebuild resolves it from the row's
         // adapter tag) so the HIT re-check fails closed for it on a DB read error.
-        if (sandboxAdapterMetadata(row.adapter, "bare")?.meta.offBox) {
+        if (
+          sandboxAdapterMetadata(row.adapter, "bare")?.kind === "offBoxBare"
+        ) {
           offBoxBarePlanes.add(input.runtimeId)
         } else {
           offBoxBarePlanes.delete(input.runtimeId)

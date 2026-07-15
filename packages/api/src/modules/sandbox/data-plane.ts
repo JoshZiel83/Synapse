@@ -39,15 +39,14 @@ import {
 } from "@synapse/device-runtime"
 import type { SynapseError } from "@synapse/device-protocol"
 import { FILESYSTEM_WRITE_TOOLS } from "@synapse/device-protocol"
-import {
-  runDockerCapture,
-  SandboxResourceGoneError,
-  type SpawnImpl,
-} from "./docker-sandbox.js"
+import { runDockerCapture, type SpawnImpl } from "./docker-sandbox.js"
 import type { McpDispatchResult } from "../devices/dispatch.js"
 import type { RuntimeAuthorizationGrantRecord } from "../runtime-authorizations/repo.types.js"
 import type { SandboxCapabilityDescriptor } from "./model.js"
-import type { SandboxDataPlaneCredentials } from "./sandbox-lifecycle.js"
+import {
+  SandboxResourceGoneError,
+  type SandboxDataPlaneCredentials,
+} from "./sandbox-lifecycle.js"
 
 /** Mount roots the whole-scope search fans out over (== SANDBOX_MOUNT_POINTS). */
 const MOUNT_ROOTS: readonly string[] = [...SANDBOX_MOUNT_POINTS]
