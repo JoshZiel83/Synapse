@@ -1070,16 +1070,6 @@ const ADAPTER_FACTORIES: {
 }
 
 /**
- * The registered `${provider}:${mode}` keys of ADAPTER_FACTORIES. Exposed so the
- * P1.2 host-side invariant test can drive off the REAL registry (and cross-check
- * it against the SANDBOX_ADAPTER_KEYS leaf), so registering ANY new adapter is
- * forced through the confinedFs='native' guard instead of a hardcoded list.
- */
-export function listRegisteredAdapterKeys(): string[] {
-  return Object.keys(ADAPTER_FACTORIES)
-}
-
-/**
  * Resolve the adapter for the CURRENT config (provision path). Returns null when
  * the provider is disabled ('none') or unregistered — warn-once, mirroring the
  * embedding/registry pattern. `${provider}:${mode}` keying: SANDBOX_MODE=bare now

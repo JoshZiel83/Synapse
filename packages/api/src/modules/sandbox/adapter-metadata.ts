@@ -81,7 +81,8 @@ export interface SandboxAdapterMeta {
 
 /** One registered `${provider}:${mode}` adapter's full metadata leaf. This table is
  *  the SINGLE source of truth for the adapter discriminant `kind` — the SandboxAdapter
- *  union variant each factory returns must match its table entry (kind-invariant test). */
+ *  union variant each factory returns is pinned to its table entry AT COMPILE TIME by the
+ *  ADAPTER_FACTORIES mapped type (AdapterForKey<K>). */
 export interface SandboxAdapterMetadataEntry {
   readonly key: string
   readonly provider: string
