@@ -59,13 +59,10 @@ RUN npm run build -w packages/device-protocol \
   && npm run build -w packages/api -- --sourceMap false --declarationMap false
 
 RUN cp packages/api/src/infrastructure/database/schema.sql packages/api/dist/infrastructure/database/schema.sql
-# tsc only emits .ts → .js, so non-TS assets (svg icons, etc.) under src/
-# never reach dist/. The runtime entry resolves these via import.meta.url
-# from dist/ (see mcp-plugins/service.ts), so mirror the asset tree from
-# src/ to dist/ explicitly. If more non-TS asset dirs appear, add them here.
-RUN mkdir -p packages/api/dist/modules/mcp-plugins/builtin-plugins \
-  && cp -r packages/api/src/modules/mcp-plugins/builtin-plugins/assets \
-       packages/api/dist/modules/mcp-plugins/builtin-plugins/assets
+# NOTE: builtin-plugins carries NO non-TS assets anymore — the brand SVGs were
+# replaced by React icon components (icons refactor), and the runtime imports only
+# .ts modules (categories.ts / index.ts), which tsc emits to dist/. If a non-TS
+# asset dir is ever added under src/ again, mirror it to dist/ here.
 
 # OCR is NOT bundled in the api image (zero-OCR-api): the api runs no OCR
 # engine and no tessdata is baked here. OCR runs out-of-process in a sidecar
