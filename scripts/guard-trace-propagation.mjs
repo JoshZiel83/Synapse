@@ -6,10 +6,10 @@
 // daemon, api→sidecar egress):
 //
 //   1. untraced_worker — a raw `new Worker(...)` / `new Queue(...)` bypasses the
-//      trace-context choke points (tracedWorker in workers/job-tracing.ts;
-//      the .add injection proxy in workers/queues.ts). Enqueue→Redis→worker
-//      trace continuation only holds if EVERY worker/queue goes through those.
-//      Allowed ONLY in those two files.
+//      trace-context choke points (tracedWorker / tracedTickWorker in
+//      workers/job-tracing.ts; the .add injection proxy in workers/queues.ts).
+//      Enqueue→Redis→worker trace continuation only holds if EVERY worker/queue
+//      goes through those. Allowed ONLY in those two files.
 //
 //   2. daemon_raw_egress — the remote-agent daemon has NO OTel SDK; it carries
 //      the traceparent forward by injecting a header in api-client.ts
@@ -64,7 +64,7 @@ const rules = [
       "packages/api/src/workers/job-tracing.ts",
       "packages/api/src/workers/queues.ts",
     ],
-    hint: "route it through tracedWorker() / the queues.ts lazyQueueProxy so the BullMQ trace continues",
+    hint: "route it through tracedWorker() / tracedTickWorker() (workers/job-tracing.ts) or the queues.ts lazyQueueProxy so the BullMQ trace continues",
   },
   {
     id: "daemon_raw_egress",

@@ -61,6 +61,15 @@ const rawConsoleAllowlist = new Set([
   // pretty fallback) — the same exemption the api pino logger gets.
   "packages/web-next/lib/client-logger.ts",
   "packages/mobile-app/src/lib/client-logger.ts",
+  // fatalExit's terminal error path deliberately writes to console: it runs
+  // when the process is crashing (uncaughtException/unhandledRejection,
+  // startup exits) — pino transports/hooks may be the very thing that broke,
+  // and stderr must carry the fatal cause unconditionally (§4.A lifecycle).
+  "packages/api/src/instrumentation.ts",
+  // Child-process boot probe: stdout lines (BOOT_RESULT/BOOT_OK) ARE its
+  // machine-readable contract with instrumentation.boot.test.ts + the P-A
+  // probes under scripts/trace-probes/.
+  "packages/api/src/instrumentation.boot-probe.ts",
 ])
 
 const CONSOLE_RE = /\bconsole\.(?:log|info|warn|error|debug|trace)\b/g

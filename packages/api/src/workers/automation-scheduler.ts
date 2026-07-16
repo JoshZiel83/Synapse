@@ -1,4 +1,4 @@
-import { tracedWorker } from "./job-tracing.js"
+import { tracedTickWorker, withRootTrace } from "./job-tracing.js"
 import { QUEUE_NAMES } from "@synapse/shared"
 import { redis } from "../infrastructure/redis/index.js"
 import {
@@ -26,16 +26,28 @@ export async function ensureAutomationSchedulerJob() {
 }
 
 export function startAutomationSchedulerWorker() {
-  const worker = tracedWorker(
+  // Tick worker (15s cadence): a no-op tick exports ZERO spans; a tick that
+  // scheduled executions emits one backdated summary span (see tracedTickWorker).
+  const worker = tracedTickWorker(
     QUEUE_NAMES.AUTOMATION_SCHEDULER,
     async () => {
       const scheduled = await scheduleDueAutomationExecutions()
-      await enqueueAutomationExecutionJobs(scheduled.scheduledExecutions)
+      // Escape the tick's suppressed scope for the enqueues so each scheduled
+      // execution becomes its OWN trace root — one tick schedules executions
+      // across unrelated workspaces, and the backdated tick summary span does
+      // not exist yet, so it cannot (and must not) parent them.
+      await withRootTrace(() =>
+        enqueueAutomationExecutionJobs(scheduled.scheduledExecutions)
+      )
       return scheduled
     },
     {
       connection: redis,
       concurrency: 1,
+    },
+    {
+      hasWork: (r) => r.scheduledExecutions.length > 0,
+      workCount: (r) => r.scheduledExecutions.length,
     }
   )
 

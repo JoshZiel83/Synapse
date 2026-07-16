@@ -722,6 +722,9 @@ function loadEnvOrExit(): z.infer<typeof envSchema> {
   log.fatal(`Invalid environment configuration:\n${issues}`)
   // Configuration errors are unrecoverable — refuse to start with bad config
   // rather than limp along with NaN/undefined values deep in the request path.
+  // Deliberately a bare exit, NOT instrumentation.ts's fatalExit: this runs at
+  // import time, pre-telemetry, and routing it through fatalExit would drag
+  // Sentry/OTel bootstrap into every DB script that imports the config.
   process.exit(1)
 }
 

@@ -22,8 +22,17 @@
  *     runtime, so throwing would only surface as an unhandled rejection + a
  *     lease-holding zombie). 429 → honor parameters.retry_after. Else → 3s
  *     backoff.
+ *   - Tracing: every getUpdates call (the loop poll AND stop()'s confirm) runs
+ *     under `suppressTracing` — at 100% sampling each poll cycle would
+ *     otherwise emit a fresh-root CLIENT span (~2-3k/day/account of pure
+ *     transport noise). Suppression is enforced by the SDK Tracer + propagator,
+ *     and is scoped to the poll fetch ONLY: inbound dispatch (emitInbound) runs
+ *     outside the suppressed context so message-level instrumentation stays
+ *     live. Fatal 401/409 visibility remains via logger.error.
  */
 
+import { context } from "@opentelemetry/api"
+import { suppressTracing } from "@opentelemetry/core"
 import { sleep } from "../../../../infrastructure/async/index.js"
 import type { AccountStartContext, RunningAccount } from "../types.js"
 import { callMethod, TelegramApiError } from "./client.js"
@@ -91,20 +100,24 @@ export async function startTelegramLongPoll(
 
       let updates: TelegramUpdate[]
       try {
-        updates = await callMethod<TelegramUpdate[]>(
-          creds,
-          "getUpdates",
-          {
-            offset,
-            limit: TELEGRAM_GET_UPDATES_LIMIT,
-            timeout: TELEGRAM_LONG_POLL_TIMEOUT_SEC,
-            // allowed_updates is sticky: send the explicit list ONLY on the
-            // first poll (empty/omitted thereafter keeps the setting).
-            ...(first
-              ? { allowed_updates: [...TELEGRAM_ALLOWED_UPDATES] }
-              : {}),
-          },
-          { timeoutMs: POLL_HTTP_TIMEOUT_MS }
+        // Poll transport is trace-dark (see header): suppress the CLIENT span
+        // + context injection for the fetch only — dispatch below is outside.
+        updates = await context.with(suppressTracing(context.active()), () =>
+          callMethod<TelegramUpdate[]>(
+            creds,
+            "getUpdates",
+            {
+              offset,
+              limit: TELEGRAM_GET_UPDATES_LIMIT,
+              timeout: TELEGRAM_LONG_POLL_TIMEOUT_SEC,
+              // allowed_updates is sticky: send the explicit list ONLY on the
+              // first poll (empty/omitted thereafter keeps the setting).
+              ...(first
+                ? { allowed_updates: [...TELEGRAM_ALLOWED_UPDATES] }
+                : {}),
+            },
+            { timeoutMs: POLL_HTTP_TIMEOUT_MS }
+          )
         )
         first = false
       } catch (err) {
@@ -178,11 +191,15 @@ export async function startTelegramLongPoll(
       try {
         const offset = await readOffset(account.id)
         if (offset > 0) {
-          await callMethod(creds, "getUpdates", {
-            offset,
-            limit: 1,
-            timeout: 0,
-          })
+          // Same trace suppression as the loop poll — the confirm is poll
+          // transport too.
+          await context.with(suppressTracing(context.active()), () =>
+            callMethod(creds, "getUpdates", {
+              offset,
+              limit: 1,
+              timeout: 0,
+            })
+          )
         }
       } catch {
         // ignore — confirm is best-effort

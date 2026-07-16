@@ -148,8 +148,9 @@ function resolveDestinationUrl(span: Span): string | undefined {
     .attributes
   const fromAttributes = attributes?.["url.full"] ?? attributes?.["http.url"]
   if (typeof fromAttributes === "string") return fromAttributes
-  // SentrySampler stashes the URL in traceState even for NOT_RECORD decisions,
-  // so under Sentry-ON unsampled CLIENT spans still resolve.
+  // wrapSamplingDecision (called by instrumentation.ts's SentryWrappedSampler)
+  // stashes the URL in traceState even for NOT_RECORD decisions, so under
+  // Sentry-ON unsampled CLIENT spans still resolve.
   return span.spanContext().traceState?.get("sentry.url")
 }
 

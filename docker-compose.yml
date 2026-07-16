@@ -57,6 +57,10 @@ services:
       dockerfile: infrastructure/Dockerfile.api
     container_name: synapse-api
     restart: unless-stopped
+    # Graceful-shutdown headroom: the in-app force-exit timer fires at 15s and
+    # the final telemetry flush is capped at 3s — Docker's default 10s would
+    # SIGKILL mid-flush and drop the last requests' spans/events.
+    stop_grace_period: 30s
     logging: *default-logging
     env_file:
       - .env
@@ -206,17 +210,41 @@ services:
       SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY: ${SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY:-}
       SYNAPSE_TUNNEL_VHOST_HOST: ${SYNAPSE_TUNNEL_VHOST_HOST:-tunnel-edge}
       FRP_SHARED_TOKEN: ${FRP_SHARED_TOKEN:-}
-      # --- observability (logging refactor) ---
+      # --- observability ---
       # OTLP traces target. Set to http://alloy:4318 when running the
       # `observability` profile; empty => spans are created (logs carry trace_id)
       # but not exported. Nothing hardcoded — operator sets the host.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      # Per-signal override (used as-is; either endpoint var enables export).
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-synapse-api}
-      # Self-hosted Sentry (errors + tracing). Empty => Sentry disabled. The DSN
-      # / URL are env-only (never hardcoded — this is an open-source repo).
+      # THE OTLP volume knob (six OTel spec values), honored whether or not
+      # Sentry is on. Inbound remote sampled-flags are advisory (operator intent
+      # wins) — see packages/api/src/instrumentation.ts header.
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      # true = no-op tracing (api still boots/serves; Sentry errors survive).
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      # SDK self-diagnostics level (default error: exporter failures log).
+      OTEL_LOG_LEVEL: ${OTEL_LOG_LEVEL:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
+      # Stable HTTP semconv opt-in (code default "http"; http/dup for debugging).
+      OTEL_SEMCONV_STABILITY_OPT_IN: ${OTEL_SEMCONV_STABILITY_OPT_IN:-http}
+      # Extra first-party hosts for egress trace-header propagation
+      # (comma-separated; leading dot = suffix match). Dotless/loopback/private
+      # hosts and BASE_URL/APP_BASE_URL are always first-party; third parties
+      # never receive trace headers.
+      SYNAPSE_TRACE_FIRST_PARTY_HOSTS: ${SYNAPSE_TRACE_FIRST_PARTY_HOSTS:-}
+      # Self-hosted Sentry (error capture; optional span forwarding below).
+      # Empty => Sentry disabled. Setting a DSN changes neither OTLP volume nor
+      # the instrumentation set. Env-only (never hardcoded — open-source repo).
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
-      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      # Sentry FORWARD rate: fraction of traces forwarded to Sentry Performance
+      # (event-level, deterministic per trace-id). Default 0 = Sentry errors-only;
+      # set > 0 (e.g. 0.1) to opt into Sentry Performance. NOT a head-sampling
+      # rate — OTLP/Tempo volume is never affected.
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0}
       # Device log-ingest token secret (POST /api/v1/logs device-bearer path).
       # Empty => device log回传 disabled (browser/mobile session path still works).
       SYNAPSE_LOG_INGEST_SECRET: ${SYNAPSE_LOG_INGEST_SECRET:-}

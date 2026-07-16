@@ -10,7 +10,8 @@ import {
   SpanStatusCode,
   trace,
 } from "@opentelemetry/api"
-import { W3CTraceContextPropagator } from "@opentelemetry/core"
+import type { Span } from "@opentelemetry/api"
+import { suppressTracing, W3CTraceContextPropagator } from "@opentelemetry/core"
 
 /**
  * OpenTelemetry trace propagation across the BullMQ (Redis) boundary.
@@ -30,10 +31,14 @@ import { W3CTraceContextPropagator } from "@opentelemetry/core"
  */
 const CARRIER_KEY = "__otelctx"
 const tracer = trace.getTracer("synapse-bullmq")
-// Trace-context ONLY (no baggage). The carrier is persisted into Redis job data
-// and exported to spans, so we deliberately do NOT use the global propagator —
-// that includes the baggage propagator, and a future contributor setting OTel
-// baggage with user/PII values would silently leak it into job payloads + logs.
+// Trace-context ONLY, via a PRIVATE W3CTraceContextPropagator — deliberately
+// NOT the global propagator. The global is the FirstPartyOnlyPropagator-wrapped
+// composite (instrumentation.ts): its inject() is destination-host gated and
+// fails CLOSED for a span with no resolvable URL, so a Redis job-data carrier
+// (no URL) would get nothing injected at all; and under Sentry-on its members
+// write sentry-trace/DSC baggage that must never be persisted into Redis job
+// payloads (job data is exported to spans and logs — vendor headers and any
+// future contributor's baggage values would silently leak).
 const tracePropagator = new W3CTraceContextPropagator()
 
 /**
@@ -69,6 +74,12 @@ export function injectTraceContext<T>(data: T): T {
  * Prefer this over a data-level "skip injection" marker: it needs no change to
  * the deliberately-dumb injection choke point and cannot silently fail the way an
  * identity-sensitive Symbol marker would under a dual ESM/CJS module load.
+ *
+ * Load-bearing side effect (unit-pinned in job-tracing.test.ts): switching to
+ * ROOT_CONTEXT also DROPS the `suppressTracing` context key, so this is the
+ * sanctioned escape hatch out of `tracedTickWorker`'s suppressed tick scope —
+ * a work-path enqueue wrapped in `withRootTrace` records spans and injects
+ * carriers again, becoming its own fresh trace root.
  */
 export function withRootTrace<T>(fn: () => T): T {
   return context.with(ROOT_CONTEXT, fn)
@@ -166,8 +177,10 @@ function withJobSpan(
 
 /**
  * Drop-in replacement for `new Worker(name, processor, opts)` that traces every
- * job (see withJobSpan). Use this instead of `new Worker` for all Synapse
- * workers so worker logs/spans correlate with the enqueueing request. Generics
+ * job (see withJobSpan). Use this instead of `new Worker` for payload-carrying
+ * Synapse workers so worker logs/spans correlate with the enqueueing request;
+ * high-frequency repeatable tick workers (schedulers/sweepers) use
+ * `tracedTickWorker` instead — see the P-TICK policy below. Generics
  * mirror BullMQ's own `any` defaults so existing worker bodies (which read
  * `job.data` untyped) keep compiling unchanged.
  */
@@ -186,5 +199,122 @@ export function tracedWorker<
     processor as unknown as Processor<unknown, unknown, string>
   ) as unknown as Processor<DataType, ResultType, NameType>
   return new Worker<DataType, ResultType, NameType>(name, wrapped, opts)
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * How a tick worker signals "this tick found work" (and optionally how much) to
+ * `tracedTickWorker`, evaluated against the processor's return value.
+ */
+export type TickTraceOptions<ResultType> = {
+  /** True iff the tick found/scheduled work — emits the backdated summary span. */
+  hasWork: (result: ResultType) => boolean
+  /** Item count for the summary span's `synapse.tick.items` attribute. */
+  workCount?: (result: ResultType) => number
+}
+
+/**
+ * Processor wrapper behind `tracedTickWorker` — exported only as the unit-test
+ * seam (exercising it needs no Redis-backed Worker). Production code uses
+ * `tracedTickWorker`.
+ */
+export function wrapTickProcessor<
+  DataType,
+  ResultType,
+  NameType extends string,
+>(
+  name: string,
+  processor: Processor<DataType, ResultType, NameType>,
+  tick: TickTraceOptions<ResultType>
+): Processor<DataType, ResultType, NameType> {
+  return async (job, token) => {
+    const startTime = Date.now()
+    // Created against ROOT_CONTEXT explicitly: (a) outside the suppressed scope
+    // below, so it records; (b) parentless by construction — repeatable tick
+    // templates are never trace-injected (see queues.ts), so there is no
+    // upstream trace to continue.
+    const emitSummarySpan = (configure: (span: Span) => void) => {
+      const span = tracer.startSpan(
+        `process ${name}`,
+        {
+          kind: SpanKind.CONSUMER,
+          startTime,
+          attributes: {
+            "messaging.system": "bullmq",
+            "messaging.destination.name": name,
+          },
+        },
+        ROOT_CONTEXT
+      )
+      configure(span)
+      span.end()
+    }
+    try {
+      const result = await context.with(suppressTracing(ROOT_CONTEXT), () =>
+        processor(job, token)
+      )
+      if (tick.hasWork(result)) {
+        emitSummarySpan((span) => {
+          if (tick.workCount) {
+            span.setAttribute("synapse.tick.items", tick.workCount(result))
+          }
+        })
+      }
+      return result
+    } catch (err) {
+      // Error ticks DO emit the summary span — failures are signal, not noise.
+      emitSummarySpan((span) => {
+        span.recordException(err as Error)
+        span.setStatus({ code: SpanStatusCode.ERROR })
+      })
+      throw err
+    }
+  }
+}
+
+/**
+ * Tick-worker variant of `tracedWorker` for high-frequency repeatable jobs —
+ * schedulers/sweepers that fire every few seconds and usually find nothing.
+ *
+ * A `tracedWorker` would emit one root CONSUMER span per tick; at the in-tree
+ * 15s/10s cadences that is >14k orphan single-span traces per day drowning the
+ * backend. Policy (P-TICK): **a no-op tick exports ZERO spans.**
+ *
+ * Mechanism (spike-verified against the installed @opentelemetry/core 2.8.0
+ * and re-pinned in job-tracing.test.ts):
+ *
+ * - The processor runs under `context.with(suppressTracing(ROOT_CONTEXT), ...)`.
+ *   Suppression is enforced by the SDK Tracer (spans come back non-recording)
+ *   AND by propagator inject, so neither manual spans nor future
+ *   auto-instrumentation (pg/ioredis/undici) can reintroduce orphan tick roots.
+ * - When the tick found work (`hasWork(result)`), ONE **backdated** parentless
+ *   `process {name}` CONSUMER summary span is emitted: started with the
+ *   pre-processor wall-clock `startTime` and ended immediately, so its duration
+ *   is the true tick duration; `synapse.tick.items` carries `workCount(result)`.
+ * - The summary span does not exist while the processor runs, so it mechanically
+ *   CANNOT parent the work the tick schedules ([adj 2, amended by A1]).
+ *   Work-path enqueues instead escape suppression via `withRootTrace`, making
+ *   each scheduled execution its own trace root. Per-item roots are deliberate:
+ *   one tick schedules executions across unrelated workspaces — parenting them
+ *   under the tick span would mix tenants in one trace.
+ * - A throwing tick DOES emit the summary span (recordException + ERROR status)
+ *   and rethrows, so BullMQ retry/failed semantics are unchanged [adj 2-A1].
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export function tracedTickWorker<
+  DataType = any,
+  ResultType = any,
+  NameType extends string = string,
+>(
+  name: string,
+  processor: Processor<DataType, ResultType, NameType>,
+  opts: WorkerOptions | undefined,
+  tick: TickTraceOptions<ResultType>
+): Worker<DataType, ResultType, NameType> {
+  return new Worker<DataType, ResultType, NameType>(
+    name,
+    wrapTickProcessor(name, processor, tick),
+    opts
+  )
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */

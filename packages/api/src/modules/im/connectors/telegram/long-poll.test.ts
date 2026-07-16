@@ -1,5 +1,8 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { context } from "@opentelemetry/api"
+import { isTracingSuppressed } from "@opentelemetry/core"
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import type { InboundEnvelope } from "../types.js"
 import { startTelegramLongPoll } from "./long-poll.js"
@@ -244,4 +247,104 @@ test("long-poll: a dispatch error still advances+persists the offset (no redeliv
   // The second update still emitted (batch did not abort on the first error).
   assert.equal(emitted.length, 1)
   assert.equal(emitted[0].externalMessageId, "2")
+})
+
+test("long-poll: getUpdates (loop poll AND stop confirm) run tracing-suppressed; dispatch does not", async () => {
+  // The poll transport is trace-dark: at 100% sampling every getUpdates cycle
+  // would otherwise emit a fresh-root CLIENT span (~2-3k/day/account of pure
+  // noise). Suppression must cover BOTH getUpdates call sites (the loop poll
+  // and stop()'s confirm) and NOTHING else — inbound dispatch (emitInbound)
+  // must run OUTSIDE the suppressed context so message-level instrumentation
+  // stays live. A real context manager is required: without one,
+  // context.active() is always ROOT_CONTEXT and suppression is unobservable.
+  const contextManager = new AsyncLocalStorageContextManager().enable()
+  context.setGlobalContextManager(contextManager)
+
+  const controller = new AbortController()
+  const calls: Array<{
+    method: string
+    body: Record<string, unknown>
+    suppressed: boolean
+  }> = []
+  const emitSuppressed: boolean[] = []
+  let storedOffset = 0
+
+  const orig = globalThis.fetch
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const method = String(url).split("/").pop() ?? ""
+    const body = init?.body ? JSON.parse(String(init.body)) : {}
+    calls.push({
+      method,
+      body,
+      suppressed: isTracingSuppressed(context.active()),
+    })
+    if (method === "getUpdates") {
+      const getUpdatesCalls = calls.filter(
+        (c) => c.method === "getUpdates"
+      ).length
+      if (getUpdatesCalls === 1) {
+        return jsonResponse({
+          ok: true,
+          result: [
+            {
+              update_id: 50,
+              message: {
+                message_id: 1,
+                date: 1_700_000_000,
+                chat: { id: 555, type: "private", first_name: "A" },
+                from: { id: 777, first_name: "A" },
+                text: "hi",
+              },
+            },
+          ],
+        })
+      }
+      // Second loop poll: empty + abort so the loop exits; stop() then issues
+      // the confirm getUpdates (storedOffset is 51 > 0 by now).
+      controller.abort()
+      return jsonResponse({ ok: true, result: [] })
+    }
+    return jsonResponse({ ok: true, result: true })
+  }) as typeof fetch
+
+  try {
+    const running = await startTelegramLongPoll(
+      {
+        account: ACCOUNT,
+        signal: controller.signal,
+        emitInbound: async () => {
+          emitSuppressed.push(isTracingSuppressed(context.active()))
+        },
+        logger: NOOP_LOGGER,
+      },
+      {
+        getOffset: async () => storedOffset,
+        setOffset: async (_id, off) => {
+          storedOffset = off
+        },
+        enrich: async (e) => e,
+      }
+    )
+    await running.stop()
+  } finally {
+    globalThis.fetch = orig
+    context.disable()
+    contextManager.disable()
+  }
+
+  // Every getUpdates fetch ran under a suppressed context.
+  const polls = calls.filter((c) => c.method === "getUpdates")
+  assert.ok(polls.length >= 3) // 2 loop polls + the stop() confirm
+  for (const p of polls) assert.equal(p.suppressed, true)
+  // The stop() confirm (limit:1, timeout:0 — the SECOND call site) is present
+  // and suppressed too.
+  const confirm = polls.find((p) => p.body.limit === 1 && p.body.timeout === 0)
+  assert.ok(confirm)
+  assert.equal(confirm.suppressed, true)
+  // Suppression is scoped to the poll fetch ONLY: deleteWebhook (one-time
+  // setup, not poll transport) and inbound dispatch stay unsuppressed.
+  const deleteWebhook = calls.find((c) => c.method === "deleteWebhook")
+  assert.ok(deleteWebhook)
+  assert.equal(deleteWebhook.suppressed, false)
+  assert.deepEqual(emitSuppressed, [false])
 })

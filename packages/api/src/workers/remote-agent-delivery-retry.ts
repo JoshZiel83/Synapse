@@ -1,4 +1,4 @@
-import { tracedWorker } from "./job-tracing.js"
+import { tracedTickWorker } from "./job-tracing.js"
 import { QUEUE_NAMES } from "@synapse/shared"
 import { redis } from "../infrastructure/redis/index.js"
 import { runDueRemoteAgentDeliveryRetries } from "../modules/remote-agents/service.js"
@@ -22,7 +22,10 @@ export async function ensureRemoteAgentDeliveryRetryJob() {
 }
 
 export function startRemoteAgentDeliveryRetryWorker() {
-  const worker = tracedWorker(
+  // Tick worker (10s cadence): a no-op tick exports ZERO spans; a tick that
+  // re-notified due deliveries emits one backdated summary span (see
+  // tracedTickWorker). Uses the service's existing `{ rechecked }` return.
+  const worker = tracedTickWorker(
     QUEUE_NAMES.REMOTE_AGENT_DELIVERY_RETRY,
     async () => {
       return runDueRemoteAgentDeliveryRetries()
@@ -30,6 +33,10 @@ export function startRemoteAgentDeliveryRetryWorker() {
     {
       connection: redis,
       concurrency: 1,
+    },
+    {
+      hasWork: (r) => (r.rechecked ?? 0) > 0,
+      workCount: (r) => r.rechecked ?? 0,
     }
   )
 

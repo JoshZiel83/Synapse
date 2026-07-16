@@ -4,6 +4,8 @@
 // OpenTelemetry plugin registered below.
 import {
   fastifyOtelInstrumentation,
+  fatalExit,
+  flushTelemetry,
   setupSentryErrorHandler,
   shutdownTelemetry,
 } from "./instrumentation.js"
@@ -158,8 +160,11 @@ async function main() {
   // routes so it can intercept their definitions.
   await app.register(fastifyOtelInstrumentation.plugin())
 
-  // Sentry's Fastify error handler — Fastify v4 requires explicit setup or route
-  // errors never reach Sentry. No-op when SENTRY_DSN is unset.
+  // House route-error onError hook (NOT Sentry.setupFastifyErrorHandler — see
+  // instrumentation.ts): registered in BOTH configs so the fastify hook
+  // topology is DSN-independent (I1); the capture inside is gated on the shared
+  // client-error classification (expected 4xx never reach Sentry) and no-ops
+  // when SENTRY_DSN is unset.
   setupSentryErrorHandler(app)
 
   app.addContentTypeParser(
@@ -265,7 +270,7 @@ async function main() {
     log.info("Database schema preflight passed")
   } catch (err) {
     log.error({ err }, "Database schema preflight failed")
-    process.exit(1)
+    await fatalExit(err, "startup:schema-preflight")
   }
 
   // Fail LOUD if the active embedding provider's dimension/space doesn't match the
@@ -275,7 +280,7 @@ async function main() {
     await assertEmbeddingSpaceConsistent()
   } catch (err) {
     log.error({ err }, "Embedding space preflight failed")
-    process.exit(1)
+    await fatalExit(err, "startup:embedding-preflight")
   }
 
   await startRealtimeEventOutboxDispatcher()
@@ -318,7 +323,7 @@ async function main() {
     initInstanceManagerListeners()
   } catch (err) {
     log.error({ err }, "Failed to initialize MCP runtime")
-    process.exit(1)
+    await fatalExit(err, "startup:mcp-runtime-init")
   }
 
   // Health check
@@ -349,7 +354,7 @@ async function main() {
     log.info(`Synapse API running on http://${config.host}:${config.port}`)
   } catch (err) {
     app.log.error(err)
-    process.exit(1)
+    await fatalExit(err, "startup:listen")
   }
 
   try {
@@ -581,9 +586,24 @@ async function main() {
 
     const forceExitTimer = setTimeout(() => {
       app.log.error({ signal }, "Graceful shutdown timed out, forcing exit")
-      process.exit(1)
+      void fatalExit(
+        new Error("graceful shutdown timed out"),
+        "shutdown:force-exit"
+      )
     }, 15000)
     forceExitTimer.unref()
+
+    // Early telemetry drain: the final flush step below sits behind ~38s of
+    // worst-case step budgets (10×3s + 5s fastify close + 3s db pool) while the
+    // force-exit timer fires at 15s — without this, buffered spans (≤5s/2048
+    // batch) from the last requests are routinely lost on SIGTERM.
+    await waitWithTimeout(
+      "early telemetry flush",
+      flushTelemetry(),
+      3000
+    ).catch((err) => {
+      app.log.error({ err }, "Early telemetry flush timed out")
+    })
 
     try {
       app.server.closeIdleConnections?.()
@@ -685,7 +705,9 @@ async function main() {
       process.exit(0)
     } catch (err) {
       app.log.error({ err, signal }, "Graceful shutdown failed")
-      process.exit(1)
+      // fatalExit still flushes telemetry (bounded) — the old bare exit dropped
+      // every buffered span/event of the failed shutdown.
+      await fatalExit(err, "shutdown:error")
     } finally {
       clearTimeout(forceExitTimer)
     }
