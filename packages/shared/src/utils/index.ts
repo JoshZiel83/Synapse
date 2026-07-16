@@ -395,3 +395,11 @@ export { slugify } from "./slug.js"
 export type { SlugifyOptions } from "./slug.js"
 
 export { parseJsonObject, parseJsonObjectOrUndefined } from "./json.js"
+
+export {
+  isValidTraceparent,
+  MAX_TRACESTATE_LENGTH,
+  TRACEPARENT_RE,
+  traceIdFromTraceparent,
+} from "./traceparent.js"
+export type { TraceCarrier } from "./traceparent.js"

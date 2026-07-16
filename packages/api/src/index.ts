@@ -34,6 +34,7 @@ import {
   shutdownEventBus,
 } from "./infrastructure/events/index.js"
 import serverTiming from "./infrastructure/observability/server-timing.js"
+import { isMalformedUuidDatabaseError } from "./infrastructure/observability/request-error-classification.js"
 import { beginShutdown } from "./infrastructure/shutdown/state.js"
 import { withTimeout } from "./infrastructure/async/index.js"
 import { ensureStorageDir } from "./infrastructure/storage/index.js"
@@ -135,19 +136,6 @@ import {
 import { assertEmbeddingSpaceConsistent } from "./modules/memory/embedding-space-guard.js"
 
 const log = createLogger("server")
-
-function isMalformedUuidDatabaseError(error: unknown) {
-  if (!error || typeof error !== "object") {
-    return false
-  }
-
-  const candidate = error as { code?: unknown; message?: unknown }
-  return (
-    candidate.code === "22P02" &&
-    typeof candidate.message === "string" &&
-    /invalid input syntax for type uuid/i.test(candidate.message)
-  )
-}
 
 async function main() {
   // Single shared pino instance (infrastructure/logger): app logs and request

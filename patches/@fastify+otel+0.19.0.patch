@@ -1,0 +1,133 @@
+diff --git a/node_modules/@fastify/otel/index.js b/node_modules/@fastify/otel/index.js
+index d52a40e..48ed5a9 100644
+--- a/node_modules/@fastify/otel/index.js
++++ b/node_modules/@fastify/otel/index.js
+@@ -43,6 +43,7 @@ const ANONYMOUS_FUNCTION_NAME = 'anonymous'
+ // Symbols
+ const kInstrumentation = Symbol('fastify otel instance')
+ const kRequestSpan = Symbol('fastify otel request spans')
++const kRequestError = Symbol('fastify otel request error')
+ const kRequestContext = Symbol('fastify otel request context')
+ const kAddHookOriginal = Symbol('fastify otel addhook original')
+ const kSetNotFoundOriginal = Symbol('fastify otel setnotfound original')
+@@ -262,6 +263,7 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
+         }
+       })
+       instance.decorateRequest(kRequestSpan, null)
++      instance.decorateRequest(kRequestError, null)
+       instance.decorateRequest(kRequestContext, null)
+ 
+       instance.addHook('onRoute', function otelWireRoute (routeOptions) {
+@@ -355,7 +357,7 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
+         })
+       })
+ 
+-      instance.addHook('onRequest', function startRequestSpanHook (request, _reply, hookDone) {
++      instance.addHook('onRequest', function startRequestSpanHook (request, reply, hookDone) {
+         if (
+           this[kInstrumentation].isEnabled() === false ||
+           isRouteOtelDisabled(request.routeOptions.config)
+@@ -413,6 +415,19 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
+         request[kRequestContext] = trace.setSpan(ctx, span)
+         request[kRequestSpan] = span
+ 
++        // Hijacked replies never run onSend/onResponse, so the raw close is
++        // their sole ender. The finalize hooks null out kRequestSpan after
++        // ending, which makes this a no-op on normal replies (never double-ends).
++        reply.raw.once('close', function endRequestSpanOnClose () {
++          const span = request[kRequestSpan]
++
++          if (span != null) {
++            span.end()
++          }
++
++          request[kRequestSpan] = null
++        })
++
+         context.with(request[kRequestContext], () => {
+           hookDone()
+         })
+@@ -444,8 +459,21 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
+         const span = request[kRequestSpan]
+ 
+         if (span != null) {
++          // OTel HTTP semconv: SERVER span status MUST stay UNSET for 4xx.
++          // Only the FINAL status code (after any custom error handler ran)
++          // decides, so the error stashed by recordErrorInSpanHook is
++          // classified — and its exception event recorded, once — here.
+           if (reply.statusCode >= 500) {
+-            span.setStatus({ code: SpanStatusCode.ERROR })
++            const error = request[kRequestError]
++
++            span.setStatus({
++              code: SpanStatusCode.ERROR,
++              message: error?.message
++            })
++
++            if (error != null && instrumentation[kRecordExceptions] !== false) {
++              span.recordException(error)
++            }
+           }
+ 
+           span.setAttributes({
+@@ -455,23 +483,16 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
+         }
+ 
+         request[kRequestSpan] = null
++        request[kRequestError] = null
+ 
+         hookDone(null, payload)
+       }
+ 
+       function recordErrorInSpanHook (request, reply, error, hookDone) {
+-        /** @type {Span} */
+-        const span = request[kRequestSpan]
+-
+-        if (span != null) {
+-          span.setStatus({
+-            code: SpanStatusCode.ERROR,
+-            message: error.message
+-          })
+-          if (instrumentation[kRecordExceptions] !== false) {
+-            span.recordException(error)
+-          }
+-        }
++        // fastify v4 runs onError BEFORE the custom error handler, so the
++        // final status code is unknown here. Stash the error only;
++        // finalizeResponseSpanHook records it iff the reply ends up 5xx.
++        request[kRequestError] = error
+ 
+         hookDone()
+       }
+@@ -648,13 +669,12 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
+                       return result
+                     },
+                     error => {
++                      // Status only — the exception event is recorded once,
++                      // on the request span (finalizeResponseSpanHook).
+                       span.setStatus({
+                         code: SpanStatusCode.ERROR,
+                         message: error.message
+                       })
+-                      if (instrumentation[kRecordExceptions] !== false) {
+-                        span.recordException(error)
+-                      }
+                       span.end()
+                       return Promise.reject(error)
+                     }
+@@ -664,13 +684,12 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
+                 span.end()
+                 return res
+               } catch (error) {
++                // Status only — the exception event is recorded once, on the
++                // request span (finalizeResponseSpanHook).
+                 span.setStatus({
+                   code: SpanStatusCode.ERROR,
+                   message: error.message
+                 })
+-                if (instrumentation[kRecordExceptions] !== false) {
+-                  span.recordException(error)
+-                }
+                 span.end()
+                 throw error
+               }

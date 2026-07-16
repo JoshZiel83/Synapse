@@ -43,6 +43,11 @@ npm run guard:layering -w packages/api
 node ./scripts/guard-datetime-boundaries.mjs
 node ./scripts/guard-logging.mjs
 node ./scripts/guard-trace-propagation.mjs
+# patches/@fastify+otel+0.19.0.patch must be applied to the installed tree
+# (postinstall runs `patch-package --error-on-fail`, but a dependency bump
+# whose stale patch still applies cleanly only warns — this pins the marker).
+[ "$(grep -c kRequestError node_modules/@fastify/otel/index.js)" -ge 5 ] ||
+  { echo "guard: @fastify/otel patch not applied (kRequestError missing)"; exit 1; }
 ok "guards clean"
 
 # ── 2b. Curated ESLint rule set (no-nested-ternary et al.) ──────────────────

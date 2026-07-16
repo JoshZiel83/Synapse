@@ -19,6 +19,7 @@
     "packages/web-next-design"
   ],
   "scripts": {
+    "postinstall": "patch-package --error-on-fail",
     "dev:api": "npm run dev -w packages/api",
     "dev:daemon": "npm run dev -w packages/remote-agent-daemon",
     "dev:web": "npm run dev -w packages/web-next",
@@ -79,6 +80,7 @@
     "@types/react-dom": "^19.2.3",
     "eslint": "^9.39.4",
     "lint-staged": "^16.4.0",
+    "patch-package": "^8.0.1",
     "playwright": "^1.61.1",
     "prettier": "^3.8.3",
     "prettier-plugin-tailwindcss": "^0.7.4",
