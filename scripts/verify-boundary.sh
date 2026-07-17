@@ -105,7 +105,10 @@ else
   npm run test -w packages/device-runtime
   npm run test -w packages/device-sdk
   npm run test -w packages/remote-agent-daemon
-  ( cd packages/api && npx tsx --test --test-concurrency=4 "src/**/*.test.ts" )
+  # --experimental-test-module-mocks: the WS tracing tests (asr-tracing /
+  # ws-route-tracing) drive the REAL handlers with mock.module'd auth/registry
+  # seams (Node 22 gates mock.module behind this flag; it only enables the API).
+  ( cd packages/api && npx tsx --test --experimental-test-module-mocks --test-concurrency=4 "src/**/*.test.ts" )
   npm run test -w packages/web-next
   ok "test suites pass"
 fi

@@ -41,6 +41,7 @@ import {
 } from "./chat-content-block.js"
 import { IsoInstantStringSchema } from "./datetime.js"
 import { RemoteAgentRuntimeCapabilityViewSchema } from "./remote-agents.js"
+import { wireTraceContextFields } from "./trace-context.js"
 import { TOOL_SOURCE_KINDS } from "../tool-source/kinds.js"
 import {
   SubjectRefSchema,
@@ -72,11 +73,15 @@ import type {
 // end, matching the `Timestamp` (= IsoInstantString) field types they feed.
 const timestampSchema = IsoInstantStringSchema
 
+// Client frames that start server-side work (auth / subscribe / typing) carry
+// optional W3C trace context on the envelope so their handling parents to the
+// sender's trace (§4.D). pong/unsubscribe are pure bookkeeping — no fields.
 export const ChatSocketClientMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("auth"),
     token: z.string().optional(),
     workspaceId: z.string().min(1),
+    ...wireTraceContextFields,
   }),
   z
     .object({
@@ -84,6 +89,7 @@ export const ChatSocketClientMessageSchema = z.discriminatedUnion("type", [
       key: z.string().min(1),
       topic: z.enum(["inbox", "conversation"]),
       conversationId: z.string().min(1).optional(),
+      ...wireTraceContextFields,
     })
     .superRefine((value, ctx) => {
       if (value.topic === "conversation" && !value.conversationId) {
@@ -105,6 +111,7 @@ export const ChatSocketClientMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("typing"),
     conversationId: z.string().min(1),
     state: z.enum(CHAT_TYPING_STATES),
+    ...wireTraceContextFields,
   }),
 ])
 

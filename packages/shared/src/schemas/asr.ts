@@ -5,6 +5,7 @@ import {
   REALTIME_ASR_AUDIO_FORMAT,
   REALTIME_ASR_AUDIO_FORMATS,
 } from "../constants/enums.js"
+import { wireTraceContextFields } from "./trace-context.js"
 
 /**
  * App-facing realtime ASR start-message audio config.
@@ -48,9 +49,12 @@ export const RealtimeAsrClientMessageSchema = z.discriminatedUnion("type", [
     token: z.string().optional(),
     workspaceId: z.string().min(1),
   }),
+  // `start` opens the provider session — the one frame whose envelope carries
+  // optional W3C trace context, parenting the whole `asr.session` span (§4.D).
   z.object({
     type: z.literal("start"),
     audio: RealtimeAsrAudioConfigSchema,
+    ...wireTraceContextFields,
   }),
   z.object({
     type: z.literal("stop"),

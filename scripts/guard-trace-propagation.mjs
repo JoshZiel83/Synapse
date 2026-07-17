@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Distributed-trace propagation guard.
 //
-// Two ratchet rules that keep the W3C-traceparent chain from silently breaking
-// again (see the traceparent-correlation fixes: BullMQ fan-in, remote-agent
-// daemon, api→sidecar egress):
+// Three ratchet rules that keep the W3C-traceparent chain from silently
+// breaking again (see the traceparent-correlation fixes: BullMQ fan-in,
+// remote-agent daemon, api→sidecar egress, WS request-span orphans):
 //
 //   1. untraced_worker — a raw `new Worker(...)` / `new Queue(...)` bypasses the
 //      trace-context choke points (tracedWorker / tracedTickWorker in
@@ -17,7 +17,15 @@
 //      `undici` elsewhere in the daemon skips that injection, so the daemon→api
 //      callback lands as a fresh trace root. Allowed ONLY in api-client.ts.
 //
-// Zero-violation (no baseline): both rules are clean today, so any new
+//   3. ws_route_missing_otel_false — a `websocket: true` fastify route whose
+//      options line lacks `config: { otel: false }` lets @fastify/otel start a
+//      `request` span for the upgrade that can never end (a WS upgrade never
+//      completes as a normal reply) — the exact orphan §4.D of the trace plan
+//      kills at the source on all four production WS routes. The rule is
+//      line-based: keep `websocket: true` and its `config: { otel: false }` in
+//      the same route-options literal on one line (all current sites are).
+//
+// Zero-violation (no baseline): all rules are clean today, so any new
 // violation fails CI outright.
 //
 // Usage: node scripts/guard-trace-propagation.mjs
@@ -73,6 +81,14 @@ const rules = [
     allow: ["packages/remote-agent-daemon/src/api-client.ts"],
     hint: "make the api call through api-client.ts requestJson() so getTraceparent() is injected as a header",
   },
+  {
+    id: "ws_route_missing_otel_false",
+    root: "packages/api/src",
+    pattern: /websocket:\s*true/,
+    unless: /config:\s*\{\s*otel:\s*false\s*\}/,
+    allow: [],
+    hint: "a WS upgrade never completes as a normal reply, so @fastify/otel's request span would start and never end — add config: { otel: false } to the route options, on the same line as websocket: true (§4.D)",
+  },
 ]
 
 const violations = []
@@ -82,7 +98,10 @@ for (const rule of rules) {
     if (allow.has(file)) continue
     const lines = readFileSync(file, "utf8").split("\n")
     lines.forEach((line, i) => {
-      if (rule.pattern.test(line)) {
+      // Line-based ratchet: `//` comment lines can't register a route or
+      // construct a worker — mentioning a pattern in prose is not a violation.
+      if (line.trimStart().startsWith("//")) return
+      if (rule.pattern.test(line) && !rule.unless?.test(line)) {
         violations.push({
           rule: rule.id,
           file: relative(repoRoot, file),
@@ -108,5 +127,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  "✓ trace-propagation guard clean (untraced_worker, daemon_raw_egress)"
+  "✓ trace-propagation guard clean (untraced_worker, daemon_raw_egress, ws_route_missing_otel_false)"
 )

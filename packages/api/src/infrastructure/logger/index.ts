@@ -181,6 +181,7 @@ const SCOPE_TO_DOMAIN: Readonly<Record<string, DomainScope>> = {
   },
   "seed-model-groups": { domain: "model-groups", component: "seed" },
   server: { domain: "server" },
+  "server.ws": { domain: "server", component: "ws" },
   session: { domain: "session" },
   "session.runtime": { domain: "session", component: "runtime" },
   "session-thinking": { domain: "session", component: "thinking" },

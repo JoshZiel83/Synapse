@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify"
+import { context, ROOT_CONTEXT, SpanKind, trace } from "@opentelemetry/api"
 import { WS_AUTH_TIMEOUT, WS_HEARTBEAT_INTERVAL } from "@synapse/shared"
 import { assertIsoInstant, nowIsoInstant } from "@synapse/shared/datetime"
 import type {
@@ -23,8 +24,26 @@ import {
   registerAuthenticatedSocket,
   unregisterAuthenticatedSocket,
 } from "./auth-session-registry.js"
+import {
+  extractEnvelopeTraceContext,
+  logWsConnectionClosed,
+} from "../observability/envelope-trace.js"
 import { setupAsrWebSocket, shutdownAsrWebSockets } from "./asr.js"
 import { parseChatSocketClientFrame } from "./client-frame.js"
+
+// Per-MESSAGE spans only (auth/subscribe), remote-parented on each frame's
+// envelope trace fields — never on the upgrade request, whose @fastify/otel
+// span is suppressed via config:{otel:false} (§4.D).
+const tracer = trace.getTracer("synapse-ws")
+
+// A raw client-frame value only becomes a span attribute when it looks like an
+// id (≤64 chars) — a hostile frame can't stuff megabytes into an exported
+// attribute (mirrors control-plane-tracing's refAttribute).
+function frameIdAttribute(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= 64
+    ? value
+    : undefined
+}
 
 type InboxSubscription = {
   key: string
@@ -344,178 +363,270 @@ export function setupWebSocket(app: FastifyInstance) {
     }
   })
 
-  app.get("/ws/remote-agents", { websocket: true }, (socket: any, req: any) => {
-    if (isShuttingDown()) {
-      try {
-        socket.send(
-          JSON.stringify({
-            type: "server.shutdown",
-            message: "Synapse API server is shutting down",
-            retryable: true,
-          })
-        )
-      } catch {}
-      try {
-        socket.close(1012, "service restart")
-      } catch {}
-      return
-    }
-
-    void handleRemoteAgentDaemonConnection(socket, req, app)
-  })
-
-  app.get("/ws", { websocket: true }, (socket: any, req: any) => {
-    if (isShuttingDown()) {
-      try {
-        socket.send(
-          JSON.stringify({
-            type: "server.shutdown",
-            message: "Synapse API server is shutting down",
-            retryable: true,
-          })
-        )
-      } catch {}
-      try {
-        socket.close(1012, "service restart")
-      } catch {}
-      return
-    }
-
-    const clientId = crypto.randomUUID()
-    const client: WSClient = {
-      ws: socket,
-      userId: "",
-      workspaceId: "",
-      workspaceMemberId: "",
-      authenticated: false,
-      subscriptions: new Map(),
-    }
-    clients.set(clientId, client)
-
-    client.authTimer = setTimeout(() => {
-      if (!client.authenticated) {
-        closeClient(clientId, "Authentication timeout")
-      }
-    }, WS_AUTH_TIMEOUT)
-
-    socket.on("message", async (raw: any) => {
-      try {
-        const msg = parseChatSocketClientFrame(raw.toString())
-
-        if (msg.type === "auth") {
-          const frameToken =
-            typeof msg.token === "string" && msg.token.trim().length > 0
-              ? msg.token.trim()
-              : ""
-          const workspaceId =
-            typeof msg.workspaceId === "string" && msg.workspaceId.trim()
-              ? msg.workspaceId.trim()
-              : ""
-
-          if (!workspaceId) {
-            closeClient(clientId, "workspaceId is required")
-            return
-          }
-
-          // Two auth paths (the session cookie name is unknowable here because
-          // of Better Auth's production __Secure- prefix, so we never parse it):
-          //  - native clients carry the BA session token in the auth frame ->
-          //    validate it as a bearer token;
-          //  - web / Expo web rely on the signed session cookie carried on the
-          //    upgrade request -> validate from the handshake headers.
-          const authenticated = frameToken
-            ? await authenticateSessionToken(frameToken)
-            : await authenticateSessionFromHeaders(req.headers)
-          if (!authenticated) {
-            closeClient(clientId, "Invalid or expired session")
-            return
-          }
-
-          const workspaceMember = await getWorkspaceMemberIdentity(
-            workspaceId,
-            authenticated.user.id
+  // config:{otel:false} on every WS route: an upgrade never completes as a
+  // normal reply, so @fastify/otel's request span would start and never end.
+  // (The machine-message spans for this route are the remote-agents module's
+  // own concern — this route config is the only tracing change here.)
+  app.get(
+    "/ws/remote-agents",
+    { websocket: true, config: { otel: false } },
+    (socket: any, req: any) => {
+      if (isShuttingDown()) {
+        try {
+          socket.send(
+            JSON.stringify({
+              type: "server.shutdown",
+              message: "Synapse API server is shutting down",
+              retryable: true,
+            })
           )
-          if (!workspaceMember) {
-            closeClient(clientId, "Workspace membership not found")
+        } catch {}
+        try {
+          socket.close(1012, "service restart")
+        } catch {}
+        return
+      }
+
+      void handleRemoteAgentDaemonConnection(socket, req, app)
+    }
+  )
+
+  app.get(
+    "/ws",
+    { websocket: true, config: { otel: false } },
+    (socket: any, req: any) => {
+      if (isShuttingDown()) {
+        try {
+          socket.send(
+            JSON.stringify({
+              type: "server.shutdown",
+              message: "Synapse API server is shutting down",
+              retryable: true,
+            })
+          )
+        } catch {}
+        try {
+          socket.close(1012, "service restart")
+        } catch {}
+        return
+      }
+
+      const clientId = crypto.randomUUID()
+      const client: WSClient = {
+        ws: socket,
+        userId: "",
+        workspaceId: "",
+        workspaceMemberId: "",
+        authenticated: false,
+        subscriptions: new Map(),
+      }
+      clients.set(clientId, client)
+
+      // Connection telemetry: one structured close line per connection
+      // (logWsConnectionClosed) instead of a connection-lifetime span.
+      const openedAt = Date.now()
+      let messagesIn = 0
+
+      client.authTimer = setTimeout(() => {
+        if (!client.authenticated) {
+          closeClient(clientId, "Authentication timeout")
+        }
+      }, WS_AUTH_TIMEOUT)
+
+      socket.on("message", async (raw: any) => {
+        messagesIn += 1
+        try {
+          const msg = parseChatSocketClientFrame(raw.toString())
+
+          if (msg.type === "auth") {
+            // One SERVER span per auth frame, remote-parented on the frame's
+            // envelope trace fields (extract-or-ROOT — never the upgrade
+            // context). Attributes are whitelisted ids only — never tokens.
+            await tracer.startActiveSpan(
+              "ws.auth",
+              {
+                kind: SpanKind.SERVER,
+                attributes: {
+                  "synapse.ws.surface": "chat",
+                  "synapse.ws.frame_type": "auth",
+                  "synapse.ws.connection_id": clientId,
+                },
+              },
+              extractEnvelopeTraceContext(msg),
+              async (span) => {
+                try {
+                  const frameToken =
+                    typeof msg.token === "string" && msg.token.trim().length > 0
+                      ? msg.token.trim()
+                      : ""
+                  const workspaceId =
+                    typeof msg.workspaceId === "string" &&
+                    msg.workspaceId.trim()
+                      ? msg.workspaceId.trim()
+                      : ""
+
+                  if (!workspaceId) {
+                    closeClient(clientId, "workspaceId is required")
+                    return
+                  }
+
+                  // Two auth paths (the session cookie name is unknowable here
+                  // because of Better Auth's production __Secure- prefix, so we
+                  // never parse it):
+                  //  - native clients carry the BA session token in the auth
+                  //    frame -> validate it as a bearer token;
+                  //  - web / Expo web rely on the signed session cookie carried
+                  //    on the upgrade request -> validate from the handshake
+                  //    headers.
+                  const authenticated = frameToken
+                    ? await authenticateSessionToken(frameToken)
+                    : await authenticateSessionFromHeaders(req.headers)
+                  if (!authenticated) {
+                    closeClient(clientId, "Invalid or expired session")
+                    return
+                  }
+
+                  const workspaceMember = await getWorkspaceMemberIdentity(
+                    workspaceId,
+                    authenticated.user.id
+                  )
+                  if (!workspaceMember) {
+                    closeClient(clientId, "Workspace membership not found")
+                    return
+                  }
+
+                  client.userId = authenticated.user.id
+                  client.workspaceId = workspaceMember.workspaceId
+                  client.workspaceMemberId = workspaceMember.workspaceMemberId
+                  client.sessionId = authenticated.session.id
+                  client.authenticated = true
+                  span.setAttribute(
+                    "synapse.ws.workspace_id",
+                    workspaceMember.workspaceId
+                  )
+
+                  registerAuthenticatedSocket({
+                    clientId,
+                    sessionId: authenticated.session.id,
+                    userId: authenticated.user.id,
+                    disconnect: (reason) => closeClient(clientId, reason),
+                  })
+
+                  if (client.authTimer) {
+                    clearTimeout(client.authTimer)
+                    client.authTimer = undefined
+                  }
+
+                  safeSendSocketEvent(clientId, {
+                    type: "auth.ok",
+                    payload: {
+                      connectionId: clientId,
+                      heartbeatMs: WS_HEARTBEAT_INTERVAL,
+                    },
+                  })
+                } finally {
+                  span.end()
+                }
+              }
+            )
+            // Connection-lifetime timers are started AFTER the span callback,
+            // explicitly under ROOT_CONTEXT: a setInterval created inside
+            // startActiveSpan would pin the (already-ended) auth-frame span's
+            // context for the whole connection, and any instrumented I/O a
+            // future heartbeat/pong-timeout path picks up would then emit
+            // recurring spans into that client's auth trace forever.
+            if (client.authenticated && !client.heartbeatTimer) {
+              context.with(ROOT_CONTEXT, () => {
+                client.heartbeatTimer = setInterval(() => {
+                  if (socket.readyState === 1) {
+                    safeSendSocketEvent(clientId, {
+                      type: "ping",
+                      payload: { at: nowIsoInstant() },
+                    })
+                    client.pongTimer = setTimeout(() => {
+                      try {
+                        socket.close()
+                      } catch {}
+                      cleanup(clientId)
+                    }, 10000)
+                  }
+                }, WS_HEARTBEAT_INTERVAL)
+              })
+            }
             return
           }
 
-          client.userId = authenticated.user.id
-          client.workspaceId = workspaceMember.workspaceId
-          client.workspaceMemberId = workspaceMember.workspaceMemberId
-          client.sessionId = authenticated.session.id
-          client.authenticated = true
-
-          registerAuthenticatedSocket({
-            clientId,
-            sessionId: authenticated.session.id,
-            userId: authenticated.user.id,
-            disconnect: (reason) => closeClient(clientId, reason),
-          })
-
-          if (client.authTimer) {
-            clearTimeout(client.authTimer)
-            client.authTimer = undefined
-          }
-
-          safeSendSocketEvent(clientId, {
-            type: "auth.ok",
-            payload: {
-              connectionId: clientId,
-              heartbeatMs: WS_HEARTBEAT_INTERVAL,
-            },
-          })
-
-          client.heartbeatTimer = setInterval(() => {
-            if (socket.readyState === 1) {
-              safeSendSocketEvent(clientId, {
-                type: "ping",
-                payload: { at: nowIsoInstant() },
-              })
-              client.pongTimer = setTimeout(() => {
+          if (msg.type === "subscribe") {
+            // CONSUMER: a fire-and-forget command frame (socket.io precedent).
+            // conversation_id is whitelisted POST-AUTH only and id-capped
+            // (frameIdAttribute) — an unauthenticated or hostile frame's raw
+            // value never reaches an exported span attribute.
+            const conversationIdAttribute = client.authenticated
+              ? frameIdAttribute(msg.conversationId)
+              : undefined
+            await tracer.startActiveSpan(
+              "ws.subscribe",
+              {
+                kind: SpanKind.CONSUMER,
+                attributes: {
+                  "synapse.ws.surface": "chat",
+                  "synapse.ws.frame_type": "subscribe",
+                  "synapse.ws.connection_id": clientId,
+                  ...(client.workspaceId
+                    ? { "synapse.ws.workspace_id": client.workspaceId }
+                    : {}),
+                  ...(conversationIdAttribute
+                    ? { "synapse.ws.conversation_id": conversationIdAttribute }
+                    : {}),
+                },
+              },
+              extractEnvelopeTraceContext(msg),
+              async (span) => {
                 try {
-                  socket.close()
-                } catch {}
-                cleanup(clientId)
-              }, 10000)
-            }
-          }, WS_HEARTBEAT_INTERVAL)
-          return
-        }
-
-        if (msg.type === "subscribe") {
-          await handleSubscribe(clientId, msg)
-          return
-        }
-
-        if (msg.type === "unsubscribe") {
-          handleUnsubscribe(clientId, msg)
-          return
-        }
-
-        if (msg.type === "pong") {
-          if (client.pongTimer) {
-            clearTimeout(client.pongTimer)
-            client.pongTimer = undefined
+                  await handleSubscribe(clientId, msg)
+                } finally {
+                  span.end()
+                }
+              }
+            )
+            return
           }
+
+          if (msg.type === "unsubscribe") {
+            handleUnsubscribe(clientId, msg)
+            return
+          }
+
+          if (msg.type === "pong") {
+            if (client.pongTimer) {
+              clearTimeout(client.pongTimer)
+              client.pongTimer = undefined
+            }
+          }
+
+          // typing keeps its envelope trace fields but gets NO span: an
+          // ephemeral broadcast with no persistence and no downstream causality
+          // is exactly the noise class the plan excludes (an active chatter
+          // emits typing changes continuously, exported at 100% under the
+          // AlwaysOn default).
+          if (msg.type === "typing") {
+            await handleInboundTyping(client, msg)
+          }
+        } catch {
+          // Ignore malformed websocket frames.
         }
+      })
 
-        if (msg.type === "typing") {
-          await handleInboundTyping(client, msg)
-        }
-      } catch {
-        // Ignore malformed websocket frames.
-      }
-    })
+      socket.on("close", (code?: number) => {
+        logWsConnectionClosed("chat", Date.now() - openedAt, messagesIn, code)
+        cleanup(clientId)
+      })
 
-    socket.on("close", () => {
-      cleanup(clientId)
-    })
-
-    socket.on("error", () => {
-      cleanup(clientId)
-    })
-  })
+      socket.on("error", () => {
+        cleanup(clientId)
+      })
+    }
+  )
 
   onEvent("*", async (event: SystemEvent) => {
     const outbound = mapInternalEventToSocketEvent(event)

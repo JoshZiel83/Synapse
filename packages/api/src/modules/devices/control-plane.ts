@@ -62,6 +62,7 @@ import {
   failInFlightRuntimeTasksForRuntime,
   type PersistResult,
 } from "./control-plane-events.js"
+import { runTaskFrameSpan } from "./control-plane-tracing.js"
 
 function writeResult(
   socket: WebSocket,
@@ -375,11 +376,17 @@ async function closeControlPlaneSession(
 export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
   // WIRE — device control-plane WebSocket (JSON-RPC 2.0 handshake). The
   // handler owns the socket and sends bare frames; never a { data } envelope.
+  //
+  // config:{otel:false} — a WS upgrade never completes as a normal reply, so
+  // @fastify/otel's per-request span would start and never end. Tracing on
+  // this surface is per MESSAGE instead: each device.task.* frame gets its own
+  // SERVER span remote-parented on the frame's envelope trace context
+  // (runTaskFrameSpan, §4.D).
   wireRoute(
     app,
     "GET",
     "/api/v1/devices/control-plane",
-    { options: { websocket: true } },
+    { options: { websocket: true, config: { otel: false } } },
     // fastify-websocket invokes this with (socket, request) when
     // websocket:true; the wireRoute handler type is (request, reply) so the
     // socket-first arity is bridged via the register() cast.
@@ -741,12 +748,18 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               )
             return
           }
+          // The four lifecycle persists (received/started/status/result) run
+          // inside runTaskFrameSpan: a SERVER span remote-parented on the
+          // frame's echoed dispatch trace, so the wakeup insert + queue nudge
+          // awaited inside persistTaskResult capture it (§4.D change 7).
           case "device.task.received": {
             if (!requireAuthenticated(req)) return
-            persistTaskReceived(
-              state.authenticatedRuntimeId!,
-              state.authenticatedServiceId!,
-              req.params
+            runTaskFrameSpan(req.method, state, req.params, () =>
+              persistTaskReceived(
+                state.authenticatedRuntimeId!,
+                state.authenticatedServiceId!,
+                req.params
+              )
             )
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
@@ -761,10 +774,12 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.task.started": {
             if (!requireAuthenticated(req)) return
-            persistTaskStarted(
-              state.authenticatedRuntimeId!,
-              state.authenticatedServiceId!,
-              req.params
+            runTaskFrameSpan(req.method, state, req.params, () =>
+              persistTaskStarted(
+                state.authenticatedRuntimeId!,
+                state.authenticatedServiceId!,
+                req.params
+              )
             )
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
@@ -777,6 +792,8 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               )
             return
           }
+          // device.task.output stays span-free on purpose: it is a stream
+          // fragment, exactly the per-frame noise class I3 excludes.
           case "device.task.output": {
             if (!requireAuthenticated(req)) return
             persistTaskOutput(
@@ -797,10 +814,12 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.task.status": {
             if (!requireAuthenticated(req)) return
-            persistTaskStatus(
-              state.authenticatedRuntimeId!,
-              state.authenticatedServiceId!,
-              req.params
+            runTaskFrameSpan(req.method, state, req.params, () =>
+              persistTaskStatus(
+                state.authenticatedRuntimeId!,
+                state.authenticatedServiceId!,
+                req.params
+              )
             )
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
@@ -815,10 +834,12 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.task.result": {
             if (!requireAuthenticated(req)) return
-            persistTaskResult(
-              state.authenticatedRuntimeId!,
-              state.authenticatedServiceId!,
-              req.params
+            runTaskFrameSpan(req.method, state, req.params, () =>
+              persistTaskResult(
+                state.authenticatedRuntimeId!,
+                state.authenticatedServiceId!,
+                req.params
+              )
             )
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
@@ -879,6 +900,10 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
         }
       })
 
+      // Connection telemetry for this surface is the durable
+      // runtime_control_plane_sessions row (opened at device.hello, closed
+      // below with a reason) — deliberately NO logWsConnectionClosed log line
+      // on top of it (see envelope-trace.ts).
       socket.on("close", () => {
         if (state.registeredTunnelServiceId) {
           // compare-and-delete on THIS socket's session: a half-open old socket's

@@ -32,6 +32,59 @@ import {
   SERVER_FACADE_ERROR_CODES,
 } from "./enums.js"
 
+// ───────────────────────── W3C trace-context wire fragment ───────────────────
+// device-protocol is zod-only (deliberately NO dependency on @synapse/shared),
+// so this pins the SAME regex + tracestate cap as the canonical artifact
+// `packages/shared/src/utils/traceparent.ts` — a sanctioned literal duplicate
+// listed in that file's JSDoc sync list; any change there must be mirrored
+// byte-for-byte here. Receiver rule (degrade-not-reject, uniform): a malformed
+// or oversized trace field `.catch(undefined)`s to ABSENT — it never rejects
+// the business frame it rides on (works inside strictObject too: the failed
+// key is dropped from the parse output on zod 4.3.6).
+//
+// The api→daemon direction (`agent:start` / `agent:deliver` items /
+// `agent:task:resolved`) deliberately carries BARE `z.string().optional()`
+// trace fields instead of this fragment: the api is the ONLY producer and
+// mints the pair via activeTraceCarrier(), whose activeTracestate() enforces
+// the same 1024 cap at the single emission point — receiver-side re-validation
+// on that trusted first-party hop would be dead weight.
+
+const TRACEPARENT_RE =
+  /^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$/
+const MAX_TRACESTATE_LENGTH = 1024
+
+const wireTraceContextFields = {
+  traceparent: z.string().regex(TRACEPARENT_RE).optional().catch(undefined),
+  tracestate: z.string().max(MAX_TRACESTATE_LENGTH).optional().catch(undefined),
+}
+
+// A complete `{traceparent, tracestate?}` carrier as a list element (e.g.
+// origin_carriers): here traceparent is REQUIRED per entry — an entry without
+// a valid traceparent carries no linkable origin, so it degrades as a WHOLE
+// entry (see originCarriersField), never as a per-key absence.
+const WireTraceCarrierSchema = z.object({
+  traceparent: z.string().regex(TRACEPARENT_RE),
+  tracestate: z.string().max(MAX_TRACESTATE_LENGTH).optional().catch(undefined),
+})
+
+// Trace-carrier LIST field (origin_carriers) with PER-ENTRY salvage: a
+// malformed entry `.catch(null)`s and is filtered out so the remaining
+// link-worthy carriers survive — list entries are independent carriers, so
+// salvage here is NOT the tracestate partial-salvage corruption vector (§3c).
+// The whole field still degrades to absent (never rejecting the task body) on
+// a non-array, an empty result, or >20 raw entries (producer bug / abuse).
+const originCarriersField = z
+  .array(WireTraceCarrierSchema.nullable().catch(null))
+  .max(20)
+  .transform((entries) => {
+    const valid = entries.filter(
+      (entry): entry is NonNullable<typeof entry> => entry !== null
+    )
+    return valid.length > 0 ? valid : undefined
+  })
+  .optional()
+  .catch(undefined)
+
 // ───────────────────────────── subject + scope (wire) ────────────────────────
 // subject-scope-refactor: SubjectRefWireSchema is a deliberately narrow wire
 // schema for device-capability-binding flows. Allowed kinds (4):
@@ -357,6 +410,12 @@ export const RemoteAgentUserInputTaskBodySchema = z.strictObject({
   instructions: z.string().trim().max(5000).optional(),
   questions: z.array(z.any()).min(1).max(4),
   expires_at: IsoInstantStringSchema.optional(),
+  // Trace carriers of the deliveries feeding the turn that raised this task
+  // (daemon dedupes by trace id, ≤20), so the api can LINK the task to every
+  // originating trace. Degrade-not-reject with per-entry salvage (see
+  // originCarriersField): a malformed entry is dropped, valid siblings
+  // survive; a non-array or >20 entries drops the whole field, never the task.
+  origin_carriers: originCarriersField,
 })
 export type RemoteAgentUserInputTaskBody = z.infer<
   typeof RemoteAgentUserInputTaskBodySchema
@@ -372,6 +431,8 @@ export const RemoteAgentPlanApprovalTaskBodySchema = z.strictObject({
   collaboration_mode: z.string().trim().max(120).optional(),
   collaboration_state: z.record(z.string(), z.any()).optional(),
   expires_at: IsoInstantStringSchema.optional(),
+  // Same contract as RemoteAgentUserInputTaskBodySchema.origin_carriers.
+  origin_carriers: originCarriersField,
 })
 export type RemoteAgentPlanApprovalTaskBody = z.infer<
   typeof RemoteAgentPlanApprovalTaskBodySchema
@@ -509,9 +570,14 @@ export type RemoteAgentMachineHeartbeatMessage = z.infer<
   typeof RemoteAgentMachineHeartbeatMessageSchema
 >
 
+// The four work-triggering daemon→api machine messages (ready, runtime:catalog,
+// agent:session, agent:status — never heartbeat) carry optional W3C trace
+// context on the envelope, stamped from the daemon's active carrier, so the
+// api's per-message SERVER spans parent to the daemon-side trace (§4.D).
 export const RemoteAgentMachineReadyMessageSchema = z.strictObject({
   type: z.literal("ready"),
   runtime_catalog: z.array(RemoteAgentRuntimeCatalogEntryWireSchema),
+  ...wireTraceContextFields,
 })
 export type RemoteAgentMachineReadyMessage = z.infer<
   typeof RemoteAgentMachineReadyMessageSchema
@@ -520,6 +586,7 @@ export type RemoteAgentMachineReadyMessage = z.infer<
 export const RemoteAgentRuntimeCatalogMessageSchema = z.strictObject({
   type: z.literal("runtime:catalog"),
   runtime_catalog: z.array(RemoteAgentRuntimeCatalogEntryWireSchema),
+  ...wireTraceContextFields,
 })
 export type RemoteAgentRuntimeCatalogMessage = z.infer<
   typeof RemoteAgentRuntimeCatalogMessageSchema
@@ -531,6 +598,7 @@ export const RemoteAgentSessionMessageSchema = z.strictObject({
   conversation_id: z.string().min(1),
   state: RemoteAgentRuntimeStateWireSchema.optional(),
   session_id: z.string().nullable().optional(),
+  ...wireTraceContextFields,
 })
 export type RemoteAgentSessionMessage = z.infer<
   typeof RemoteAgentSessionMessageSchema
@@ -547,6 +615,7 @@ export const RemoteAgentStatusMessageSchema = z.strictObject({
   last_error: z.string().nullable().optional(),
   run_key: z.string().nullable().optional(),
   capabilities: RemoteAgentRuntimeCapabilityWireSchema.optional(),
+  ...wireTraceContextFields,
 })
 export type RemoteAgentStatusMessage = z.infer<
   typeof RemoteAgentStatusMessageSchema
@@ -642,9 +711,12 @@ export const RemoteAgentApiStartMessageSchema = z.strictObject({
   session_id: z.string().nullable().optional(),
   fencing_token: z.string().optional(),
   server_url: z.string().optional(),
-  // W3C traceparent of the request that triggered this start, so the daemon can
-  // continue the same distributed trace across its subprocess + api callbacks.
+  // W3C trace context of the request that triggered this start, so the daemon
+  // can continue the same distributed trace across its subprocess + api
+  // callbacks. tracestate rides with traceparent (vendor members survive
+  // first-party hops; the pair is minted via activeTraceCarrier()).
   traceparent: z.string().optional(),
+  tracestate: z.string().optional(),
 })
 export type RemoteAgentApiStartMessage = z.infer<
   typeof RemoteAgentApiStartMessageSchema
@@ -663,10 +735,12 @@ export const RemoteAgentApiDeliveryWireSchema = z.strictObject({
   delivery_id: z.string().min(1),
   conversation_id: z.string().min(1),
   item_id: z.string().min(1),
-  // Per-delivery W3C traceparent (the enqueuing request's trace, persisted on
-  // the delivery row). Per-delivery, NOT per-frame: one agent:deliver batch
-  // fans in deliveries from many conversations/requests, each with its own trace.
+  // Per-delivery W3C trace context (the enqueuing request's trace; traceparent
+  // persisted on the delivery row, tracestate live-path only). Per-delivery,
+  // NOT per-frame: one agent:deliver batch fans in deliveries from many
+  // conversations/requests, each with its own trace.
   traceparent: z.string().optional(),
+  tracestate: z.string().optional(),
 })
 export type RemoteAgentApiDeliveryWire = z.infer<
   typeof RemoteAgentApiDeliveryWireSchema
@@ -685,9 +759,10 @@ export const RemoteAgentApiTaskResolvedMessageSchema = z.strictObject({
   remote_agent_id: z.string().min(1),
   task_id: z.string().min(1),
   task: z.record(z.string(), z.unknown()),
-  // W3C traceparent of the request resolving this task (e.g. a user-input reply),
-  // so the daemon's continued turn rejoins the resolver's trace.
+  // W3C trace context of the request resolving this task (e.g. a user-input
+  // reply), so the daemon's continued turn rejoins the resolver's trace.
   traceparent: z.string().optional(),
+  tracestate: z.string().optional(),
 })
 export type RemoteAgentApiTaskResolvedMessage = z.infer<
   typeof RemoteAgentApiTaskResolvedMessageSchema
@@ -846,6 +921,11 @@ export type RuntimeSessionClosedParams = z.infer<
 export const RuntimeTaskRefParamsSchema = z.object({
   operation_id: z.uuid(),
   attempt_id: z.uuid().optional(),
+  // W3C trace context of the api dispatch that created this operation, echoed
+  // back by the runtime so the task-result leg rejoins the dispatch trace
+  // (mirrors tools/call `_meta.traceparent`, SEP-414). Flows into
+  // device.task.received/started/status and, via .extend below, output/result.
+  ...wireTraceContextFields,
 })
 export type RuntimeTaskRefParams = z.infer<typeof RuntimeTaskRefParamsSchema>
 
