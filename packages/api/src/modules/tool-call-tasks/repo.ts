@@ -106,6 +106,7 @@ export function normalizeToolCallTaskRow(
     targetParticipantId: row.targetParticipantId,
     resolvedByParticipantId: row.resolvedByParticipantId,
     resolvedAt: row.resolvedAt,
+    resolutionTraceparent: row.resolutionTraceparent,
     requestPayload: parseRepoJsonObject(
       row.requestPayload,
       "tool-call task requestPayload"

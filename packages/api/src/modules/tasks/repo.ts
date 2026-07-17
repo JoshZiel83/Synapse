@@ -34,6 +34,7 @@ import {
   parseRuntimeAuthorizationPresets,
   parseRuntimeAuthorizationRequestedAction,
 } from "@synapse/shared/schemas"
+import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
 import type { ToolCallTaskExecutorKind } from "../tool-call-tasks/service.js"
 import type {
   ActionTokenPayload,
@@ -917,6 +918,11 @@ export async function updateResolvedTaskRequestRow(
     ...values,
     revision: sql`revision + 1`,
     resolvedAt: sql`NOW()`,
+    // The single terminal-flip writer stamps the resolver's trace so the
+    // reconnect-replayed agent:task:resolved frame (task-resolution-notifier)
+    // stays correlated after a daemon restart. Traceparent-only per §3c; NULL
+    // when tracing is off / no active span.
+    resolutionTraceparent: activeTraceparent() ?? null,
   })
 }
 

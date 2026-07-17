@@ -48,6 +48,9 @@ RUN set -eux; \
 COPY sidecars/sherpa-asr-streaming/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Shared sidecar tracing module (trace-correctness §4.E) — flat-COPY so
+# `_shared` is importable next to serve.py.
+COPY sidecars/_shared/ ./_shared/
 COPY sidecars/sherpa-asr-streaming/ ./
 
 # Non-root runtime user; the model dir is read-only data owned by it.

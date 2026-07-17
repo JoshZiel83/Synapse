@@ -383,6 +383,7 @@ export default async function remoteAgentsController(app: FastifyInstance) {
               instructions: body.instructions,
               questions: body.questions,
               expiresAt: body.expires_at,
+              originCarriers: body.origin_carriers,
             })
           )
         } catch (error) {
@@ -412,6 +413,7 @@ export default async function remoteAgentsController(app: FastifyInstance) {
               collaborationMode: body.collaboration_mode,
               collaborationState: body.collaboration_state,
               expiresAt: body.expires_at,
+              originCarriers: body.origin_carriers,
             })
           )
         } catch (error) {
@@ -495,7 +497,13 @@ export default async function remoteAgentsController(app: FastifyInstance) {
             await failRemoteAgentDeliveries({
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
-              deliveryIds: body.delivery_ids,
+              // Per-delivery carriers (clean-break body reshape, §4.C): each
+              // failed delivery keeps its own originating trace context.
+              deliveries: body.deliveries.map((delivery) => ({
+                deliveryId: delivery.delivery_id,
+                traceparent: delivery.traceparent,
+                tracestate: delivery.tracestate,
+              })),
               reason: body.reason,
             })
           )

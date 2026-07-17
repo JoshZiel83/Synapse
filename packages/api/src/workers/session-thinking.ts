@@ -1775,11 +1775,15 @@ export function startSessionThinkingWorker() {
           // This requeue drains wakeups that may belong to OTHER requests/users
           // (a wakeup arriving while this session was 'running' enqueues no job
           // of its own — runtime.ts nudgeSessionAfterWakeup). We are still inside
-          // THIS job's CONSUMER span here, so a plain `.add` would stamp this
-          // job's trace onto the requeue and cross-attribute the next turn to the
-          // wrong user. Root it → fresh trace; the drained wakeups' own traces
-          // are re-attached as span LINKS on the next turn (see getPendingWakeups
-          // / linkUpstreamTraces), not as the parent.
+          // THIS job's CONSUMER span here, so a plain `.add` would open its
+          // `send session-thinking` PRODUCER span as a child of this span and
+          // cross-attribute the next turn to the wrong user. Root it → the
+          // producer span becomes a fresh PARENTLESS root, the next turn's
+          // trace is rooted at that `send` (carrier non-empty, consumer
+          // parents to it); the drained wakeups' own traces are re-attached as
+          // span LINKS on the next turn (see getPendingWakeups /
+          // linkUpstreamTraces; unsampled origins are skipped there), not as
+          // the parent.
           await withRootTrace(() =>
             sessionThinkingQueue.add("think", {
               sessionId,

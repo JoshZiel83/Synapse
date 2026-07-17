@@ -49,6 +49,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # The shared front end (E1) — importable as `_mcp_base`.
 COPY sidecars/_mcp_base/ ./_mcp_base/
+# Shared sidecar tracing module (trace-correctness §4.E) — flat-COPY so
+# `_shared` is importable next to `_mcp_base` (PYTHONPATH=/app).
+COPY sidecars/_shared/ ./_shared/
 
 # The thin sidecar (serve.py builds the AdapterConfig and calls the base).
 COPY sidecars/notion-mcp/ ./notion-mcp/

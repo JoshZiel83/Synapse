@@ -1,7 +1,7 @@
 import { Queue } from "bullmq"
 import { redis } from "../infrastructure/redis/index.js"
 import { QUEUE_NAMES } from "@synapse/shared"
-import { injectTraceContext } from "./job-tracing.js"
+import { sendWithProducerSpan } from "./job-tracing.js"
 
 // Queues are constructed lazily. BullMQ's Queue constructor immediately
 // touches the connection (uses it to set up listeners) which, with the
@@ -12,7 +12,7 @@ import { injectTraceContext } from "./job-tracing.js"
 // first use keeps eager-mode behavior at runtime (the API enqueues a
 // job before anything else useful happens) while letting test-only code
 // paths skip the connection entirely.
-type LazyQueue = {
+export type LazyQueue = {
   get: () => Queue
   isMaterialized: () => boolean
 }
@@ -102,27 +102,38 @@ const remoteAgentDeliveryRetryLazy = lazyQueue(
   QUEUE_NAMES.REMOTE_AGENT_DELIVERY_RETRY
 )
 
-function lazyQueueProxy(handle: LazyQueue): Queue {
+/**
+ * Exported only as the unit-test seam (queues.test.ts drives the `.add` trap's
+ * producer-span/repeatable branch with a stub LazyQueue — no Redis needed).
+ * Production code uses the module's exported queue singletons below.
+ */
+export function lazyQueueProxy(handle: LazyQueue): Queue {
   return new Proxy({} as Queue, {
     get(_target, prop) {
       const queue = handle.get()
-      // Inject the active trace context into job data on EVERY enqueue so the
-      // worker can continue the trace across the Redis boundary (see
-      // job-tracing.ts). Centralizing here covers all `.add` callers.
+      // Wrap EVERY enqueue in a `send {queue}` PRODUCER span whose own context
+      // is injected into job data, so the worker-side CONSUMER span parents to
+      // the producer across the Redis boundary (see job-tracing.ts,
+      // sendWithProducerSpan). Centralizing here covers all `.add` callers —
+      // and the queue_enqueue_bypass guard rule keeps `.add` the only enqueue
+      // API in use.
       if (prop === "add") {
         return (name: string, data: unknown, opts?: unknown) => {
-          // Do NOT inject a one-shot trace context into a repeatable/cron job
-          // template — BullMQ clones the template for every tick, so each future
-          // run would "continue" one long-dead trace.
+          const rawAdd = queue.add.bind(queue) as (
+            n: string,
+            d: unknown,
+            o?: unknown
+          ) => Promise<unknown>
+          // A repeatable/cron template registration is a scheduler write, not
+          // a message send: no producer span, and NO one-shot trace context —
+          // BullMQ clones the template for every tick, so each future run
+          // would "continue" one long-dead trace.
           const isRepeatable =
             !!opts && typeof opts === "object" && "repeat" in opts
-          return (
-            queue.add as unknown as (
-              n: string,
-              d: unknown,
-              o?: unknown
-            ) => unknown
-          )(name, isRepeatable ? data : injectTraceContext(data), opts)
+          if (isRepeatable) return rawAdd(name, data, opts)
+          return sendWithProducerSpan(queue.name, name, data, (dataWithCtx) =>
+            rawAdd(name, dataWithCtx, opts)
+          )
         }
       }
       const value = (queue as unknown as Record<PropertyKey, unknown>)[

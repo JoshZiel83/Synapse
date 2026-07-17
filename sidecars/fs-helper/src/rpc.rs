@@ -29,10 +29,15 @@ pub struct RpcRequest {
     pub id: Option<Value>,
     pub method: String,
     pub params: Option<Value>,
-    /// W3C traceparent injected per-RPC by the device-runtime (P7) so this
-    /// helper's span continues the originating request's trace.
+    /// W3C traceparent injected per-RPC by the device-runtime (§3c carrier)
+    /// so this helper's span continues the originating request's trace.
     #[serde(default)]
     pub traceparent: Option<String>,
+    /// W3C tracestate, rides alongside `traceparent` (§3c: `{traceparent,
+    /// tracestate?}` at the JSON-RPC frame top-level). Vendor members survive
+    /// the hop; the device-runtime only forwards values the api pre-sanitized.
+    #[serde(default)]
+    pub tracestate: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

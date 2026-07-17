@@ -27,12 +27,22 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from pipeline import MODEL_LABEL, StreamSession, pcm_s16le_to_float32
+
+# `_shared` import bootstrap: the image flat-COPYs sidecars/_shared/ next to
+# this file (importable via the /app script dir); in the repo it lives one
+# level up (sidecars/_shared), so put sidecars/ on sys.path there.
+if not (Path(__file__).resolve().parent / "_shared").is_dir():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _shared import tracing
 
 log = logging.getLogger("sherpa-asr-streaming")
 
@@ -83,6 +93,11 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="synapse-sherpa-asr-streaming", lifespan=lifespan)
+# exclude_spans=["receive","send"] makes one WS connection exactly ONE SERVER
+# span (== one dictation session), parented on the handshake traceparent the
+# api's HttpInstrumentation injects into the upgrade request (§4.E change 4).
+tracing.setup_tracing("sherpa-asr-streaming")
+tracing.instrument_app(app)
 
 
 async def _try_acquire() -> bool:
@@ -121,11 +136,18 @@ async def _send(ws: WebSocket, messages) -> None:
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
+    # The ONE SERVER span the instrumentor opened for this connection (None
+    # when tracing is disabled) — enriched with session counters; NO per-frame
+    # or per-utterance sidecar spans (decodes serialize on the shared
+    # single-thread executor; utterance granularity is api-side).
+    span = tracing.current_span()
     await ws.accept()
 
     if not _ready:
         # Transient: the model is still warming up. retryable=true so the client
         # reconnects rather than treating dictation as permanently unavailable.
+        if span is not None:
+            span.set_attribute("synapse.asr.rejected", "warming")
         await ws.send_text(
             json.dumps(
                 {
@@ -140,6 +162,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
     if not await _try_acquire():
         # Transient: at capacity. retryable=true so the client backs off + retries.
+        if span is not None:
+            span.set_attribute("synapse.asr.rejected", "busy")
         await ws.send_text(
             json.dumps(
                 {
@@ -152,6 +176,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
         await ws.close()
         return
 
+    pcm_bytes = 0
+    segments = 0
+    completed = False
     try:
         # Construct the session INSIDE the try so a create_stream() failure still
         # releases the acquired in-flight slot (finally: _release) — otherwise the
@@ -165,12 +192,14 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
             data = message.get("bytes")
             if data is not None:
+                pcm_bytes += len(data)
                 samples = pcm_s16le_to_float32(data)
                 if samples.size == 0:
                     continue
                 out = await loop.run_in_executor(
                     _executor, session.accept_audio, samples
                 )
+                segments += sum(1 for m in out if m.get("type") == "final")
                 await _send(ws, out)
                 continue
 
@@ -183,6 +212,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 continue
             if control.get("type") == "stop":
                 out = await loop.run_in_executor(_executor, session.finish)
+                segments += sum(1 for m in out if m.get("type") == "final")
+                completed = any(m.get("type") == "completed" for m in out)
                 await _send(ws, out)
                 await ws.close()
                 break
@@ -199,6 +230,10 @@ async def ws_endpoint(ws: WebSocket) -> None:
         except Exception:  # noqa: BLE001
             pass
     finally:
+        if span is not None:
+            span.set_attribute("synapse.asr.pcm_bytes", pcm_bytes)
+            span.set_attribute("synapse.asr.segments", segments)
+            span.set_attribute("synapse.asr.completed", completed)
         await _release()
 
 

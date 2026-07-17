@@ -456,8 +456,22 @@ export type RemoteAgentCompleteDeliveriesBody = z.infer<
   typeof RemoteAgentCompleteDeliveriesBodySchema
 >
 
+// Per-delivery failure report (clean-break reshape, remediation plan §4.C /
+// §4.D change 4d): each failed delivery carries ITS OWN originating trace
+// context, so a mixed-origin batch failure no longer collapses every delivery
+// under one conversation-level traceparent (the C3a fan-in mis-parenting).
+// Trace fields are degrade-not-reject like every api-inbound carrier — a
+// malformed field drops to absent, never the delivery or the body.
+export const RemoteAgentFailDeliveryEntrySchema = z.strictObject({
+  delivery_id: z.uuid(),
+  ...wireTraceContextFields,
+})
+export type RemoteAgentFailDeliveryEntry = z.infer<
+  typeof RemoteAgentFailDeliveryEntrySchema
+>
+
 export const RemoteAgentFailDeliveriesBodySchema = z.strictObject({
-  delivery_ids: z.array(z.uuid()).min(1),
+  deliveries: z.array(RemoteAgentFailDeliveryEntrySchema).min(1),
   reason: z.string().trim().max(2000).optional(),
 })
 export type RemoteAgentFailDeliveriesBody = z.infer<

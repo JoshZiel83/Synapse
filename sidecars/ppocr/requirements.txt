@@ -10,3 +10,12 @@ paddleocr>=3.7.0,<4
 fastapi>=0.110,<1
 uvicorn[standard]>=0.29,<1
 numpy>=1.24,<3
+
+# OpenTelemetry tracing (trace-correctness §4.E): consumed via the shared
+# sidecars/_shared/tracing.py module — SERVER request/WS-connection spans +
+# OTLP export when an OTLP endpoint env is set; safe no-op otherwise. Exact
+# pins in LOCKSTEP with _mcp_base/requirements.txt (one OTel version set for
+# all Python sidecars); re-verify both files together on any bump.
+opentelemetry-sdk==1.42.1
+opentelemetry-exporter-otlp-proto-http==1.42.1
+opentelemetry-instrumentation-fastapi==0.63b1

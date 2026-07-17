@@ -35,17 +35,28 @@ TERMINAL, not a 3-attempt retry storm):
 import asyncio
 import base64
 import binascii
+import contextvars
 import json
 import os
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+# `_shared` import bootstrap: the image flat-COPYs sidecars/_shared/ next to
+# this file (importable via the /app script dir); in the repo it lives one
+# level up (sidecars/_shared), so put sidecars/ on sys.path there.
+if not (Path(__file__).resolve().parent / "_shared").is_dir():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _shared import tracing
 
 # --- config (env) -----------------------------------------------------------
 TIKA_JAR = os.environ.get("TIKA_JAR", "/opt/tika/tika-server.jar")
@@ -157,6 +168,8 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="synapse-docextract", lifespan=lifespan)
+tracing.setup_tracing("docextract")
+tracing.instrument_app(app)
 
 
 def _tika_extract(
@@ -177,36 +190,47 @@ def _tika_extract(
     if filename:
         # Extension hint improves Tika's container/type detection.
         headers["Content-Disposition"] = f'attachment; filename="{filename}"'
-    req = urllib.request.Request(
-        f"{TIKA_BASE}{tika_path}", data=content, headers=headers, method="PUT"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=TIKA_CALL_TIMEOUT) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-            return _map_tika_success(resp.status, body, want_markdown)
-    except urllib.error.HTTPError as exc:
-        body = ""
+    url = f"{TIKA_BASE}{tika_path}"
+    # Manual CLIENT span for the in-container Tika hop (§4.E change 5): records
+    # hop latency/status and injects a traceparent into the headers (inert to
+    # the uninstrumented Tika JVM, but future-proof). The supervisor's 2s
+    # _tika_up() liveness probe stays deliberately untraced. Exceptions are
+    # CAUGHT inside the block, so each branch reports the outcome explicitly.
+    with tracing.client_span(
+        "PUT", url, inject_into=headers, name=f"PUT {tika_path}"
+    ) as span:
+        req = urllib.request.Request(url, data=content, headers=headers, method="PUT")
         try:
-            body = exc.read().decode("utf-8", errors="replace")
-        except Exception:
-            pass
-        if exc.code < 500:
-            # 4xx from Tika = deterministic (unsupported / malformed) -> terminal.
-            return 422, {"error": f"tika rejected the document (HTTP {exc.code})"}
-        if any(m.lower() in body.lower() for m in _TRANSIENT_MARKERS):
-            return 503, {"error": "tika transient fault (retryable)"}
-        # 5xx without a transient marker = this document broke this parser ->
-        # deterministic, terminal (retrying the same bytes cannot help).
-        return 422, {"error": "tika could not parse the document"}
-    except TimeoutError:
-        # The parse exceeded the per-document time budget. That is deterministic for
-        # THESE bytes (too large/complex to parse in the budget), so terminal — NOT
-        # retryable, or the api would retry the same slow doc up to 3× at ~55s each,
-        # each attempt holding a concurrency slot (the storm the budget prevents).
-        return 422, {"error": "tika parse exceeded the time budget"}
-    except (urllib.error.URLError, ConnectionError, OSError):
-        # Tika process down / connection refused -> transient, retryable.
-        return 503, {"error": "tika is unavailable (retryable)"}
+            with urllib.request.urlopen(req, timeout=TIKA_CALL_TIMEOUT) as resp:
+                tracing.set_client_response(span, resp.status)
+                body = resp.read().decode("utf-8", errors="replace")
+                return _map_tika_success(resp.status, body, want_markdown)
+        except urllib.error.HTTPError as exc:
+            tracing.set_client_response(span, exc.code)
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            if exc.code < 500:
+                # 4xx from Tika = deterministic (unsupported / malformed) -> terminal.
+                return 422, {"error": f"tika rejected the document (HTTP {exc.code})"}
+            if any(m.lower() in body.lower() for m in _TRANSIENT_MARKERS):
+                return 503, {"error": "tika transient fault (retryable)"}
+            # 5xx without a transient marker = this document broke this parser ->
+            # deterministic, terminal (retrying the same bytes cannot help).
+            return 422, {"error": "tika could not parse the document"}
+        except TimeoutError as exc:
+            tracing.set_client_error(span, exc)
+            # The parse exceeded the per-document time budget. That is deterministic for
+            # THESE bytes (too large/complex to parse in the budget), so terminal — NOT
+            # retryable, or the api would retry the same slow doc up to 3× at ~55s each,
+            # each attempt holding a concurrency slot (the storm the budget prevents).
+            return 422, {"error": "tika parse exceeded the time budget"}
+        except (urllib.error.URLError, ConnectionError, OSError) as exc:
+            tracing.set_client_error(span, exc)
+            # Tika process down / connection refused -> transient, retryable.
+            return 503, {"error": "tika is unavailable (retryable)"}
 
 
 def _html_to_markdown(html: str) -> str:
@@ -313,13 +337,19 @@ async def extract(req: ExtractRequest):
             )
 
         loop = asyncio.get_running_loop()
+        # copy_context().run is REQUIRED for the OTel context (this request's
+        # SERVER span) to reach the worker thread — a naked run_in_executor
+        # drops it and the Tika CLIENT span would be parentless (spike-proven).
+        ctx = contextvars.copy_context()
         status, payload = await loop.run_in_executor(
             _executor,
-            _tika_extract,
-            content,
-            req.mime_type,
-            req.filename,
-            req.output_format,
+            lambda: ctx.run(
+                _tika_extract,
+                content,
+                req.mime_type,
+                req.filename,
+                req.output_format,
+            ),
         )
         if status == 200:
             return payload

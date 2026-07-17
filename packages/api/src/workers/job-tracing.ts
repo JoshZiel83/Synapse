@@ -9,9 +9,23 @@ import {
   SpanKind,
   SpanStatusCode,
   trace,
+  TraceFlags,
 } from "@opentelemetry/api"
 import type { Span } from "@opentelemetry/api"
 import { suppressTracing, W3CTraceContextPropagator } from "@opentelemetry/core"
+import {
+  ATTR_MESSAGING_DESTINATION_NAME,
+  ATTR_MESSAGING_MESSAGE_ID,
+  ATTR_MESSAGING_OPERATION_NAME,
+  ATTR_MESSAGING_OPERATION_TYPE,
+  ATTR_MESSAGING_SYSTEM,
+  MESSAGING_OPERATION_TYPE_VALUE_PROCESS,
+  MESSAGING_OPERATION_TYPE_VALUE_SEND,
+} from "@opentelemetry/semantic-conventions/incubating"
+import {
+  sanitizeTraceState,
+  sanitizeTracestateHeader,
+} from "../infrastructure/observability/traceparent.js"
 
 /**
  * OpenTelemetry trace propagation across the BullMQ (Redis) boundary.
@@ -45,15 +59,110 @@ const tracePropagator = new W3CTraceContextPropagator()
  * Return job data with the active trace context injected (W3C traceparent/
  * tracestate) under the reserved key. No-op (returns the input unchanged) when
  * data is not a plain object or there is no active span to propagate.
+ *
+ * The carrier's `tracestate` goes through BOTH stages of the canonical
+ * sanitizer (§3c; observability/traceparent.ts — imported, no local copies):
+ *
+ * - Stage 1 (at mint): the inject context is rebuilt with Sentry's non-W3C
+ *   TraceState keys unset. Under Sentry-ON, `sentry.dsc=k=v,k2=v2` in the
+ *   active span's traceState is grammar-INVALID as a serialized member (the
+ *   key contains `.`, the value embeds `=`/`,`), and a compliant receiver
+ *   re-parses it into junk top-level vendor keys — the C9c corruption,
+ *   runtime-reproduced. Sentry DSC continuity rides its own `sentry-trace`/
+ *   `baggage` headers and never belongs in Redis job data.
+ * - Stage 2 (final gate): whole-or-nothing W3C §3.3.2 ABNF validation of the
+ *   serialized header — ANY invalid member drops the whole header (partial
+ *   salvage IS the corruption mechanism); legitimate vendor members
+ *   (`es=s:1.0`) pass verbatim.
  */
 export function injectTraceContext<T>(data: T): T {
   if (data === null || typeof data !== "object" || Array.isArray(data)) {
     return data
   }
+  // Stage 1: sanitize the active span context's traceState BEFORE inject, so
+  // the propagator never serializes a Sentry member. The rebuild starts from
+  // context.active(), so the suppressTracing key (tick scope) is preserved and
+  // inject stays a no-op under suppression.
+  let injectCtx = context.active()
+  const sc = trace.getSpanContext(injectCtx)
+  if (sc?.traceState) {
+    injectCtx = trace.setSpanContext(injectCtx, {
+      ...sc,
+      traceState: sanitizeTraceState(sc.traceState),
+    })
+  }
   const carrier: Record<string, string> = {}
-  tracePropagator.inject(context.active(), carrier, defaultTextMapSetter)
+  tracePropagator.inject(injectCtx, carrier, defaultTextMapSetter)
   if (Object.keys(carrier).length === 0) return data
+  // Stage 2: whole-or-nothing ABNF gate on the serialized header; a header
+  // that fails degrades to ABSENT (never a partially-salvaged one).
+  const rawTracestate = carrier["tracestate"]
+  if (rawTracestate !== undefined) {
+    const validated = sanitizeTracestateHeader(rawTracestate)
+    if (validated === undefined) {
+      delete carrier["tracestate"]
+    } else {
+      carrier["tracestate"] = validated
+    }
+  }
   return { ...(data as Record<string, unknown>), [CARRIER_KEY]: carrier } as T
+}
+
+/**
+ * Wrap a single BullMQ enqueue in a `send {queueName}` PRODUCER span and
+ * inject THAT span's context as the job's creation context (messaging-semconv
+ * producer modeling; the missing half of the process-side CONSUMER span).
+ *
+ * The `__otelctx` carrier is minted INSIDE the span callback, so the carrier's
+ * span-id === the producer span's id and the worker-side CONSUMER span parents
+ * to the producer (spike-verified, probe P-H). Enqueue failure ⇒ ERROR status +
+ * exception event, and the error surfaces to the caller unchanged. With no
+ * tracer provider registered (OTel off), the NoopTracer still runs the
+ * callback — the enqueue happens, the carrier stays empty (degradation
+ * spike-verified).
+ *
+ * Called ONLY from the queues.ts `.add` Proxy trap for non-repeatable adds —
+ * a repeatable/cron template registration is a scheduler write, not a message
+ * send, and stays untraced. The `queue_enqueue_bypass` guard rule
+ * (scripts/guard-trace-propagation.mjs) keeps this the sole enqueue path.
+ */
+export function sendWithProducerSpan<R>(
+  queueName: string,
+  jobName: string,
+  data: unknown,
+  add: (dataWithCarrier: unknown) => Promise<R>
+): Promise<R> {
+  return tracer.startActiveSpan(
+    `send ${queueName}`,
+    {
+      kind: SpanKind.PRODUCER,
+      attributes: {
+        [ATTR_MESSAGING_SYSTEM]: "bullmq",
+        [ATTR_MESSAGING_OPERATION_TYPE]: MESSAGING_OPERATION_TYPE_VALUE_SEND,
+        [ATTR_MESSAGING_OPERATION_NAME]: "send",
+        [ATTR_MESSAGING_DESTINATION_NAME]: queueName,
+        // House attribute (messaging.bullmq.* namespace, like the consumer's
+        // wait_time_ms): the BullMQ job name within the queue.
+        "messaging.bullmq.job.name": jobName,
+      },
+    },
+    async (span) => {
+      try {
+        const job = await add(injectTraceContext(data))
+        const jobId = (job as { id?: unknown } | null | undefined)?.id
+        if (typeof jobId === "string" && jobId !== "") {
+          span.setAttribute(ATTR_MESSAGING_MESSAGE_ID, jobId)
+        }
+        span.end()
+        return job
+      } catch (err) {
+        span.recordException(err as Error)
+        span.setStatus({ code: SpanStatusCode.ERROR })
+        span.end()
+        throw err
+      }
+    }
+  )
 }
 
 /**
@@ -74,6 +183,13 @@ export function injectTraceContext<T>(data: T): T {
  * Prefer this over a data-level "skip injection" marker: it needs no change to
  * the deliberately-dumb injection choke point and cannot silently fail the way an
  * identity-sensitive Symbol marker would under a dual ESM/CJS module load.
+ *
+ * Under the producer-span model (sendWithProducerSpan, called by the queues.ts
+ * `.add` trap), a rooted enqueue is NOT span-less end to end: the trap still
+ * opens a `send {q}` PRODUCER span — but against ROOT_CONTEXT it is a fresh
+ * PARENTLESS root, so the carrier is non-empty (the consumer parents to that
+ * producer root) while cross-attribution stays prevented: the requeued turn's
+ * trace shares nothing with the enqueuing job's trace.
  *
  * Load-bearing side effect (unit-pinned in job-tracing.test.ts): switching to
  * ROOT_CONTEXT also DROPS the `suppressTracing` context key, so this is the
@@ -96,14 +212,37 @@ export function withRootTrace<T>(fn: () => T): T {
  * becomes a LINK, preserving "which requests caused this turn" without false
  * single-parent attribution. Standard OTel messaging/batch modeling.
  *
+ * `linkKind` stamps `synapse.link.kind` on every link — default
+ * `"session_wakeup"` for the fan-in turn; remote-agent delivery failure spans
+ * pass `"remote_agent_delivery"` ([adj 19]).
+ *
+ * Unsampled upstreams (flags-00) are SKIPPED, counted in the active span's
+ * `synapse.wakeup.links_skipped_unsampled` attribute: the head-sampled
+ * Alloy→Tempo backend never stores unsampled traces, so such links could never
+ * resolve — and `isSpanContextValid` deliberately does NOT filter them (an
+ * explicit sampled-bit check is required; spike-verified, probe P-H).
+ *
+ * Links are added POST-creation (`span.addLink`) by design: the drained rows
+ * are only knowable inside the job, after the CONSUMER span exists. This is
+ * spec-sanctioned; "post-creation links are invisible to head samplers" is
+ * moot here — neither configured sampler (OTel-owned ratio root sampler,
+ * Sentry forward-rate) is link-aware. Revisit ONLY if a link-aware sampler is
+ * ever introduced. The SDK's default `linkCountLimit` is 128 — per-session
+ * wakeup fan-in is far below it.
+ *
  * No-op when OTel is off / there is no active span / a traceparent is malformed.
  * A self-link is skipped — the idle→enqueue path legitimately continues its own
- * request trace as the parent, so linking it to itself would be noise.
+ * request trace as the parent, so linking it to itself would be noise (and it
+ * makes C's single-origin parented delivery case double-count nothing).
  */
-export function linkUpstreamTraces(traceparents: Iterable<string>): void {
+export function linkUpstreamTraces(
+  traceparents: Iterable<string>,
+  linkKind: string = "session_wakeup"
+): void {
   const span = trace.getActiveSpan()
   if (!span) return
   const ownTraceId = span.spanContext().traceId
+  let skippedUnsampled = 0
   for (const tp of traceparents) {
     if (!tp) continue
     const ctx = tracePropagator.extract(
@@ -113,21 +252,46 @@ export function linkUpstreamTraces(traceparents: Iterable<string>): void {
     )
     const sc = trace.getSpanContext(ctx)
     if (!sc || !isSpanContextValid(sc) || sc.traceId === ownTraceId) continue
+    if ((sc.traceFlags & TraceFlags.SAMPLED) === 0) {
+      skippedUnsampled += 1
+      continue
+    }
     span.addLink({
       context: sc,
-      attributes: { "synapse.link.kind": "session_wakeup" },
+      attributes: { "synapse.link.kind": linkKind },
     })
+  }
+  if (skippedUnsampled > 0) {
+    span.setAttribute(
+      "synapse.wakeup.links_skipped_unsampled",
+      skippedUnsampled
+    )
   }
 }
 
 type AnyJob = Job<unknown, unknown, string>
 
 /**
- * Wrap a BullMQ processor so each job runs inside a CONSUMER span that continues
- * the trace captured at enqueue time (or starts a fresh trace if none). Worker
- * logs emitted within then carry the right trace_id via the logger mixin.
+ * Wrap a BullMQ processor so each job runs inside a `process {queueName}`
+ * CONSUMER span that continues the trace captured at enqueue time (or starts a
+ * fresh trace if none). Worker logs emitted within then carry the right
+ * trace_id via the logger mixin.
+ *
+ * The carrier is minted inside the `send {queueName}` PRODUCER span
+ * (sendWithProducerSpan), so this span parents DIRECTLY to the producer —
+ * the semconv single-message exception to the link-based batch modeling.
+ *
+ * `messaging.bullmq.job.wait_time_ms` is queue dwell: bullmq 5.78.0 populates
+ * `job.processedOn` BEFORE the processor runs (source-verified), and
+ * subtracting `job.delay` keeps intentionally-delayed jobs from reading as
+ * queue backlog; `messaging.bullmq.job.attempts_made` disambiguates
+ * backoff-inflated dwell on retried jobs.
+ *
+ * Exported only as the unit-test seam (exercising it needs no Redis-backed
+ * Worker — job-tracing.test.ts drives it with a stub Job). Production code
+ * uses `tracedWorker`.
  */
-function withJobSpan(
+export function withJobSpan(
   queueName: string,
   processor: Processor<unknown, unknown, string>
 ): Processor<unknown, unknown, string> {
@@ -148,14 +312,26 @@ function withJobSpan(
 
     return context.with(parent, () =>
       tracer.startActiveSpan(
-        `bullmq ${queueName} process`,
+        `process ${queueName}`,
         {
           kind: SpanKind.CONSUMER,
           attributes: {
-            "messaging.system": "bullmq",
-            "messaging.operation": "process",
-            "messaging.destination.name": queueName,
-            "messaging.message.id": job.id ?? "",
+            [ATTR_MESSAGING_SYSTEM]: "bullmq",
+            [ATTR_MESSAGING_OPERATION_TYPE]:
+              MESSAGING_OPERATION_TYPE_VALUE_PROCESS,
+            [ATTR_MESSAGING_OPERATION_NAME]: "process",
+            [ATTR_MESSAGING_DESTINATION_NAME]: queueName,
+            [ATTR_MESSAGING_MESSAGE_ID]: job.id ?? "",
+            "messaging.bullmq.job.wait_time_ms": Math.max(
+              0,
+              // datetime-ok: plan-prescribed queue-dwell METRIC formula (trace
+              // plan §4.H) — bullmq 5.78.0 populates processedOn before the
+              // processor runs, so Date.now() is a deliberate now-default for
+              // the never-expected missing case in a span attribute, not a
+              // value-masking timestamp fallback.
+              (job.processedOn ?? Date.now()) - job.timestamp - (job.delay ?? 0)
+            ),
+            "messaging.bullmq.job.attempts_made": job.attemptsMade,
           },
         },
         async (span) => {
@@ -240,8 +416,8 @@ export function wrapTickProcessor<
           kind: SpanKind.CONSUMER,
           startTime,
           attributes: {
-            "messaging.system": "bullmq",
-            "messaging.destination.name": name,
+            [ATTR_MESSAGING_SYSTEM]: "bullmq",
+            [ATTR_MESSAGING_DESTINATION_NAME]: name,
           },
         },
         ROOT_CONTEXT

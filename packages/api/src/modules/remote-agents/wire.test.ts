@@ -34,6 +34,44 @@ test("parseRemoteAgentMachineMessage maps snake_case ready catalog to internal c
         lastError: "old error",
       },
     ],
+    traceparent: undefined,
+    tracestate: undefined,
+  })
+})
+
+test("parseRemoteAgentMachineMessage carries the daemon-stamped envelope trace fields", () => {
+  const TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+  const TS = "es=s:1.0"
+  const message = parseRemoteAgentMachineMessage(
+    JSON.stringify({
+      type: "ready",
+      runtime_catalog: [],
+      traceparent: TP,
+      tracestate: TS,
+    })
+  )
+  assert.deepEqual(message, {
+    type: "ready",
+    runtimeCatalog: [],
+    traceparent: TP,
+    tracestate: TS,
+  })
+
+  // Degrade-not-reject (device-protocol wire fragment): malformed fields drop
+  // to absent, the machine frame still parses.
+  const degraded = parseRemoteAgentMachineMessage(
+    JSON.stringify({
+      type: "ready",
+      runtime_catalog: [],
+      traceparent: "garbage",
+      tracestate: "x".repeat(2000),
+    })
+  )
+  assert.deepEqual(degraded, {
+    type: "ready",
+    runtimeCatalog: [],
+    traceparent: undefined,
+    tracestate: undefined,
   })
 })
 
@@ -76,6 +114,8 @@ test("parseRemoteAgentMachineMessage maps snake_case status capabilities", () =>
       supportsCodexAppServer: true,
       supportsStructuredIo: false,
     },
+    traceparent: undefined,
+    tracestate: undefined,
   })
 })
 
@@ -184,4 +224,80 @@ test("serializeRemoteAgentApiToDaemonMessage emits snake_case resolved task fram
       lifecycleStatus: "completed",
     },
   })
+})
+
+test("serializeRemoteAgentApiToDaemonMessage carries the trace carrier pair on live frames", () => {
+  const TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+  const TS = "es=s:1.0"
+
+  assert.deepEqual(
+    JSON.parse(
+      serializeRemoteAgentApiToDaemonMessage({
+        type: "agent:start",
+        remoteAgentId: "agent-1",
+        runtimeKind: "codex",
+        traceparent: TP,
+        tracestate: TS,
+      })
+    ),
+    {
+      type: "agent:start",
+      remote_agent_id: "agent-1",
+      runtime_kind: "codex",
+      traceparent: TP,
+      tracestate: TS,
+    }
+  )
+
+  assert.deepEqual(
+    JSON.parse(
+      serializeRemoteAgentApiToDaemonMessage({
+        type: "agent:deliver",
+        deliveries: [
+          {
+            remoteAgentId: "agent-1",
+            deliveryId: "delivery-1",
+            conversationId: "conversation-1",
+            itemId: "item-1",
+            traceparent: TP,
+            tracestate: TS,
+          },
+        ],
+      })
+    ),
+    {
+      type: "agent:deliver",
+      deliveries: [
+        {
+          remote_agent_id: "agent-1",
+          delivery_id: "delivery-1",
+          conversation_id: "conversation-1",
+          item_id: "item-1",
+          traceparent: TP,
+          tracestate: TS,
+        },
+      ],
+    }
+  )
+
+  assert.deepEqual(
+    JSON.parse(
+      serializeRemoteAgentApiToDaemonMessage({
+        type: "agent:task:resolved",
+        remoteAgentId: "agent-1",
+        taskId: "task-1",
+        task: {},
+        traceparent: TP,
+        tracestate: TS,
+      })
+    ),
+    {
+      type: "agent:task:resolved",
+      remote_agent_id: "agent-1",
+      task_id: "task-1",
+      task: {},
+      traceparent: TP,
+      tracestate: TS,
+    }
+  )
 })

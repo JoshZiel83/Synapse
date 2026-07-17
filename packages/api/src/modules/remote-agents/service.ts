@@ -1,6 +1,12 @@
 import crypto, { createHash, randomBytes } from "node:crypto"
 import type { FastifyInstance } from "fastify"
 import {
+  SpanKind,
+  SpanStatusCode,
+  trace,
+  type Attributes,
+} from "@opentelemetry/api"
+import {
   REMOTE_AGENT_MACHINE_LIFECYCLE_STATE,
   REMOTE_AGENT_MACHINE_TRUST_STATUS,
   REMOTE_AGENT_RUNTIME_CATALOG_STATUS,
@@ -39,7 +45,9 @@ import {
 } from "../chat/remote-agent-bridge.js"
 import { getFileUrlById } from "../files/service.js"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
-import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
+import { activeTraceCarrier } from "../../infrastructure/observability/traceparent.js"
+import { extractEnvelopeTraceContext } from "../../infrastructure/observability/envelope-trace.js"
+import { linkUpstreamTraces } from "../../workers/job-tracing.js"
 import {
   notifyRemoteAgentTaskResolvedUseCase,
   replayResolvedRemoteAgentTasksUseCase,
@@ -69,6 +77,59 @@ type MachineConnection = {
 const machineConnections = new Map<string, MachineConnection>()
 const deliveryInFlightByMachine = new Map<string, Map<string, number>>()
 const DELIVERY_IN_FLIGHT_TTL_MS = 5_000
+
+const tracer = trace.getTracer("synapse-remote-agents")
+
+/**
+ * Run one work-triggering daemon→api machine message (`ready` /
+ * `runtime:catalog` / `agent:session` / `agent:status` — never heartbeat)
+ * inside ONE SERVER span, remote-parented on the message's envelope
+ * `{traceparent, tracestate}` fields (extract-or-ROOT — never the span-free
+ * `config:{otel:false}` upgrade context). This is what gives
+ * `activeTraceCarrier()` a real value on the daemon-WS-triggered
+ * `agent:start` sends (startBoundRemoteAgents / sendAgentStartPrefix) — the
+ * §4.C "dead stamping" fix. Ended in `finally`; a throw records + rethrows to
+ * the socket handler's existing error path.
+ *
+ * Exported for the unit matrix in machine-message-span.test.ts (production
+ * callers are the four dispatch sites in this file's socket handler only).
+ */
+export async function runMachineMessageSpan<T>(
+  machineId: string,
+  message: Extract<
+    RemoteAgentMachineMessage,
+    { type: "ready" | "runtime:catalog" | "agent:session" | "agent:status" }
+  >,
+  fn: () => Promise<T>
+): Promise<T> {
+  const attributes: Attributes = {
+    "synapse.ws.surface": "remote-agents",
+    "synapse.ws.frame_type": message.type,
+    "synapse.machine.id": machineId,
+  }
+  if ("remoteAgentId" in message && message.remoteAgentId) {
+    attributes["synapse.remote_agent.id"] = message.remoteAgentId
+  }
+  return tracer.startActiveSpan(
+    `ws.${message.type}`,
+    { kind: SpanKind.SERVER, attributes },
+    extractEnvelopeTraceContext(message),
+    async (span) => {
+      try {
+        return await fn()
+      } catch (err) {
+        span.recordException(err as Error)
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: (err as Error).message,
+        })
+        throw err
+      } finally {
+        span.end()
+      }
+    }
+  )
+}
 
 function hashMachineApiKey(apiKey: string) {
   return createHash("sha256").update(apiKey).digest("hex")
@@ -243,6 +304,10 @@ async function startBoundRemoteAgents(machineId: string) {
 
   const targets = await loadAgentStartTargetsForMachine(machineId)
 
+  // Live path: both carrier fields via the canonical mint. Non-null only when
+  // an active span exists — for the daemon-`ready`-triggered call that is the
+  // per-message SERVER span opened by handleRemoteAgentDaemonConnection.
+  const startCarrier = activeTraceCarrier()
   for (const target of targets) {
     const binding = bindingByAgentId.get(target.remoteAgentId)
     if (!binding) continue
@@ -256,7 +321,8 @@ async function startBoundRemoteAgents(machineId: string) {
       sessionId: target.runtimeSessionId,
       fencingToken: connection.fencingToken,
       serverUrl: config.app.baseUrl,
-      traceparent: activeTraceparent(),
+      traceparent: startCarrier?.traceparent,
+      tracestate: startCarrier?.tracestate,
     })
   }
 
@@ -416,6 +482,9 @@ async function sendAgentStartPrefix(
       row.runtimeSessionId,
     ])
   )
+  // Live path: both carrier fields via the canonical mint (see
+  // startBoundRemoteAgents).
+  const prefixCarrier = activeTraceCarrier()
   for (const pair of pairs.values()) {
     const binding = bindingByAgent.get(pair.remoteAgentId)
     if (!binding) continue
@@ -431,7 +500,8 @@ async function sendAgentStartPrefix(
         null,
       fencingToken: connection.fencingToken,
       serverUrl: config.app.baseUrl,
-      traceparent: activeTraceparent(),
+      traceparent: prefixCarrier?.traceparent,
+      tracestate: prefixCarrier?.tracestate,
     })
   }
 }
@@ -523,11 +593,44 @@ async function scheduleDeliveryRetry(
 export async function failRemoteAgentDeliveries(params: {
   remoteAgentId: string
   machineKey: string
-  deliveryIds: string[]
+  /** Per-delivery failure entries, each with ITS OWN originating carrier. */
+  deliveries: Array<{
+    deliveryId: string
+    traceparent?: string
+    tracestate?: string
+  }>
   reason?: string
 }) {
   const machine = await authenticateMachineForRemoteAgent(params)
-  const uniqueIds = [...new Set(params.deliveryIds.filter(Boolean))]
+  // Fan-in join (§4.C): this POST's request span is either parented under the
+  // single origin trace (the daemon sent a traceparent header) or a fresh
+  // root (mixed origins / untraced) — either way, LINK every upstream
+  // delivery-origin trace onto it. Dedupe by trace id (a multi-delivery batch
+  // from one request repeats the same origin); linkUpstreamTraces skips the
+  // self-link in the single-origin parented case and unsampled origins.
+  const activeSpan = trace.getActiveSpan()
+  if (activeSpan) {
+    activeSpan.setAttributes({
+      "synapse.remote_agent.id": params.remoteAgentId,
+      "synapse.machine.id": machine.machineId,
+      "synapse.deliveries.count": params.deliveries.length,
+    })
+  }
+  const uniqueTraceparents = new Map<string, string>()
+  for (const delivery of params.deliveries) {
+    if (!delivery.traceparent) continue
+    const traceId = delivery.traceparent.slice(3, 35)
+    if (!uniqueTraceparents.has(traceId)) {
+      uniqueTraceparents.set(traceId, delivery.traceparent)
+    }
+  }
+  linkUpstreamTraces(uniqueTraceparents.values(), "remote_agent_delivery")
+
+  const uniqueIds = [
+    ...new Set(
+      params.deliveries.map((delivery) => delivery.deliveryId).filter(Boolean)
+    ),
+  ]
   if (uniqueIds.length === 0) {
     return { rescheduled: 0 }
   }
@@ -1067,6 +1170,22 @@ export async function updateRemoteAgentGroupTaskGrants(params: {
   return listRemoteAgentGroupTaskGrants(params)
 }
 
+/**
+ * LINK the current request span (the daemon's task-create POST) to every
+ * delivery-origin trace that fed the turn raising the task (§4.C). The daemon
+ * already deduped by trace id (≤20); the request span itself is parented under
+ * the single origin when the daemon sent a traceparent header.
+ */
+function linkTaskOriginCarriers(
+  originCarriers: Array<{ traceparent: string; tracestate?: string }> = []
+) {
+  if (originCarriers.length === 0) return
+  linkUpstreamTraces(
+    originCarriers.map((carrier) => carrier.traceparent),
+    "delivery_origin"
+  )
+}
+
 export async function createRemoteAgentUserInputTask(params: {
   remoteAgentId: string
   machineKey: string
@@ -1076,8 +1195,10 @@ export async function createRemoteAgentUserInputTask(params: {
   instructions?: string
   questions: unknown[]
   expiresAt?: Timestamp
+  originCarriers?: Array<{ traceparent: string; tracestate?: string }>
 }) {
   const access = await authenticateMachineForRemoteAgent(params)
+  linkTaskOriginCarriers(params.originCarriers)
   const conversationAccess =
     await requireRemoteAgentConversationAccessOnDefaultDb(
       params.conversationId,
@@ -1126,8 +1247,10 @@ export async function createRemoteAgentPlanApprovalTask(params: {
   collaborationMode?: string
   collaborationState?: Record<string, unknown>
   expiresAt?: Timestamp
+  originCarriers?: Array<{ traceparent: string; tracestate?: string }>
 }) {
   const access = await authenticateMachineForRemoteAgent(params)
+  linkTaskOriginCarriers(params.originCarriers)
   const conversationAccess =
     await requireRemoteAgentConversationAccessOnDefaultDb(
       params.conversationId,
@@ -1528,40 +1651,48 @@ export async function handleRemoteAgentDaemonConnection(
     }
 
     if (message?.type === "ready") {
-      connection.ready = true
-      await repo.markMachineSessionActiveRepo(sessionId)
-      await upsertRuntimeCatalog(machine.id, message.runtimeCatalog)
-      await startBoundRemoteAgents(machine.id)
+      await runMachineMessageSpan(machine.id, message, async () => {
+        connection.ready = true
+        await repo.markMachineSessionActiveRepo(sessionId)
+        await upsertRuntimeCatalog(machine.id, message.runtimeCatalog)
+        await startBoundRemoteAgents(machine.id)
+      })
       return
     }
 
     if (message?.type === "runtime:catalog") {
-      await upsertRuntimeCatalog(machine.id, message.runtimeCatalog)
+      await runMachineMessageSpan(machine.id, message, async () => {
+        await upsertRuntimeCatalog(machine.id, message.runtimeCatalog)
+      })
       return
     }
 
     if (message?.type === "agent:session") {
-      const bindingRuntimeKind = await repo.loadBindingRuntimeKindRepo(
-        message.remoteAgentId,
-        machine.id
-      )
-      await updateConversationRuntimeStatus({
-        remoteAgentId: message.remoteAgentId,
-        conversationId: message.conversationId,
-        runtimeKind: bindingRuntimeKind ?? null,
-        state:
-          typeof message.state === "string"
-            ? (message.state as RemoteAgentRuntimeStateType)
-            : REMOTE_AGENT_RUNTIME_STATE.RUNNING,
-        sessionId:
-          typeof message.sessionId === "string" ? message.sessionId : null,
+      await runMachineMessageSpan(machine.id, message, async () => {
+        const bindingRuntimeKind = await repo.loadBindingRuntimeKindRepo(
+          message.remoteAgentId,
+          machine.id
+        )
+        await updateConversationRuntimeStatus({
+          remoteAgentId: message.remoteAgentId,
+          conversationId: message.conversationId,
+          runtimeKind: bindingRuntimeKind ?? null,
+          state:
+            typeof message.state === "string"
+              ? (message.state as RemoteAgentRuntimeStateType)
+              : REMOTE_AGENT_RUNTIME_STATE.RUNNING,
+          sessionId:
+            typeof message.sessionId === "string" ? message.sessionId : null,
+        })
+        await emitRemoteAgentRuntimeUpdated(message.remoteAgentId)
       })
-      await emitRemoteAgentRuntimeUpdated(message.remoteAgentId)
       return
     }
 
     if (message?.type === "agent:status") {
-      await updateRemoteAgentRuntimeStatus(machine.id, message)
+      await runMachineMessageSpan(machine.id, message, async () => {
+        await updateRemoteAgentRuntimeStatus(machine.id, message)
+      })
     }
   })
 

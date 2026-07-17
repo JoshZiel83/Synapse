@@ -101,12 +101,44 @@ test("RemoteAgentCompleteDeliveriesBodySchema requires at least one delivery id"
   )
 })
 
-test("RemoteAgentFailDeliveriesBodySchema accepts an optional reason", () => {
+test("RemoteAgentFailDeliveriesBodySchema accepts per-delivery carriers and an optional reason", () => {
+  const TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
   const parsed = RemoteAgentFailDeliveriesBodySchema.parse({
-    delivery_ids: [DELIVERY_ID],
+    deliveries: [
+      { delivery_id: DELIVERY_ID, traceparent: TP, tracestate: "es=s:1.0" },
+      { delivery_id: "00000000-0000-4000-8000-000000000012" },
+    ],
     reason: "boom",
   })
   assert.equal(parsed.reason, "boom")
+  assert.equal(parsed.deliveries[0]!.traceparent, TP)
+  assert.equal(parsed.deliveries[0]!.tracestate, "es=s:1.0")
+  assert.equal(parsed.deliveries[1]!.traceparent, undefined)
+})
+
+test("RemoteAgentFailDeliveriesBodySchema rejects the retired delivery_ids shape and empty batches", () => {
+  assert.throws(() =>
+    RemoteAgentFailDeliveriesBodySchema.parse({ delivery_ids: [DELIVERY_ID] })
+  )
+  assert.throws(() =>
+    RemoteAgentFailDeliveriesBodySchema.parse({ deliveries: [] })
+  )
+})
+
+test("RemoteAgentFailDeliveriesBodySchema degrades malformed trace fields without dropping the delivery", () => {
+  const parsed = RemoteAgentFailDeliveriesBodySchema.parse({
+    deliveries: [
+      {
+        delivery_id: DELIVERY_ID,
+        traceparent: "not-a-traceparent",
+        tracestate: "x".repeat(2000),
+      },
+    ],
+  })
+  assert.equal(parsed.deliveries.length, 1)
+  assert.equal(parsed.deliveries[0]!.delivery_id, DELIVERY_ID)
+  assert.equal(parsed.deliveries[0]!.traceparent, undefined)
+  assert.equal(parsed.deliveries[0]!.tracestate, undefined)
 })
 
 test("RemoteAgentHistoryQuerySchema coerces numeric query strings", () => {

@@ -1,11 +1,29 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { context, trace } from "@opentelemetry/api"
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks"
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base"
 import { SUBJECT_KIND } from "@synapse/shared"
 import type { Kysely } from "kysely"
 import crypto from "node:crypto"
 import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
+import { updateResolvedTaskRequestRow } from "../tasks/repo.js"
 import { loadReplayResolvedTaskTargetsRepo } from "./repo.js"
+
+// Real provider + ALS context manager so `activeTraceparent()` (the
+// resolution_traceparent stamp inside updateResolvedTaskRequestRow) sees the
+// test's active span. Each test file runs in its own process under tsx --test.
+trace.setGlobalTracerProvider(
+  new BasicTracerProvider({
+    spanProcessors: [new SimpleSpanProcessor(new InMemorySpanExporter())],
+  })
+)
+context.setGlobalContextManager(new AsyncLocalStorageContextManager())
 
 /**
  * Regression for remote-agent startup replay: active_task_id points at
@@ -120,7 +138,8 @@ async function mintTask(
     conversationId: string
     remoteAgentSubjectId: string
   },
-  lifecycle: string
+  lifecycle: string,
+  resolutionTraceparent?: string
 ): Promise<string> {
   const row = await db
     .insertInto("toolCallTasks")
@@ -134,6 +153,7 @@ async function mintTask(
       sourceToolName: `${NS}.tool`,
       requestKey: `rk-${rid()}`,
       lifecycleStatus: lifecycle,
+      resolutionTraceparent: resolutionTraceparent ?? null,
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -147,8 +167,12 @@ test(
     await withTestDb(async (db) => {
       const fx = await buildAgentMachineFixture(db)
 
-      // A resolved (completed) active task should be replayed.
-      const resolvedTask = await mintTask(db, fx, "completed")
+      // A resolved (completed) active task should be replayed — carrying the
+      // resolver's persisted trace (resolution_traceparent) so the replayed
+      // agent:task:resolved frame stays correlated after a daemon restart.
+      const RESOLVER_TP =
+        "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+      const resolvedTask = await mintTask(db, fx, "completed", RESOLVER_TP)
       await db
         .insertInto("remoteAgentConversationContexts")
         .values({
@@ -166,9 +190,62 @@ test(
         remoteAgentId: string
         activeTaskId: string
         lifecycleStatus: string
+        resolutionTraceparent: string | null
       }
       assert.equal(row.activeTaskId, resolvedTask)
       assert.equal(row.lifecycleStatus, "completed")
+      assert.equal(row.resolutionTraceparent, RESOLVER_TP)
+    })
+  }
+)
+
+test(
+  "updateResolvedTaskRequestRow stamps the resolver's active span as resolution_traceparent (NULL without a span)",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const fx = await buildAgentMachineFixture(db)
+
+      // Resolve INSIDE a real active span: the single terminal-flip writer
+      // must persist exactly that span's traceparent — deleting the stamp
+      // line in tasks/repo.ts previously kept every suite green (the fixture
+      // INSERTs above seed the column directly), which is the gap this pins.
+      const spanStamped = await mintTask(db, fx, "working")
+      let expected: string | undefined
+      await trace
+        .getTracer("resolve-test")
+        .startActiveSpan("resolve-task", async (span) => {
+          const sc = span.spanContext()
+          expected = `00-${sc.traceId}-${sc.spanId}-01`
+          await updateResolvedTaskRequestRow(db as any, spanStamped, {
+            lifecycleStatus: "completed",
+          })
+          span.end()
+        })
+      const stamped = await db
+        .selectFrom("toolCallTasks")
+        .select(["resolutionTraceparent", "lifecycleStatus"])
+        .where("id", "=", spanStamped)
+        .executeTakeFirstOrThrow()
+      assert.ok(expected, "test span must have run")
+      assert.equal(
+        stamped.resolutionTraceparent,
+        expected,
+        "the persisted resolution_traceparent IS the resolver span's traceparent"
+      )
+      assert.equal(stamped.lifecycleStatus, "completed")
+
+      // No active span ⇒ NULL (never a garbage/stale value).
+      const unstamped = await mintTask(db, fx, "working")
+      await updateResolvedTaskRequestRow(db as any, unstamped, {
+        lifecycleStatus: "completed",
+      })
+      const bare = await db
+        .selectFrom("toolCallTasks")
+        .select(["resolutionTraceparent"])
+        .where("id", "=", unstamped)
+        .executeTakeFirstOrThrow()
+      assert.equal(bare.resolutionTraceparent, null)
     })
   }
 )

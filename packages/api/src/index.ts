@@ -10,6 +10,8 @@ import {
   shutdownTelemetry,
 } from "./instrumentation.js"
 import { randomUUID } from "node:crypto"
+import { context } from "@opentelemetry/api"
+import { suppressTracing } from "@opentelemetry/core"
 import Fastify, { type FastifyBaseLogger } from "fastify"
 import cors from "@fastify/cors"
 import cookie from "@fastify/cookie"
@@ -230,8 +232,9 @@ async function main() {
   await app.register(cors, {
     origin: true,
     credentials: true,
-    // Let cross-origin JS read the trace-id headers (same-origin can already).
-    exposedHeaders: ["server-timing", "traceresponse"],
+    // Let cross-origin JS read the Server-Timing trace metric (same-origin
+    // can already).
+    exposedHeaders: ["server-timing"],
   })
   await app.register(cookie)
   await app.register(websocket)
@@ -457,31 +460,39 @@ async function main() {
     // never self-destructs; then sweep provider VMs tagged as ours but no longer
     // tracked by a live DB row. Boot reconcile ran the first sweep; this closes the
     // boot-only gap on a long-uptime process. Unref'd so it never holds the process.
+    // Noise control (trace plan §4.G change 14, I3/I5): each off-box tick
+    // makes CubeSandbox control-plane HTTP calls, so untreated it would emit
+    // parentless undici CLIENT root traces at 100% (~1.4k+/day idle). Run
+    // both tick bodies under suppressTracing — same treatment as the telegram
+    // getUpdates poll; failure visibility stays on the log.warn/log.error
+    // lines below. Boot-reconcile's one-shot sweep (above) stays traced.
     const offBoxMaintenance = setInterval(() => {
-      void keepAliveOffBoxSandboxes()
-        .then((k) => {
-          if (k.failed > 0) {
-            log.warn(
-              { refreshed: k.refreshed, failed: k.failed },
-              "[sandbox] off-box keepalive: some deadline refreshes failed"
-            )
-          }
-        })
-        .catch((err) =>
-          log.error({ err }, "[sandbox] off-box keepalive failed")
-        )
-      void reapOffBoxSandboxOrphans()
-        .then((r) => {
-          if (r.reaped > 0) {
-            log.warn(
-              { reaped: r.reaped, scanned: r.scanned },
-              "[sandbox] reaped off-box provider orphan(s)"
-            )
-          }
-        })
-        .catch((err) =>
-          log.error({ err }, "[sandbox] off-box orphan sweep failed")
-        )
+      context.with(suppressTracing(context.active()), () => {
+        void keepAliveOffBoxSandboxes()
+          .then((k) => {
+            if (k.failed > 0) {
+              log.warn(
+                { refreshed: k.refreshed, failed: k.failed },
+                "[sandbox] off-box keepalive: some deadline refreshes failed"
+              )
+            }
+          })
+          .catch((err) =>
+            log.error({ err }, "[sandbox] off-box keepalive failed")
+          )
+        void reapOffBoxSandboxOrphans()
+          .then((r) => {
+            if (r.reaped > 0) {
+              log.warn(
+                { reaped: r.reaped, scanned: r.scanned },
+                "[sandbox] reaped off-box provider orphan(s)"
+              )
+            }
+          })
+          .catch((err) =>
+            log.error({ err }, "[sandbox] off-box orphan sweep failed")
+          )
+      })
     }, 60_000)
     offBoxMaintenance.unref?.()
 

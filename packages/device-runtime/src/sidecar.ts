@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events"
 import { createInterface } from "node:readline"
 import { parseSidecarResponseFrame } from "./sidecar-codec.js"
 import { createDeviceLogger } from "./logger.js"
-import { getTraceparent } from "./trace-context.js"
+import { getTraceContext } from "./trace-context.js"
 
 const sidecarLog = createDeviceLogger("sidecar")
 
@@ -105,20 +105,15 @@ export function startSidecar(opts: SidecarOptions): SidecarHandle {
       }
       const id = String(nextId++)
       pending.set(id, { resolve, reject })
-      // Stamp the active dispatch traceparent (P7) so the sidecar can continue
-      // the same trace for this RPC.
-      const traceparent = getTraceparent()
-      const frame = traceparent
-        ? { jsonrpc: "2.0", id, method, params, traceparent }
-        : { jsonrpc: "2.0", id, method, params }
+      // Spread the active dispatch's {traceparent, tracestate?} carrier (§3c)
+      // onto the frame so the sidecar (cua / fs-helper) can continue the same
+      // trace for this RPC. Absent outside a dispatch → clean frame.
+      const frame = { jsonrpc: "2.0", id, method, params, ...getTraceContext() }
       child.stdin?.write(`${JSON.stringify(frame)}\n`)
     })
   emitter.notify = (method, params) => {
     if (exited) return
-    const traceparent = getTraceparent()
-    const frame = traceparent
-      ? { jsonrpc: "2.0", method, params, traceparent }
-      : { jsonrpc: "2.0", method, params }
+    const frame = { jsonrpc: "2.0", method, params, ...getTraceContext() }
     child.stdin?.write(`${JSON.stringify(frame)}\n`)
   }
   emitter.stop = async () => {

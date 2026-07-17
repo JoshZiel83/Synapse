@@ -42,6 +42,7 @@ function rawTaskRow(
     targetParticipantId: null,
     resolvedByParticipantId: null,
     resolvedAt: null,
+    resolutionTraceparent: null,
     requestPayload: '{"command":"uptime"}',
     immediateResultPayload: { queued: true },
     finalResultPayload: '{"exitCode":0}',

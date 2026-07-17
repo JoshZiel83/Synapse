@@ -23,6 +23,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Shared multi-tenant front end (E1: the ONE Streamable-HTTP front end). serve.py
 # imports `_mcp_base.app.main`; PYTHONPATH=/app makes `_mcp_base` importable.
 COPY sidecars/_mcp_base/ ./_mcp_base/
+# Shared sidecar tracing module (trace-correctness §4.E) — flat-COPY so
+# `_shared` is importable next to `_mcp_base` (PYTHONPATH=/app).
+COPY sidecars/_shared/ ./_shared/
 
 # Vendored fork source (MijiaAdapter + FastMCP tools + the thin serve.py adapter).
 COPY sidecars/mijia-mcp/ ./

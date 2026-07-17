@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { getTraceparent } from "./trace-context.js"
+import { getCarrier } from "./trace-context.js"
 
 export const RemoteAgentTaskCreateResponseSchema = z.strictObject({
   task: z.strictObject({
@@ -27,9 +27,14 @@ export async function requestJson<S extends z.ZodType>(
   }
   // Continue the current turn's distributed trace on the daemon→api callback.
   // serverUrl is always the daemon's own first-party api (config.serverUrl), so
-  // the W3C traceparent (a random id, no PII) never leaks to a third party.
-  const traceparent = getTraceparent()
-  if (traceparent) headers.set("traceparent", traceparent)
+  // the W3C carrier (random ids + vendor list members, no PII) never leaks to
+  // a third party. Note: a deployment's PUBLIC-edge nginx strips `tracestate`
+  // by design (accepted — Tempo never consumes it; `traceparent` survives).
+  const carrier = getCarrier()
+  if (carrier) {
+    headers.set("traceparent", carrier.traceparent)
+    if (carrier.tracestate) headers.set("tracestate", carrier.tracestate)
+  }
   const response = await fetchImpl(url, { ...init, headers })
   if (!response.ok) {
     const bodyText = await response.text().catch(() => "")

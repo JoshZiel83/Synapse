@@ -2269,6 +2269,15 @@ CREATE TABLE tool_call_tasks (
   target_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
   resolved_by_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
   resolved_at TIMESTAMPTZ,
+  -- W3C traceparent of the request that flipped this task to a terminal
+  -- lifecycle, captured at the single terminal-flip writer
+  -- (tasks/repo.ts updateResolvedTaskRequestRow). Lets the agent:task:resolved
+  -- frame REPLAYED on daemon reconnect (which runs with no resolver span)
+  -- still carry the resolver's trace, mirroring
+  -- remote_agent_message_deliveries.origin_traceparent. Persisted trace
+  -- context is traceparent-only by design. NULL when tracing was off at
+  -- resolution.
+  resolution_traceparent TEXT,
   request_payload JSONB NOT NULL DEFAULT '{}',
   immediate_result_payload JSONB NOT NULL DEFAULT '{}',
   final_result_payload JSONB NOT NULL DEFAULT '{}',

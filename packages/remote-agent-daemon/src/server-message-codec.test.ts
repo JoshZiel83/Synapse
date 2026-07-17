@@ -45,6 +45,7 @@ test("parseServerMessage maps connected and start frames from snake_case wire", 
       fencingToken: "fence-1",
       serverUrl: "https://api.example.test",
       traceparent: undefined,
+      tracestate: undefined,
     }
   )
 })
@@ -73,6 +74,7 @@ test("parseServerMessage validates delivery and task-resolved frames", () => {
           conversationId: "conversation-1",
           itemId: "item-1",
           traceparent: undefined,
+          tracestate: undefined,
         },
       ],
     }
@@ -93,6 +95,7 @@ test("parseServerMessage validates delivery and task-resolved frames", () => {
       taskId: "task-1",
       task: { status: "resolved" },
       traceparent: undefined,
+      tracestate: undefined,
     }
   )
 })
@@ -144,6 +147,96 @@ test("parseServerMessage carries W3C traceparent through start/deliver/task fram
     resolved?.type === "agent:task:resolved" ? resolved.traceparent : null,
     TP
   )
+})
+
+test("parseServerMessage carries tracestate next to traceparent", () => {
+  const TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+  const TS = "es=s:1.0,congo=t61rcWkgMzE"
+
+  const deliver = parseServerMessage(
+    JSON.stringify({
+      type: "agent:deliver",
+      deliveries: [
+        {
+          remote_agent_id: "agent-1",
+          delivery_id: "delivery-1",
+          conversation_id: "conversation-1",
+          item_id: "item-1",
+          traceparent: TP,
+          tracestate: TS,
+        },
+      ],
+    })
+  )
+  assert.equal(
+    deliver?.type === "agent:deliver" ? deliver.deliveries[0].tracestate : null,
+    TS
+  )
+
+  const resolved = parseServerMessage(
+    JSON.stringify({
+      type: "agent:task:resolved",
+      remote_agent_id: "agent-1",
+      task_id: "task-1",
+      task: {},
+      traceparent: TP,
+      tracestate: TS,
+    })
+  )
+  assert.equal(
+    resolved?.type === "agent:task:resolved" ? resolved.tracestate : null,
+    TS
+  )
+})
+
+test("parseServerMessage degrades malformed/oversized trace fields without dropping the frame", () => {
+  const TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+  // Malformed traceparent (and the old accepts-empty-string weakness): the
+  // FIELD degrades to undefined; the business frame still parses.
+  for (const bad of [
+    "not-a-traceparent",
+    "",
+    "01-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01", // wrong version
+    `00-${"0".repeat(32)}-b7ad6b7169203331-01`, // all-zero trace id
+    `00-0af7651916cd43dd8448eb211c80319c-${"0".repeat(16)}-01`, // all-zero span id
+  ]) {
+    const start = parseServerMessage(
+      JSON.stringify({
+        type: "agent:start",
+        remote_agent_id: "agent-1",
+        runtime_kind: "codex",
+        traceparent: bad,
+      })
+    )
+    assert.equal(start?.type, "agent:start", `frame parses for ${bad}`)
+    assert.equal(
+      start?.type === "agent:start" ? start.traceparent : "unset",
+      undefined
+    )
+  }
+
+  // Oversized tracestate (cap 1024) degrades; the valid traceparent survives.
+  const deliver = parseServerMessage(
+    JSON.stringify({
+      type: "agent:deliver",
+      deliveries: [
+        {
+          remote_agent_id: "agent-1",
+          delivery_id: "delivery-1",
+          conversation_id: "conversation-1",
+          item_id: "item-1",
+          traceparent: TP,
+          tracestate: "x".repeat(1025),
+        },
+      ],
+    })
+  )
+  assert.equal(deliver?.type, "agent:deliver")
+  if (deliver?.type === "agent:deliver") {
+    assert.equal(deliver.deliveries[0].traceparent, TP)
+    assert.equal(deliver.deliveries[0].tracestate, undefined)
+  }
 })
 
 test("parseServerMessage rejects malformed, camelCase, and drifted frames", () => {

@@ -61,13 +61,19 @@ export interface OneShotFsHelperOptions {
    */
   presignAllowHost?: string[]
   /**
-   * W3C `traceparent` (P7). When set, it is stamped onto every outbound
-   * JSON-RPC frame so the spawned helper's spans continue the supervisor's
-   * trace (api → one-shot fs-helper). The api caller passes its active
-   * traceparent; omitted = the helper starts root spans. Kept as a plain
-   * string so this driver stays OTel-SDK-free (node-only, per the file header).
+   * W3C `traceparent` (§3c carrier). When set, it is stamped onto every
+   * outbound JSON-RPC frame so the spawned helper's spans continue the
+   * supervisor's trace (api → one-shot fs-helper). The api caller passes its
+   * active carrier (activeTraceCarrier()); omitted = the helper starts root
+   * spans. Kept as plain strings so this driver stays OTel-SDK-free
+   * (node-only, per the file header).
    */
   traceparent?: string
+  /**
+   * W3C `tracestate` (§3c). Threaded onto request frames only ever alongside
+   * a traceparent; the api mints it pre-sanitized (two-stage, ≤1024 chars).
+   */
+  tracestate?: string
   /** Spawn override (tests). */
   spawnImpl?: typeof spawn
 }
@@ -155,11 +161,15 @@ export class OneShotFsHelper {
   private exitErr: Error | null = null
   private readonly timeoutMs: number
   private readonly traceparent?: string
+  private readonly tracestate?: string
 
   constructor(opts: OneShotFsHelperOptions) {
     const spawnImpl = opts.spawnImpl ?? spawn
     this.timeoutMs = opts.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS
     this.traceparent = opts.traceparent
+    // §3c: tracestate is only meaningful alongside a traceparent — never
+    // stamp it alone.
+    this.tracestate = opts.traceparent ? opts.tracestate : undefined
     const root = opts.rootPath ?? `${opts.casDir}/.oneshot-root`
     const work = opts.workDir ?? `${opts.casDir}/.oneshot-work`
     const args = ["--root", root, "--work-dir", work, "--cas-dir", opts.casDir]
@@ -238,10 +248,18 @@ export class OneShotFsHelper {
           reject(e)
         },
       })
-      // Stamp the supervisor's traceparent (P7) so the helper's spans continue
-      // this trace; mirrors the long-lived sidecar transport (sidecar.ts).
+      // Stamp the supervisor's {traceparent, tracestate?} carrier (§3c) so the
+      // helper's spans continue this trace; mirrors the long-lived sidecar
+      // transport (sidecar.ts).
       const frame = this.traceparent
-        ? { jsonrpc: "2.0", id, method, params, traceparent: this.traceparent }
+        ? {
+            jsonrpc: "2.0",
+            id,
+            method,
+            params,
+            traceparent: this.traceparent,
+            ...(this.tracestate ? { tracestate: this.tracestate } : {}),
+          }
         : { jsonrpc: "2.0", id, method, params }
       this.child.stdin?.write(`${JSON.stringify(frame)}\n`)
     })

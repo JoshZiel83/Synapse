@@ -7,6 +7,7 @@ import {
   SpanStatusCode,
   trace,
 } from "@opentelemetry/api"
+import type { TraceState } from "@opentelemetry/api"
 import type { Job } from "bullmq"
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks"
 import { hrTimeToMilliseconds, suppressTracing } from "@opentelemetry/core"
@@ -17,6 +18,9 @@ import {
 } from "@opentelemetry/sdk-trace-base"
 import {
   injectTraceContext,
+  linkUpstreamTraces,
+  sendWithProducerSpan,
+  withJobSpan,
   withRootTrace,
   wrapTickProcessor,
 } from "./job-tracing.js"
@@ -45,6 +49,41 @@ const activeCtx = trace.setSpanContext(ROOT_CONTEXT, {
   traceFlags: 1,
   isRemote: false,
 })
+
+/**
+ * A validation-FREE TraceState, faithful to @sentry/opentelemetry's vendored
+ * implementation (its `set()` never validates, which is exactly how the
+ * grammar-invalid `sentry.dsc=k=v,...` members enter a span context — the C9c
+ * corruption source). @opentelemetry/core's own TraceState cannot stand in
+ * here: its `set()` validates and silently DROPS `sentry.dsc`, which would
+ * make these tests vacuously green.
+ */
+function sentryStyleTraceState(
+  entries: ReadonlyArray<readonly [string, string]>
+): TraceState {
+  const map = new Map(entries)
+  return {
+    get: (key) => map.get(key),
+    set: (key, value) =>
+      sentryStyleTraceState([
+        ...[...map].filter(([k]) => k !== key),
+        [key, value],
+      ]),
+    unset: (key) => sentryStyleTraceState([...map].filter(([k]) => k !== key)),
+    serialize: () => [...map].map(([k, v]) => `${k}=${v}`).join(","),
+  }
+}
+
+/** activeCtx variant whose span context carries the given tracestate members. */
+function ctxWithTraceState(entries: ReadonlyArray<readonly [string, string]>) {
+  return trace.setSpanContext(ROOT_CONTEXT, {
+    traceId: "0af7651916cd43dd8448eb211c80319c",
+    spanId: "b7ad6b7169203331",
+    traceFlags: 1,
+    isRemote: false,
+    traceState: sentryStyleTraceState(entries),
+  })
+}
 
 // Without any OpenTelemetry provider/propagator registered (as in a bare unit
 // context), injectTraceContext must be a safe no-op: it never mutates payload
@@ -359,4 +398,412 @@ test("withRootTrace escapes suppressTracing (the tick work-path enqueue escape h
   })
   const names = tickExporter.getFinishedSpans().map((s) => s.name)
   assert.deepEqual(names, ["escaped"])
+})
+
+// ─── sendWithProducerSpan (the `send {q}` PRODUCER half, §4.H change 1) ───
+
+test("sendWithProducerSpan: carrier is the PRODUCER span's own context; consumer would parent to it", async () => {
+  tickExporter.reset()
+  let injected: Record<string, string> | undefined
+  const job = await context.with(activeCtx, () =>
+    sendWithProducerSpan(
+      "test-queue",
+      "think",
+      { sessionId: "s1" },
+      async (dataWithCtx) => {
+        injected = (dataWithCtx as Record<string, unknown>).__otelctx as
+          | Record<string, string>
+          | undefined
+        return { id: "job-42" }
+      }
+    )
+  )
+  assert.deepEqual(job, { id: "job-42" }, "add()'s result must pass through")
+  const spans = tickExporter.getFinishedSpans()
+  assert.equal(spans.length, 1, "exactly one producer span")
+  const producer = spans[0]!
+  assert.equal(producer.name, "send test-queue")
+  assert.equal(producer.kind, SpanKind.PRODUCER)
+  // Pinned wire names — the semconv constants must resolve to exactly these.
+  assert.equal(producer.attributes["messaging.system"], "bullmq")
+  assert.equal(producer.attributes["messaging.operation.type"], "send")
+  assert.equal(producer.attributes["messaging.operation.name"], "send")
+  assert.equal(producer.attributes["messaging.destination.name"], "test-queue")
+  assert.equal(producer.attributes["messaging.bullmq.job.name"], "think")
+  assert.equal(
+    producer.attributes["messaging.message.id"],
+    "job-42",
+    "message id comes from the RETURNED Job"
+  )
+  assert.equal(
+    "messaging.operation" in producer.attributes,
+    false,
+    "deprecated bare messaging.operation must not reappear"
+  )
+  // Creation-context pattern: the carrier is injected INSIDE the callback, so
+  // its span-id IS the producer's — the worker-side CONSUMER span extracting
+  // this carrier parents directly to the producer.
+  assert.ok(injected, "carrier must be injected")
+  const producerSc = producer.spanContext()
+  assert.equal(
+    injected.traceparent,
+    `00-${producerSc.traceId}-${producerSc.spanId}-01`
+  )
+  // ...and the producer itself continues the enqueuer's trace.
+  assert.equal(producerSc.traceId, "0af7651916cd43dd8448eb211c80319c")
+  assert.equal(producer.parentSpanContext?.spanId, "b7ad6b7169203331")
+})
+
+test("sendWithProducerSpan under withRootTrace: fresh parentless producer ROOT, carrier still non-empty", async () => {
+  tickExporter.reset()
+  let injected: Record<string, string> | undefined
+  await context.with(activeCtx, () =>
+    withRootTrace(() =>
+      sendWithProducerSpan("test-queue", "think", { s: 1 }, async (d) => {
+        injected = (d as Record<string, unknown>).__otelctx as
+          | Record<string, string>
+          | undefined
+        return { id: "j1" }
+      })
+    )
+  )
+  const spans = tickExporter.getFinishedSpans()
+  assert.equal(spans.length, 1)
+  const producer = spans[0]!
+  assert.equal(
+    producer.parentSpanContext,
+    undefined,
+    "rooted enqueue's producer is parentless"
+  )
+  assert.notEqual(
+    producer.spanContext().traceId,
+    "0af7651916cd43dd8448eb211c80319c",
+    "rooted enqueue must NOT continue the ambient (other-user) trace"
+  )
+  assert.ok(injected, "rooted enqueue still injects the producer-root carrier")
+  assert.match(
+    injected.traceparent,
+    new RegExp(`^00-${producer.spanContext().traceId}-`)
+  )
+})
+
+test("sendWithProducerSpan: enqueue failure ⇒ ERROR + exception event, error rethrown unchanged", async () => {
+  tickExporter.reset()
+  const boom = new Error("redis down")
+  await assert.rejects(
+    () =>
+      context.with(activeCtx, () =>
+        sendWithProducerSpan("test-queue", "think", { s: 1 }, async () => {
+          throw boom
+        })
+      ),
+    boom,
+    "the enqueue error must surface to the caller unchanged"
+  )
+  const spans = tickExporter.getFinishedSpans()
+  assert.equal(spans.length, 1, "the failed enqueue still exports its span")
+  const producer = spans[0]!
+  assert.equal(producer.status.code, SpanStatusCode.ERROR)
+  const exception = producer.events.find((e) => e.name === "exception")
+  assert.ok(exception, "recordException must attach an exception event")
+  assert.equal(exception.attributes?.["exception.message"], "redis down")
+  assert.equal(
+    "messaging.message.id" in producer.attributes,
+    false,
+    "no message id on a failed enqueue — there is no Job"
+  )
+})
+
+// ─── withJobSpan (the `process {q}` CONSUMER half, §4.H — via its unit seam) ───
+//
+// Drives the SAME wrapped processor a Redis-backed tracedWorker would run,
+// with a stub Job — pinning the producer→consumer parenting, the wait_time_ms
+// dwell formula (the guard-annotated `processedOn ?? Date.now()` line), the
+// semconv attribute names, and the error path.
+
+/** Stub Job with the fields withJobSpan reads. */
+function stubJob(overrides: Partial<Job> & { data?: unknown } = {}): Job {
+  return {
+    id: "job-7",
+    data: {},
+    timestamp: 1_000,
+    processedOn: 1_250,
+    delay: 0,
+    attemptsMade: 0,
+    ...overrides,
+  } as unknown as Job
+}
+
+test("withJobSpan: consumer span parents DIRECTLY to a real sendWithProducerSpan producer", async () => {
+  tickExporter.reset()
+  // Producer half: a REAL enqueue-side carrier minted inside the producer span.
+  let dataWithCarrier: unknown
+  await context.with(activeCtx, () =>
+    sendWithProducerSpan(
+      "test-queue",
+      "think",
+      { sessionId: "s1" },
+      async (d) => {
+        dataWithCarrier = d
+        return { id: "job-7" }
+      }
+    )
+  )
+  const producer = tickExporter.getFinishedSpans()[0]!
+  assert.equal(producer.name, "send test-queue")
+
+  // Consumer half: withJobSpan extracts the carrier from job.data.
+  const wrapped = withJobSpan("test-queue", async () => "done")
+  const result = await wrapped(stubJob({ data: dataWithCarrier }))
+  assert.equal(result, "done")
+
+  const consumer = tickExporter
+    .getFinishedSpans()
+    .find((s) => s.name === "process test-queue")
+  assert.ok(consumer, "consumer span must export")
+  assert.equal(consumer.kind, SpanKind.CONSUMER)
+  assert.equal(
+    consumer.spanContext().traceId,
+    producer.spanContext().traceId,
+    "consumer continues the producer's trace"
+  )
+  assert.equal(
+    consumer.parentSpanContext?.spanId,
+    producer.spanContext().spanId,
+    "consumer parents DIRECTLY to the producer span (carrier = producer ctx)"
+  )
+})
+
+test("withJobSpan: semconv attribute names — operation.type/name present, deprecated bare messaging.operation absent", async () => {
+  tickExporter.reset()
+  const wrapped = withJobSpan("test-queue", async () => undefined)
+  await wrapped(stubJob())
+  const consumer = tickExporter.getFinishedSpans()[0]!
+  assert.equal(consumer.name, "process test-queue")
+  assert.equal(consumer.attributes["messaging.system"], "bullmq")
+  assert.equal(consumer.attributes["messaging.operation.type"], "process")
+  assert.equal(consumer.attributes["messaging.operation.name"], "process")
+  assert.equal(consumer.attributes["messaging.destination.name"], "test-queue")
+  assert.equal(consumer.attributes["messaging.message.id"], "job-7")
+  assert.equal(
+    "messaging.operation" in consumer.attributes,
+    false,
+    "deprecated bare messaging.operation must not reappear"
+  )
+})
+
+test("withJobSpan: wait_time_ms = processedOn - timestamp - delay, clamped at 0, now-defaulted without processedOn", async () => {
+  // exact dwell
+  tickExporter.reset()
+  await withJobSpan(
+    "q",
+    async () => undefined
+  )(stubJob({ timestamp: 1_000, processedOn: 1_250, delay: 50 }))
+  let span = tickExporter.getFinishedSpans().at(-1)!
+  assert.equal(span.attributes["messaging.bullmq.job.wait_time_ms"], 200)
+  assert.equal(span.attributes["messaging.bullmq.job.attempts_made"], 0)
+
+  // clock skew / delayed job picked up early ⇒ clamped, never negative
+  tickExporter.reset()
+  await withJobSpan(
+    "q",
+    async () => undefined
+  )(stubJob({ timestamp: 1_000, processedOn: 1_100, delay: 5_000 }))
+  span = tickExporter.getFinishedSpans().at(-1)!
+  assert.equal(
+    span.attributes["messaging.bullmq.job.wait_time_ms"],
+    0,
+    "max(0, ...) clamp — dwell is never negative"
+  )
+
+  // missing processedOn ⇒ the deliberate Date.now() default (a sane dwell
+  // against a recent enqueue timestamp, still never negative)
+  tickExporter.reset()
+  const enqueuedAt = Date.now() - 100
+  await withJobSpan(
+    "q",
+    async () => undefined
+  )(stubJob({ timestamp: enqueuedAt, processedOn: undefined, delay: 0 }))
+  span = tickExporter.getFinishedSpans().at(-1)!
+  const dwell = span.attributes["messaging.bullmq.job.wait_time_ms"]
+  assert.equal(typeof dwell, "number")
+  assert.ok(
+    (dwell as number) >= 100 && (dwell as number) < 60_000,
+    `now-defaulted dwell must be plausible, got ${String(dwell)}`
+  )
+
+  // retried job surfaces attempts_made
+  tickExporter.reset()
+  await withJobSpan("q", async () => undefined)(stubJob({ attemptsMade: 3 }))
+  span = tickExporter.getFinishedSpans().at(-1)!
+  assert.equal(span.attributes["messaging.bullmq.job.attempts_made"], 3)
+})
+
+test("withJobSpan: no/garbage carrier ⇒ fresh root; processor throw ⇒ ERROR + exception + rethrow", async () => {
+  // no carrier ⇒ parentless root
+  tickExporter.reset()
+  await withJobSpan("q", async () => undefined)(stubJob({ data: { x: 1 } }))
+  let span = tickExporter.getFinishedSpans()[0]!
+  assert.equal(span.parentSpanContext, undefined, "no carrier ⇒ fresh root")
+
+  // throwing processor ⇒ ERROR + exception event, error rethrown unchanged
+  tickExporter.reset()
+  const boom = new Error("worker exploded")
+  await assert.rejects(
+    () =>
+      withJobSpan("q", async () => {
+        throw boom
+      })(stubJob()),
+    boom,
+    "the processor error must surface to BullMQ unchanged (retry semantics)"
+  )
+  span = tickExporter.getFinishedSpans()[0]!
+  assert.equal(span.status.code, SpanStatusCode.ERROR)
+  const exception = span.events.find((e) => e.name === "exception")
+  assert.ok(exception, "recordException must attach an exception event")
+  assert.equal(exception.attributes?.["exception.message"], "worker exploded")
+})
+
+// ─── injectTraceContext two-stage tracestate sanitizer (§3c / §4.H) ───
+
+test("injectTraceContext scrubs Sentry tracestate members, keeping legitimate vendors (stage 1)", () => {
+  context.with(
+    ctxWithTraceState([
+      ["sentry.dsc", "k=v,k2=v2"],
+      ["othervendor", "xyz"],
+    ]),
+    () => {
+      const out = injectTraceContext({ x: 1 }) as Record<string, unknown>
+      const carrier = out.__otelctx as Record<string, string>
+      assert.equal(
+        carrier.tracestate,
+        "othervendor=xyz",
+        "sentry.dsc must be scrubbed at mint; the legitimate vendor survives"
+      )
+      assert.match(carrier.traceparent, /^00-0af7651916cd43dd8448eb211c80319c-/)
+    }
+  )
+})
+
+test("injectTraceContext: all-Sentry tracestate degrades to NO tracestate key", () => {
+  context.with(
+    ctxWithTraceState([
+      ["sentry.dsc", "k=v"],
+      ["sentry.sample_rate", "1"],
+    ]),
+    () => {
+      const out = injectTraceContext({ x: 1 }) as Record<string, unknown>
+      const carrier = out.__otelctx as Record<string, string>
+      assert.equal(
+        "tracestate" in carrier,
+        false,
+        "an emptied tracestate must be ABSENT, never an empty string"
+      )
+      assert.ok(carrier.traceparent, "traceparent is unaffected")
+    }
+  )
+})
+
+test("injectTraceContext: any ABNF-invalid member drops the WHOLE header (stage 2, no partial salvage)", () => {
+  context.with(
+    ctxWithTraceState([
+      ["othervendor", "xyz"],
+      // Uppercase key — grammar-invalid per W3C §3.3.2.2, but NOT a known
+      // Sentry key, so it survives stage 1 and must trip the stage-2 gate.
+      ["Invalid-Key", "x"],
+    ]),
+    () => {
+      const out = injectTraceContext({ x: 1 }) as Record<string, unknown>
+      const carrier = out.__otelctx as Record<string, string>
+      assert.equal(
+        "tracestate" in carrier,
+        false,
+        "whole-or-nothing: partial salvage IS the corruption mechanism"
+      )
+      assert.ok(carrier.traceparent)
+    }
+  )
+})
+
+test("injectTraceContext passes a clean vendor tracestate through verbatim", () => {
+  context.with(ctxWithTraceState([["es", "s:1.0"]]), () => {
+    const out = injectTraceContext({ x: 1 }) as Record<string, unknown>
+    const carrier = out.__otelctx as Record<string, string>
+    assert.equal(carrier.tracestate, "es=s:1.0")
+  })
+})
+
+// ─── linkUpstreamTraces hygiene (flags-00 skip + linkKind, §4.H) ───
+
+test("linkUpstreamTraces skips flags-00 upstreams and counts them; sampled/self/malformed handling intact", () => {
+  tickExporter.reset()
+  trace
+    .getTracer("link-test")
+    .startActiveSpan("consumer", { kind: SpanKind.CONSUMER }, (span) => {
+      linkUpstreamTraces([
+        // sampled upstream → linked
+        "00-2af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        // UNSAMPLED upstreams: extract as VALID span contexts
+        // (isSpanContextValid does not check the sampled bit), but a link to a
+        // head-sampled backend's unsampled trace can never resolve → skipped.
+        "00-3af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+        "00-4af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+        // self-link → skipped silently (not an unsampled skip)
+        `00-${span.spanContext().traceId}-b7ad6b7169203331-01`,
+        // malformed → skipped silently
+        "garbage",
+        "",
+      ])
+      span.end()
+    })
+  const spans = tickExporter.getFinishedSpans()
+  assert.equal(spans.length, 1)
+  const consumer = spans[0]!
+  assert.equal(consumer.links.length, 1, "only the sampled upstream links")
+  assert.equal(
+    consumer.links[0]!.context.traceId,
+    "2af7651916cd43dd8448eb211c80319c"
+  )
+  assert.equal(
+    consumer.links[0]!.attributes?.["synapse.link.kind"],
+    "session_wakeup",
+    "default linkKind"
+  )
+  assert.equal(
+    consumer.attributes["synapse.wakeup.links_skipped_unsampled"],
+    2,
+    "exactly the two flags-00 upstreams count as skipped"
+  )
+})
+
+test("linkUpstreamTraces: no skip counter attribute when nothing was skipped", () => {
+  tickExporter.reset()
+  trace.getTracer("link-test").startActiveSpan("consumer", (span) => {
+    linkUpstreamTraces([
+      "00-2af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    ])
+    span.end()
+  })
+  const consumer = tickExporter.getFinishedSpans()[0]!
+  assert.equal(
+    "synapse.wakeup.links_skipped_unsampled" in consumer.attributes,
+    false
+  )
+})
+
+test("linkUpstreamTraces stamps a caller-provided linkKind ([adj 19])", () => {
+  tickExporter.reset()
+  trace.getTracer("link-test").startActiveSpan("fail-deliveries", (span) => {
+    linkUpstreamTraces(
+      ["00-2af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"],
+      "remote_agent_delivery"
+    )
+    span.end()
+  })
+  const failSpan = tickExporter.getFinishedSpans()[0]!
+  assert.equal(failSpan.links.length, 1)
+  assert.equal(
+    failSpan.links[0]!.attributes?.["synapse.link.kind"],
+    "remote_agent_delivery"
+  )
 })

@@ -65,7 +65,10 @@ export interface OtlpCatcher {
   close(): Promise<void>
 }
 
-export async function startOtlpCatcher(): Promise<OtlpCatcher> {
+export async function startOtlpCatcher(
+  // P-I2 binds 0.0.0.0 so a docker container can reach it via host-gateway.
+  bindHost = "127.0.0.1"
+): Promise<OtlpCatcher> {
   const posts: Buffer[] = []
   const server = http.createServer((req, res) => {
     void readBody(req).then((body) => {
@@ -74,7 +77,7 @@ export async function startOtlpCatcher(): Promise<OtlpCatcher> {
       res.end()
     })
   })
-  server.listen(0, "127.0.0.1")
+  server.listen(0, bindHost)
   await once(server, "listening")
   const { port } = server.address() as net.AddressInfo
   return {

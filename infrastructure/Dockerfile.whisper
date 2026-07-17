@@ -26,6 +26,9 @@ WORKDIR /app
 COPY sidecars/whisper/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Shared sidecar tracing module (trace-correctness §4.E) — flat-COPY so
+# `_shared` is importable next to serve.py.
+COPY sidecars/_shared/ ./_shared/
 COPY sidecars/whisper/ ./
 
 # Bake the CT2 Whisper weights for the selected size so runtime does no network

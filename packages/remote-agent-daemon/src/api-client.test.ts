@@ -5,6 +5,7 @@ import {
   RemoteAgentTaskCreateResponseSchema,
   requestJson,
 } from "./api-client.js"
+import { runWithCarrier } from "./trace-context.js"
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -61,6 +62,60 @@ test("requestJson validates fail-deliveries responses", async () => {
   )
 
   assert.deepEqual(result, { rescheduled: 2 })
+})
+
+test("requestJson forwards the active turn's carrier as traceparent+tracestate headers", async () => {
+  const TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+  const TS = "es=s:1.0"
+  const observed: Array<{
+    traceparent: string | null
+    tracestate: string | null
+  }> = []
+  const fetchImpl: typeof fetch = (async (_input, init) => {
+    const headers = new Headers(init?.headers)
+    observed.push({
+      traceparent: headers.get("traceparent"),
+      tracestate: headers.get("tracestate"),
+    })
+    return jsonResponse({ rescheduled: 0 })
+  }) as typeof fetch
+
+  await runWithCarrier({ traceparent: TP, tracestate: TS }, () =>
+    requestJson(
+      "https://api.example.test",
+      "machine-key",
+      "/fail-deliveries",
+      { method: "POST", body: "{}" },
+      RemoteAgentFailDeliveriesResponseSchema,
+      fetchImpl
+    )
+  )
+  // tracestate is omitted (never empty) when the carrier has none.
+  await runWithCarrier({ traceparent: TP }, () =>
+    requestJson(
+      "https://api.example.test",
+      "machine-key",
+      "/fail-deliveries",
+      { method: "POST", body: "{}" },
+      RemoteAgentFailDeliveriesResponseSchema,
+      fetchImpl
+    )
+  )
+  // No ambient carrier ⇒ no trace headers at all.
+  await requestJson(
+    "https://api.example.test",
+    "machine-key",
+    "/fail-deliveries",
+    { method: "POST", body: "{}" },
+    RemoteAgentFailDeliveriesResponseSchema,
+    fetchImpl
+  )
+
+  assert.deepEqual(observed, [
+    { traceparent: TP, tracestate: TS },
+    { traceparent: TP, tracestate: null },
+    { traceparent: null, tracestate: null },
+  ])
 })
 
 test("requestJson rejects malformed or drifted response payloads", async () => {

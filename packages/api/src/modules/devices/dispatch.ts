@@ -13,6 +13,14 @@
 // today's hand-roll exists only because the surface is stateless and the
 // SDK client costs ~150KB on the API side, which we don't want to pay
 // until we've validated the envelope + target-id + grant flow end-to-end.
+//
+// NOTE (trace plan §4.G, MANDATORY for the SDK swap): the outbound HTTP hop
+// below runs under `suppressTracing` so UndiciInstrumentation emits no
+// duplicate CLIENT span and injects no headers — the manual `tools/call`
+// span + the `_meta` carrier are the ONLY api→device trace edge. The
+// planned Streamable-HTTP swap MUST preserve that suppressTracing wrap
+// around whatever transport the SDK client uses, or the double-span +
+// header/`_meta` id split this file fixes will come back.
 
 import {
   SynapseErrorSchema,
@@ -20,17 +28,24 @@ import {
   type SynapseError,
 } from "@synapse/device-protocol"
 import { getRuntimeEndpointRegistry } from "./tunnel-registry.js"
-import { SpanKind, SpanStatusCode, trace } from "@opentelemetry/api"
-import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
+import { context, SpanKind, SpanStatusCode, trace } from "@opentelemetry/api"
+import { suppressTracing } from "@opentelemetry/core"
+import { activeTraceCarrier } from "../../infrastructure/observability/traceparent.js"
 
 /**
- * Tracer for the api→device dispatch hop (P7). fetch (undici) is NOT
- * auto-instrumented, so the outbound `tools/call` is wrapped in an explicit
- * CLIENT span below — this is the api→device edge of the distributed-trace
- * latency tree, and it is the parent the device-runtime + its sidecars
- * (cua/fs-helper) attach to via the injected `traceparent` (read inside the
- * span via `activeTraceparent()` so the device side parents under the dispatch,
- * not the bare request/job span).
+ * Tracer for the api→device dispatch hop. fetch (undici) IS
+ * auto-instrumented (the old "fetch is NOT auto-instrumented" claim here is
+ * what caused the duplicate-span bug), so the outbound `tools/call` keeps
+ * ONE manual CLIENT span — the single api→device edge of the trace tree —
+ * and wraps the fetch itself in `suppressTracing` so the undici
+ * instrumentation neither emits a sibling `POST` span nor injects HTTP
+ * trace headers. The device side parents under this span via the
+ * `{traceparent, tracestate}` carrier minted INSIDE it (`activeTraceCarrier()`
+ * → `_meta`), never via HTTP headers.
+ *
+ * Span naming/attributes pin the OTel MCP semconv (`mcp.method.name`,
+ * `mcp.tool.name`, span name `tools/call {tool}`) — Development stability as
+ * of semconv 1.41; revisit on semconv upgrades.
  */
 const tracer = trace.getTracer("synapse-device-dispatch")
 
@@ -172,45 +187,81 @@ export async function dispatchSyncTool(
 
   const fetchImpl = opts.fetchImpl ?? fetch
   const url = `${endpoint.internalUrl.replace(/\/$/, "")}/mcp`
+  // server.address/server.port for the CLIENT span. Never throw pre-span on a
+  // malformed registry URL — fetch below surfaces it as a caught dispatch
+  // error inside the span instead.
+  const target = ((): URL | undefined => {
+    try {
+      return new URL(url)
+    } catch {
+      return undefined
+    }
+  })()
+  const targetPort = ((): number | undefined => {
+    if (!target) return undefined
+    if (target.port) return Number(target.port)
+    return target.protocol === "https:" ? 443 : 80
+  })()
 
-  // Wrap the outbound tools/call in an explicit CLIENT span — this is the
-  // api→device hop in the trace tree, and the active span the device side
-  // continues via the injected traceparent. No-op when OTEL is disabled.
+  // The single api→device CLIENT edge (trace plan §4.G change 1): MCP-semconv
+  // span name `tools/call {tool}`; the fetch below runs under suppressTracing
+  // so no undici sibling span / HTTP header injection exists. The device side
+  // continues this span via the `_meta` carrier. No-op when OTEL is disabled.
   return tracer.startActiveSpan(
-    `device.dispatch ${opts.toolName}`,
+    `tools/call ${opts.toolName}`,
     {
       kind: SpanKind.CLIENT,
       attributes: {
+        "mcp.method.name": "tools/call",
+        "mcp.tool.name": opts.toolName,
+        ...(target && targetPort !== undefined
+          ? {
+              "server.address": target.hostname,
+              "server.port": targetPort,
+            }
+          : {}),
         "synapse.runtime_service_id": opts.runtimeServiceId,
-        "synapse.tool_name": opts.toolName,
         "synapse.attempt_id": opts.envelope.attempt_id,
       },
     },
     async (span): Promise<McpDispatchResult> => {
-      const traceparent = activeTraceparent()
+      // Minted INSIDE the span so the device side parents under the dispatch
+      // edge, not the bare request/job span. {traceparent, tracestate?} with
+      // the tracestate already two-stage sanitized (§3c) — never the global
+      // propagator (no sentry-trace/baggage in message payloads).
+      const carrier = activeTraceCarrier()
       try {
-        const res = await fetchImpl(url, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            accept: "application/json",
-          },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: opts.envelope.attempt_id,
-            method: "tools/call",
-            params: {
-              name: opts.toolName,
-              arguments: opts.args,
-              _meta: traceparent
-                ? { synapse_operation: opts.envelope, traceparent }
-                : { synapse_operation: opts.envelope },
+        // suppressTracing wraps ONLY the fetch: UndiciInstrumentation sees a
+        // suppressed context → no duplicate CLIENT span, no header injection
+        // (spike P-G). The manual span above still records + exports.
+        const res = await context.with(suppressTracing(context.active()), () =>
+          fetchImpl(url, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              accept: "application/json",
             },
-          }),
-          signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000),
-        })
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: opts.envelope.attempt_id,
+              method: "tools/call",
+              params: {
+                name: opts.toolName,
+                arguments: opts.args,
+                // SEP-414 reserves the unprefixed `traceparent`/`tracestate`/
+                // `baggage` `_meta` keys — the carrier below conforms.
+                // `synapse_operation` is a pre-existing custom unprefixed key
+                // that deliberately does NOT follow MCP's `_meta` prefix
+                // convention (both ends are Synapse-owned).
+                _meta: { synapse_operation: opts.envelope, ...(carrier ?? {}) },
+              },
+            }),
+            signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000),
+          })
+        )
         if (!res.ok) {
           span.setAttribute("http.response.status_code", res.status)
+          span.setAttribute("error.type", String(res.status))
           span.setStatus({
             code: SpanStatusCode.ERROR,
             message: `dispatch HTTP ${res.status}`,
@@ -225,6 +276,7 @@ export async function dispatchSyncTool(
         }
         const parsed = parseJsonRpcToolResponseText(await res.text())
         if (!parsed.ok) {
+          span.setAttribute("error.type", "malformed_response")
           span.setStatus({
             code: SpanStatusCode.ERROR,
             message: parsed.message,
@@ -239,6 +291,7 @@ export async function dispatchSyncTool(
           // upper layer only sees the truncated `message` string and any
           // actionable hints are lost.
           const data = body.error.data
+          span.setAttribute("error.type", "jsonrpc_error")
           span.setStatus({
             code: SpanStatusCode.ERROR,
             message: body.error.message,
@@ -268,6 +321,7 @@ export async function dispatchSyncTool(
             synapseErrorCandidate
           )
           if (!synapseError.success) {
+            span.setAttribute("error.type", "malformed_response")
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message:
@@ -277,6 +331,7 @@ export async function dispatchSyncTool(
               "dispatch response synapse_error must match SynapseError"
             )
           }
+          span.setAttribute("error.type", synapseError.data.code)
           span.setStatus({
             code: SpanStatusCode.ERROR,
             message: synapseError.data.code,
@@ -286,6 +341,7 @@ export async function dispatchSyncTool(
         return { ok: true, result }
       } catch (err) {
         span.recordException(err as Error)
+        span.setAttribute("error.type", (err as Error)?.name || "Error")
         span.setStatus({
           code: SpanStatusCode.ERROR,
           message: `dispatch error: ${(err as Error).message}`,

@@ -22,6 +22,21 @@
 6. `feat(remote-agent): expose per-conversation MCP server to remote agents`
 7. `test(remote-agent): isolated docker-compose stack for e2e verification`
 
+## 部署/兼容公告（changelog）
+
+- **2026-07 trace 整改 Phase 3（fail-deliveries 清洁断裂,与 api 同车发布）**:
+  `POST /api/v1/internal/remote-agents/:id/fail-deliveries` 的请求体从
+  `{delivery_ids: [...]}` 重塑为 per-delivery 携带 trace 上下文的
+  `{deliveries: [{delivery_id, traceparent?, tracestate?}], reason}`（无双轨兼容,
+  旧 shape 直接 400 —— device-protocol schema 有测试钉死拒绝行为）。**升级顺序**:
+  api 与 daemon 作为同一 release train 发布；未升级的旧 daemon 在该路由上收到
+  400 直至升级——期间 deliveries 保持 pending,由 api 侧 retry worker 重新
+  notify,**不丢数据**（仅失去 daemon 主动上报失败的时效性）。同批次变更:
+  daemon→api 的 machine message（`ready` / `runtime:catalog` / `agent:session` /
+  `agent:status`,不含 heartbeat）按当前 carrier scope 附带
+  `{traceparent, tracestate?}` wire 字段;spawn-env 传递 traceparent 的旧约定
+  （`SYNAPSE_TRACEPARENT`）已全仓退役,无任何 reader/writer 残留。
+
 ## E2E 验证
 
 合入 dev 后,使用 dev 分支的独立部署测试容器(`packages/api/tests/integration/` 下的 `docker-compose.test.yaml` 等)进行验证。

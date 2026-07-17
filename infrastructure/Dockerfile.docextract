@@ -31,6 +31,9 @@ RUN set -eux; \
 WORKDIR /app
 COPY sidecars/docextract/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
+# Shared sidecar tracing module (trace-correctness §4.E) — flat-COPY so
+# `_shared` is importable next to serve.py.
+COPY sidecars/_shared/ ./_shared/
 COPY sidecars/docextract/ ./
 
 RUN useradd --create-home --uid 10001 docextract && chown -R docextract:docextract /app

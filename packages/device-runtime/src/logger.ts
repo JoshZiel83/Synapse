@@ -1,4 +1,6 @@
 import { nowIsoInstant } from "@synapse/shared/datetime"
+import { traceIdFromTraceparent } from "@synapse/shared"
+import { getTraceparent } from "./trace-context.js"
 import type { RuntimeLogger } from "./types.js"
 
 /**
@@ -14,8 +16,13 @@ import type { RuntimeLogger } from "./types.js"
  * (no pino) keeps this published bin's install surface unchanged.
  *
  * Level via SYNAPSE_DEVICE_LOG_LEVEL (debug|info|warn|error, default info).
- * If a trace context was injected by a parent at spawn (SYNAPSE_TRACEPARENT /
- * W3C `traceparent`), it is echoed on every line so device logs correlate.
+ * Trace correlation is PER RECORD: each line resolves the active dispatch's
+ * traceparent from the ALS carrier (trace-context.ts) at emit time, so lines
+ * written inside a tools/call carry that dispatch's trace and startup /
+ * heartbeat lines carry none. (The old spawn-env SYNAPSE_TRACEPARENT /
+ * TRACEPARENT convention is RETIRED — no writer ever existed, and a
+ * spawn-time trace stamped on a long-lived daemon's logs hours later would be
+ * actively misleading. Provision correlation is the `runtimeId` field join.)
  */
 type Level = "debug" | "info" | "warn" | "error"
 
@@ -32,8 +39,6 @@ function resolveLevel(): Level {
 }
 
 const activeLevel = resolveLevel()
-const traceparent =
-  process.env.SYNAPSE_TRACEPARENT || process.env.TRACEPARENT || undefined
 
 // --- optional remote shipping (device log回传 to POST <api>/api/v1/logs) ---
 // Configured by runtime.ts after a successful control-plane hello, using the
@@ -100,20 +105,21 @@ function maybeShip(record: Record<string, unknown>): void {
     traceparent: tp,
     ...rest
   } = record
-  let traceId: string | undefined
-  if (typeof tp === "string") {
-    // W3C traceparent is version-traceid-spanid-flags; ship just the trace-id so
-    // it joins cleanly against the server/Tempo trace_id.
-    const parts = tp.split("-")
-    traceId = parts.length === 4 && parts[1] ? parts[1] : tp
-  }
+  // trace_id derives ONLY via the canonical traceIdFromTraceparent() (strict
+  // regex, chars 3..35): a malformed value yields undefined and the trace_id
+  // key is OMITTED entirely — never the raw string. This closes the C9c
+  // batch-poisoning vector at the source (a valid traceparent is 55 chars,
+  // under the 64-char ingest cap; garbage could exceed it and poison the
+  // whole shipped batch).
+  const traceId =
+    typeof tp === "string" ? traceIdFromTraceparent(tp) : undefined
   shipBuffer.push({
     level,
     domain: service,
     component,
     msg,
     time,
-    trace_id: traceId,
+    ...(traceId !== undefined ? { trace_id: traceId } : {}),
     fields: Object.keys(rest).length > 0 ? rest : undefined,
   })
   if (shipBuffer.length >= SHIP_MAX) flushShip()
@@ -128,7 +134,9 @@ function emit(
 ): void {
   if (LEVEL_WEIGHT[level] < LEVEL_WEIGHT[activeLevel]) return
   // Caller data is spread FIRST so the fixed/trusted fields below always win —
-  // a caller can't clobber level/service/msg/traceparent.
+  // a caller can't clobber level/service/msg/traceparent (any caller-supplied
+  // `traceparent` is explicitly deleted; the ONLY source is the per-record ALS
+  // resolve below, which was validated at _meta extraction).
   const record: Record<string, unknown> = {
     ...(data ?? {}),
     time: nowIsoInstant(),
@@ -137,6 +145,10 @@ function emit(
     component,
     msg: message,
   }
+  delete record.traceparent
+  // Per-record trace stamp: the ACTIVE dispatch's traceparent (if this line is
+  // emitted inside a tools/call), never a process-lifetime constant.
+  const traceparent = getTraceparent()
   if (traceparent) record.traceparent = traceparent
   let line: string
   try {
@@ -160,9 +172,7 @@ function emit(
  * "chrome-devtools-mcp", "sidecar"). The returned object satisfies
  * `RuntimeLogger` so it drops into every existing `opts.logger` slot.
  */
-export function createDeviceLogger(
-  component: string
-): RuntimeLogger & {
+export function createDeviceLogger(component: string): RuntimeLogger & {
   debug(message: string, data?: Record<string, unknown>): void
 } {
   return {

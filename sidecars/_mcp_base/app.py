@@ -100,10 +100,12 @@ def build_app(config: AdapterConfig):
     from starlette.responses import JSONResponse, Response
     from starlette.routing import Mount, Route
 
-    from .dispatch import Dispatcher
-    from .tracing import instrument_app, setup_tracing
+    from _shared.tracing import instrument_app, setup_tracing
 
-    # OTLP tracing: no-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set.
+    from .dispatch import Dispatcher
+
+    # OTLP tracing (shared sidecar module, §4.E): no-op unless an OTLP
+    # endpoint (OTEL_EXPORTER_OTLP_ENDPOINT or _TRACES_ENDPOINT) is set.
     setup_tracing(default_service_name=config.service_name)
 
     adapter, registry = _build_registry(config)

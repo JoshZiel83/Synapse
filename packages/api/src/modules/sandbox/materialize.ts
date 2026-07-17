@@ -23,7 +23,7 @@ import {
   listBackends,
 } from "../../infrastructure/storage/content-store.js"
 import type { WriteRoutingContext } from "../../infrastructure/storage/content-store.js"
-import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
+import { activeTraceCarrier } from "../../infrastructure/observability/traceparent.js"
 import { parseManifestShas } from "../files/manifest-parse.js"
 import {
   ensureBlobsLocal,
@@ -85,18 +85,23 @@ export function casDir(): string {
 interface HelperContext {
   helperPath: string
   casDir: string
-  /** Active trace context (P7) — the spawned helper's spans parent under it. */
+  /** Active trace carrier (§3c) — the spawned helper's spans parent under it. */
   traceparent?: string
+  /** Sanitized tracestate, only ever present alongside a traceparent. */
+  tracestate?: string
 }
 
 function helperContext(): HelperContext {
   // Captured here so it reflects the api span active at the call site (these
-  // run inside the request/worker span); undefined when OTEL is off → the
-  // helper starts root spans.
+  // run inside the request/worker span); absent when OTEL is off → the
+  // helper starts root spans. activeTraceCarrier() mints the canonical
+  // {traceparent, tracestate?} pair with the tracestate two-stage sanitized.
+  // No suppressTracing needed here: this hop is stdio (no fetch), so there is
+  // no auto-instrumented span to duplicate.
   return {
     helperPath: resolveFsHelperPath(),
     casDir: casDir(),
-    traceparent: activeTraceparent(),
+    ...(activeTraceCarrier() ?? {}),
   }
 }
 

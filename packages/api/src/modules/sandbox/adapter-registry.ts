@@ -506,7 +506,7 @@ export function makeLocalBareAdapter(
           sandboxRoot: host.sandboxRoot,
           descriptor,
         })
-        registerBareDataPlane(runtimeId, plane)
+        registerBareDataPlane(runtimeId, plane, "local")
         // ③ the runtime's DB identity now exists → let the spine back-fill mounts.
         await host.onRuntimeReady?.(runtimeId)
         return makeLocalBareHandle({
@@ -860,7 +860,7 @@ export function makeDockerBareAdapter(
           containerId,
           spawnImpl,
         })
-        registerBareDataPlane(runtimeId, plane)
+        registerBareDataPlane(runtimeId, plane, "docker")
         await host.onRuntimeReady?.(runtimeId)
         return makeDockerBareHandle({
           sessionId: spec.sessionId,

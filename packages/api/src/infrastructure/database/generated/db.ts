@@ -2680,6 +2680,7 @@ export interface ToolCallTasks {
   requesterParticipantId: string | null;
   requestKey: string;
   requestPayload: Generated<Json>;
+  resolutionTraceparent: string | null;
   resolvedAt: Date | null;
   resolvedByParticipantId: string | null;
   retainUntil: Date | null;

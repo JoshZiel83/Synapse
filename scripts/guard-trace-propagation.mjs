@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Distributed-trace propagation guard.
 //
-// Three ratchet rules that keep the W3C-traceparent chain from silently
+// Four ratchet rules that keep the W3C-traceparent chain from silently
 // breaking again (see the traceparent-correlation fixes: BullMQ fan-in,
 // remote-agent daemon, api→sidecar egress, WS request-span orphans):
 //
@@ -24,6 +24,15 @@
 //      kills at the source on all four production WS routes. The rule is
 //      line-based: keep `websocket: true` and its `config: { otel: false }` in
 //      the same route-options literal on one line (all current sites are).
+//
+//   4. queue_enqueue_bypass — the queues.ts `.add` Proxy trap is the ONLY
+//      BullMQ enqueue path that gets the `send {queue}` PRODUCER span +
+//      `__otelctx` carrier (job-tracing.ts sendWithProducerSpan). BullMQ's
+//      other enqueue APIs — `.addBulk()`, `FlowProducer`,
+//      `upsertJobScheduler`/`.addJobScheduler()` — bypass the trap entirely
+//      (all grep-verified unused today, §4.H), so adopting one must be a
+//      conscious, reviewed act that first extends the trap and the producer
+//      span to cover it.
 //
 // Zero-violation (no baseline): all rules are clean today, so any new
 // violation fails CI outright.
@@ -89,6 +98,14 @@ const rules = [
     allow: [],
     hint: "a WS upgrade never completes as a normal reply, so @fastify/otel's request span would start and never end — add config: { otel: false } to the route options, on the same line as websocket: true (§4.D)",
   },
+  {
+    id: "queue_enqueue_bypass",
+    root: "packages/api/src",
+    pattern:
+      /\.addBulk\s*\(|\bFlowProducer\b|\bupsertJobScheduler\b|\.addJobScheduler\s*\(/,
+    allow: [],
+    hint: "only the queues.ts .add Proxy trap carries the `send {queue}` PRODUCER span + __otelctx carrier — addBulk/FlowProducer/JobScheduler enqueues would silently break producer→consumer trace continuity; extend the trap + sendWithProducerSpan (workers/job-tracing.ts) before adopting a new enqueue API (§4.H)",
+  },
 ]
 
 const violations = []
@@ -127,5 +144,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  "✓ trace-propagation guard clean (untraced_worker, daemon_raw_egress, ws_route_missing_otel_false)"
+  "✓ trace-propagation guard clean (untraced_worker, daemon_raw_egress, ws_route_missing_otel_false, queue_enqueue_bypass)"
 )

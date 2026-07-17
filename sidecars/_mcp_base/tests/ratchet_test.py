@@ -87,15 +87,22 @@ def test_single_decode_tenant_headers_definition():
 
 
 def test_single_tracing_definition():
-    """The tracing primitives live in exactly one _mcp_base file and NOWHERE
-    else — a sidecar must not ship a duplicate front-end-grade tracing module.
+    """The tracing primitives live in exactly ONE file — `_shared/tracing.py`,
+    the single implementation shared by ALL Python sidecars (FastAPI plain
+    sidecars AND the Starlette MCP base; trace-correctness §4.E) — and NOWHERE
+    else. `_mcp_base/tracing.py` is deleted (clean break), and a sidecar must
+    not ship a duplicate tracing module.
 
     This guards the regression where mijia's bespoke `mcp_server/tracing.py`
-    (orphaned after the http_server.py migration) survived as a dead duplicate of
-    the base's tracing.py; the migration now deletes it."""
-    for needle in ("def setup_tracing", "def instrument_app"):
+    (orphaned after the http_server.py migration) survived as a dead duplicate
+    of the base's tracing.py; the migration now deletes it."""
+    for needle in ("def setup_tracing", "def instrument_app", "def client_span"):
         hits = _files_containing(needle)
-        assert hits == [BASE / "tracing.py"], f"{needle}: got {hits}"
+        assert hits == [SIDECARS / "_shared" / "tracing.py"], f"{needle}: got {hits}"
+    assert not (BASE / "tracing.py").exists(), (
+        "_mcp_base/tracing.py was deleted in the §4.E clean break; "
+        "the single implementation lives in _shared/tracing.py"
+    )
 
 
 def test_single_dispatch_handlers():

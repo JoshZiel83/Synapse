@@ -1,14 +1,17 @@
-// Trace-id response exposure + Server-Timing.
+// Per-request Server-Timing + trace exposure.
 //
 // Always pushes per-request server timing into the browser's PerformanceObserver
 // / RUM (`performance.getEntriesByType('navigation')[0].serverTiming`,
 // `Server-Timing` — W3C Server Timing WD). When trace exposure is enabled it
-// also surfaces the active OTel trace_id to the client in TWO complementary ways
-// so a client/operator can jump straight to the trace in Tempo:
-//   - `Server-Timing: trace;desc="<trace_id>"` — read via the RUM/Performance API.
-//   - `traceresponse: 00-<trace-id>-<span-id>-<flags>` — the W3C Trace Context
-//     Level 2 standard response header (the response-side analogue of
-//     `traceparent`).
+// also surfaces the active OTel span context via the registered `trace`
+// Server-Timing metric from the W3C trace-context **Level 3 editor's draft**
+// (the response-side trace exposure; there is no W3C *Recommendation* for a
+// response header — the retired `traceresponse` header appears in zero RECs):
+//
+//   Server-Timing: trace;desc=00-<trace-id>-<span-id>-<flags>
+//
+// The desc payload MUST be the full version-00 member — a bare trace-id is
+// invalid per the draft's ABNF and conformant clients MUST ignore it.
 //
 // trace_id is an internal correlation id; exposing it to every client is a small
 // information-disclosure surface (and meaningless for unsampled requests), so it
@@ -46,14 +49,10 @@ export default fp(
       if (exposeTrace) {
         const sc = trace.getActiveSpan()?.spanContext()
         if (sc && isSpanContextValid(sc)) {
-          // RUM-readable trace id.
-          parts.push(`trace;desc="${sc.traceId}"`)
-          // W3C Trace Context Level 2 `traceresponse`: 00-<trace>-<span>-<flags>.
+          // W3C trace-context Level 3 editor's-draft `trace` metric: the FULL
+          // version-00 traceparent payload (trace-id alone is invalid ABNF).
           const flags = sc.traceFlags.toString(16).padStart(2, "0")
-          reply.header(
-            "traceresponse",
-            `00-${sc.traceId}-${sc.spanId}-${flags}`
-          )
+          parts.push(`trace;desc=00-${sc.traceId}-${sc.spanId}-${flags}`)
         }
       }
 

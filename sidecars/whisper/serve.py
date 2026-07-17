@@ -19,14 +19,24 @@ import base64
 import binascii
 import logging
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from pipeline import MODEL_LABEL, DecodeError, decode_to_pcm, transcribe
+
+# `_shared` import bootstrap: the image flat-COPYs sidecars/_shared/ next to
+# this file (importable via the /app script dir); in the repo it lives one
+# level up (sidecars/_shared), so put sidecars/ on sys.path there.
+if not (Path(__file__).resolve().parent / "_shared").is_dir():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _shared import tracing
 
 log = logging.getLogger("whisper")
 
@@ -76,6 +86,8 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="synapse-whisper", lifespan=lifespan)
+tracing.setup_tracing("whisper")
+tracing.instrument_app(app)
 
 
 class TranscribeRequest(BaseModel):

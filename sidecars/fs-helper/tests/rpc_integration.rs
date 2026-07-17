@@ -166,9 +166,12 @@ fn hello_handshake_answers_without_cas() {
     let mut helper = Helper::spawn(&root, &work);
     let resp = helper.call(1, "fs.hello", serde_json::json!({}));
     let result = &resp["result"];
+    // Hardcoded on purpose (this bin-only crate exposes no lib target to
+    // import rpc::PROTO_VERSION from): bump IN LOCKSTEP with rpc.rs
+    // PROTO_VERSION + the TS FS_HELPER_PROTO_VERSION pin.
     assert_eq!(
         result["proto_version"].as_u64(),
-        Some(1),
+        Some(2),
         "proto_version must match rpc::PROTO_VERSION: {resp}"
     );
     let crate_version = result["crate_version"]
@@ -177,7 +180,7 @@ fn hello_handshake_answers_without_cas() {
     assert!(!crate_version.is_empty(), "crate_version non-empty: {resp}");
     // Forward-compatible: extra params are ignored, not rejected.
     let resp2 = helper.call(2, "fs.hello", serde_json::json!({ "ignored": true }));
-    assert_eq!(resp2["result"]["proto_version"].as_u64(), Some(1));
+    assert_eq!(resp2["result"]["proto_version"].as_u64(), Some(2));
     helper.stop();
 }
 

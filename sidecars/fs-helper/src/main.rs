@@ -191,10 +191,15 @@ async fn handle_frame(state: &Arc<State>, raw: &str) -> Option<String> {
         }
     };
     let id = req.id.clone().unwrap_or(Value::Null);
-    // Per-RPC span (P7), parented by the device-runtime's inbound traceparent so
-    // this helper's work joins the originating tool call's trace. No-op when
-    // OTEL is disabled. Held across dispatch so its duration is the span's.
-    let _span = telemetry::rpc_span(&req.method, req.traceparent.as_deref());
+    // Per-RPC span, parented by the device-runtime's inbound {traceparent,
+    // tracestate?} carrier (§3c) so this helper's work joins the originating
+    // tool call's trace. No-op when OTEL is disabled. Held across dispatch so
+    // its duration is the span's.
+    let _span = telemetry::rpc_span(
+        &req.method,
+        req.traceparent.as_deref(),
+        req.tracestate.as_deref(),
+    );
     let result = dispatch(state.clone(), req.method.as_str(), req.params.unwrap_or(Value::Null)).await;
     if req.id.is_none() {
         return None;

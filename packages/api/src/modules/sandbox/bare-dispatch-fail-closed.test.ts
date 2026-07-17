@@ -425,7 +425,8 @@ test("R3.P2a: toolName ≠ runtime_tools.current_name denies (bash on an fs_read
       createLocalBareDataPlane({
         sandboxRoot: root,
         descriptor: buildLocalBareDescriptor({ isolation: "bwrap" }),
-      })
+      }),
+      "local"
     )
     const res = await dispatchBareRuntimeTool({
       runtimeId: r.runtimeId,
@@ -467,7 +468,8 @@ test("R3.7: a dispatch racing a mid-teardown runtime is refused (closing tombsto
       createLocalBareDataPlane({
         sandboxRoot: root,
         descriptor: buildLocalBareDescriptor({ isolation: "bwrap" }),
-      })
+      }),
+      "local"
     )
     const base = {
       runtimeId: r.runtimeId,
@@ -510,7 +512,7 @@ test("P2(B): a bare sandbox dispatch is refused when SANDBOX_PROVIDER=none (and 
       sandboxRoot: root,
       descriptor: buildLocalBareDescriptor({ isolation: "bwrap" }),
     })
-    registerBareDataPlane(r.runtimeId, plane)
+    registerBareDataPlane(r.runtimeId, plane, "local")
 
     const base = {
       runtimeId: r.runtimeId,
@@ -566,7 +568,8 @@ async function registerLivePlaneFor(runtimeId: string): Promise<void> {
     createLocalBareDataPlane({
       sandboxRoot: root,
       descriptor: buildLocalBareDescriptor({ isolation: "bwrap" }),
-    })
+    }),
+    "local"
   )
 }
 

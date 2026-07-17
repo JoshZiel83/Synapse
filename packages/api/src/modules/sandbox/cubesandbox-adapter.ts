@@ -413,7 +413,7 @@ export function makeCubesandboxBareAdapter(
         // (#5-B) off-box=true → the HIT re-check fails CLOSED for this remote VM on a
         // DB read error (a slipped write to a VM another replica is tearing down is
         // unrecoverable; a denied turn is retryable).
-        registerBareDataPlane(runtimeId, plane, true)
+        registerBareDataPlane(runtimeId, plane, "cubesandbox", true)
         // ③ the runtime's DB identity now exists → let the spine back-fill mounts.
         await spec.onRuntimeReady?.(runtimeId)
         return makeCubesandboxBareHandle({

@@ -265,7 +265,7 @@ test("B3/B11: dispatchBareRuntimeTool routes to the plane, checks envelope expir
       sandboxRoot: root,
       descriptor,
     })
-    registerBareDataPlane(runtimeId, plane)
+    registerBareDataPlane(runtimeId, plane, "local")
 
     // B3: no tunnel endpoint is EVER registered for a bare runtime.
     assert.equal(
@@ -427,7 +427,7 @@ test("#5-B: a HIT whose row went 'closing' cross-process is denied + the stale p
       sandboxRoot: root,
       descriptor,
     })
-    registerBareDataPlane(runtimeId, plane)
+    registerBareDataPlane(runtimeId, plane, "local")
     // Simulate a CROSS-PROCESS teardown: another replica flipped the row to
     // 'closing' WITHOUT touching this process's in-process registry/tombstone. The
     // in-process close-gate (closingBarePlanes) is empty here, so only the #5-B

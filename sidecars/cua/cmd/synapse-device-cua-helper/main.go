@@ -44,6 +44,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -53,11 +54,11 @@ import (
 	"github.com/PekingSpades/DeskAct/keyboard"
 	"github.com/PekingSpades/DeskAct/mouse"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
@@ -71,13 +72,61 @@ var store = newFocusStore()
 // ─── JSON-RPC framing ──────────────────────────────────────────────────────
 
 type rpcRequest struct {
-	JSONRPC     string          `json:"jsonrpc"`
-	ID          interface{}     `json:"id,omitempty"`
-	Method      string          `json:"method"`
-	Params      json.RawMessage `json:"params,omitempty"`
-	// W3C traceparent injected per-RPC by the device-runtime (P7) so this
-	// helper's span continues the originating request's trace.
+	JSONRPC string          `json:"jsonrpc"`
+	ID      interface{}     `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	// W3C {traceparent, tracestate?} carrier injected per-RPC by the
+	// device-runtime (trace plan §3c) so this helper's span continues the
+	// originating request's trace. tracestate rides along so vendor members
+	// survive this hop.
 	Traceparent string `json:"traceparent,omitempty"`
+	Tracestate  string `json:"tracestate,omitempty"`
+}
+
+// ─── §3c carrier contract (sanctioned literal duplicate) ────────────────────
+//
+// Canonical artifact: `packages/shared/src/utils/traceparent.ts` — this file
+// is one of the sanctioned duplicates on that artifact's sync list. The
+// contract pinned there (mirror any change byte-for-byte):
+//
+//	TRACEPARENT_RE = /^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$/
+//	MAX_TRACESTATE_LENGTH = 1024
+//
+// Go's regexp (RE2) has no lookahead, so the shape is compiled without the
+// all-zero guards and validTraceparent rejects the all-zero trace-id/span-id
+// explicitly. Receiver rule (§3c): a malformed/oversized value degrades to
+// ABSENT (root span); tracestate is honored only alongside a valid
+// traceparent and only up to maxTracestateLength.
+const maxTracestateLength = 1024
+
+var traceparentShapeRe = regexp.MustCompile(
+	`^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$`,
+)
+
+func validTraceparent(value string) bool {
+	if !traceparentShapeRe.MatchString(value) {
+		return false
+	}
+	return value[3:35] != "00000000000000000000000000000000" &&
+		value[36:52] != "0000000000000000"
+}
+
+// frameCarrier builds the W3C extract carrier for a frame's {traceparent,
+// tracestate?} pair per the §3c receiver rule: nil when the traceparent is
+// malformed (the caller degrades to a root span; the frame is never rejected
+// for a trace field), and tracestate rides along only alongside a valid
+// traceparent, non-empty and within maxTracestateLength. Unit-tested in
+// trace_test.go (mirrors the fs-helper telemetry.rs matrix).
+func frameCarrier(traceparent, tracestate string) propagation.MapCarrier {
+	if !validTraceparent(traceparent) {
+		return nil
+	}
+	carrier := propagation.MapCarrier{"traceparent": traceparent}
+	if tracestate != "" && len(tracestate) <= maxTracestateLength {
+		carrier["tracestate"] = tracestate
+	}
+	return carrier
 }
 
 type rpcError struct {
@@ -894,14 +943,15 @@ func handle(line []byte, w io.Writer) {
 		writeResponse(w, nil, nil, &rpcError{Code: -32700, Message: "Parse error"})
 		return
 	}
-	// Per-request span (P7) continuing the device-injected traceparent.
+	// Per-request span continuing the device-injected {traceparent,
+	// tracestate?} carrier (§3c). Validation per the pinned contract below;
+	// a malformed carrier degrades to a root span (the frame is never
+	// rejected for a trace field), and the propagator re-validates as W3C
+	// defense-in-depth.
 	if tracer != nil {
 		ctx := context.Background()
-		if req.Traceparent != "" {
-			ctx = propagator.Extract(
-				ctx,
-				propagation.MapCarrier{"traceparent": req.Traceparent},
-			)
+		if carrier := frameCarrier(req.Traceparent, req.Tracestate); carrier != nil {
+			ctx = propagator.Extract(ctx, carrier)
 		}
 		_, span := tracer.Start(ctx, "cua "+req.Method)
 		defer span.End()
@@ -952,9 +1002,13 @@ func handle(line []byte, w io.Writer) {
 
 // setupLogging configures structured slog output to STDERR only. stdout is the
 // JSON-RPC protocol channel and must never carry logs. Level via
-// SYNAPSE_DEVICE_LOG_LEVEL (debug|info|warn|error, default info). A trace
-// context injected by the parent at spawn (SYNAPSE_TRACEPARENT / TRACEPARENT) is
-// echoed on every line so device logs correlate with the originating request.
+// SYNAPSE_DEVICE_LOG_LEVEL (debug|info|warn|error, default info).
+//
+// NB the old spawn-env trace stamping (SYNAPSE_TRACEPARENT / TRACEPARENT
+// echoed on every line) is RETIRED (trace plan §4.G): no writer ever existed,
+// and a spawn-time trace stamped on a long-lived helper's logs hours later
+// would be actively misleading. Request-scoped trace correlation is the
+// per-frame {traceparent, tracestate?} carrier handled in handle().
 func setupLogging() {
 	level := slog.LevelInfo
 	switch strings.ToLower(os.Getenv("SYNAPSE_DEVICE_LOG_LEVEL")) {
@@ -967,11 +1021,6 @@ func setupLogging() {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})).
 		With("service", "cua")
-	if tp := os.Getenv("SYNAPSE_TRACEPARENT"); tp != "" {
-		logger = logger.With("traceparent", tp)
-	} else if tp := os.Getenv("TRACEPARENT"); tp != "" {
-		logger = logger.With("traceparent", tp)
-	}
 	slog.SetDefault(logger)
 }
 

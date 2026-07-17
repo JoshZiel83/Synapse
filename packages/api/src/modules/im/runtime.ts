@@ -15,6 +15,7 @@ import {
 } from "./runtime/lease.js"
 import { ingestInboundEnvelope } from "./service/ingest.js"
 import { listActiveTransportAccounts } from "./service.js"
+import { withImInboundSpan } from "./tracing.js"
 
 const RUNTIME_RECONCILE_INTERVAL_MS = 15_000
 let reconcileTimer: NodeJS.Timeout | null = null
@@ -45,7 +46,12 @@ async function startRuntimeForAccount(
         account,
         signal: abortController.signal,
         emitInbound: async (envelope) => {
-          await ingestInboundEnvelope({ account, envelope })
+          // Fresh-root `process ${transportKind}` CONSUMER span — the single
+          // socket-mode ingest seam (plan §4.I change 6). This is what
+          // populates session_wakeups.origin_traceparent for IM turns.
+          await withImInboundSpan(account, () =>
+            ingestInboundEnvelope({ account, envelope })
+          )
         },
         logger: {
           debug: () => {},

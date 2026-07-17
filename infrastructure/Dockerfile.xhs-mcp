@@ -54,6 +54,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # The ONE shared front end + this thin sidecar (serve.py + adapter wiring).
 COPY sidecars/_mcp_base/ ./_mcp_base/
+# Shared sidecar tracing module (trace-correctness §4.E) — flat-COPY so
+# `_shared` is importable next to `_mcp_base` (PYTHONPATH=/app).
+COPY sidecars/_shared/ ./_shared/
 COPY sidecars/xhs-mcp/serve.py ./serve.py
 COPY sidecars/xhs-mcp/__init__.py ./__init__.py
 COPY sidecars/xhs-mcp/adapter/ ./adapter/

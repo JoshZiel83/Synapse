@@ -27,7 +27,18 @@ import type {
 import { ClaudeDriver } from "./drivers/claude-driver.js"
 import { CodexDriver } from "./drivers/codex-driver.js"
 import { registerDriver, tryGetDriver } from "./drivers/registry.js"
-import { getTraceparent, runWithTraceparent } from "./trace-context.js"
+import {
+  activeWireTraceFields,
+  getTraceparent,
+  runWithCarrier,
+  type TraceCarrier,
+} from "./trace-context.js"
+import {
+  buildFailDeliveriesReport,
+  DeliveryCarrierMap,
+  dedupeCarriersByTraceId,
+  singleTraceScope,
+} from "./delivery-carriers.js"
 import type {
   AgentSessionEvent,
   PermissionDecision,
@@ -81,6 +92,7 @@ type DaemonRuntimeCapabilities = {
 
 const DEFAULT_HEARTBEAT_MS = 30_000
 const DEFAULT_RECONNECT_MS = 3_000
+const MAX_PENDING_DELIVERY_IDS_PER_CONVERSATION = 500
 const MACHINE_DIR_ROOT =
   process.env.SYNAPSE_REMOTE_AGENT_STATE_DIR?.trim() ||
   path.join(os.homedir(), ".synapse", "remote-agents")
@@ -121,7 +133,7 @@ function log(
   // Structured NDJSON to stderr (Alloy/Loki-parseable, consistent with the rest
   // of the system — the daemon's stderr is captured by Docker/Alloy in compose).
   // `service` identifies the daemon; `scope` is the per-agent tag
-  // (e.g. remote-agent:<id>); a spawn-injected traceparent is echoed for
+  // (e.g. remote-agent:<id>); the active turn's traceparent is echoed for
   // correlation. stdout is left clean by invariant (claude-driver passthrough).
   // Caller meta is spread FIRST so the fixed fields below always win — meta
   // can't clobber level/service/scope/msg/traceparent.
@@ -135,13 +147,11 @@ function log(
     scope,
     msg: message,
   }
-  // Prefer the PER-TURN traceparent carried in the ALS (set from the api WS
-  // message currently being handled) over the process-lifetime spawn env, so
-  // each daemon log line joins the specific request's trace in Loki/Tempo.
-  const traceparent =
-    getTraceparent() ||
-    process.env.SYNAPSE_TRACEPARENT ||
-    process.env.TRACEPARENT
+  // The PER-TURN traceparent carried in the ALS (set from the api WS message /
+  // delivery currently being handled), so each daemon log line joins the
+  // specific request's trace in Loki/Tempo. Deliberately NO env fallback: the
+  // spawn-env traceparent convention is retired repo-wide (no writer exists).
+  const traceparent = getTraceparent()
   if (traceparent) record.traceparent = traceparent
   let line: string
   try {
@@ -162,6 +172,21 @@ function log(
 function maskSecret(value: string) {
   if (value.length <= 10) return value
   return `${value.slice(0, 8)}…${value.slice(-6)}`
+}
+
+// activeWireTraceFields (the machine-message `{traceparent, tracestate?}`
+// stamping for ready / runtime:catalog / agent:session / agent:status — never
+// heartbeat) lives in trace-context.ts, unit-tested there.
+
+/** A WS frame's `{traceparent, tracestate?}` fields as a carrier, if traced. */
+function frameCarrier(frame: {
+  traceparent?: string
+  tracestate?: string
+}): TraceCarrier | undefined {
+  if (!frame.traceparent) return undefined
+  return frame.tracestate
+    ? { traceparent: frame.traceparent, tracestate: frame.tracestate }
+    : { traceparent: frame.traceparent }
 }
 
 function parseArgs(argv: string[]): DaemonConfig {
@@ -423,6 +448,7 @@ class DaemonSupervisor {
           this.send({
             type: "ready",
             runtime_catalog: runtimeCatalog.map(runtimeCatalogEntryToWire),
+            ...activeWireTraceFields(),
           } satisfies RemoteAgentMachineReadyMessage)
           return
         }
@@ -454,7 +480,7 @@ class DaemonSupervisor {
 
         if (message?.type === "agent:start") {
           const start = message
-          await runWithTraceparent(start.traceparent, async () => {
+          await runWithCarrier(frameCarrier(start), async () => {
             log(
               "info",
               `remote-agent:${start.remoteAgentId}`,
@@ -466,12 +492,6 @@ class DaemonSupervisor {
               }
             )
             const agent = this.getOrCreateAgent(start.remoteAgentId)
-            if (start.conversationId && start.traceparent) {
-              agent.rememberConversationTrace(
-                start.conversationId,
-                start.traceparent
-              )
-            }
             await agent.configure(start)
             if (start.conversationId) {
               // Server only sends agent:start for pairs with pending work, so
@@ -512,7 +532,7 @@ class DaemonSupervisor {
         if (message?.type === "agent:task:resolved") {
           const agent = this.agents.get(message.remoteAgentId)
           if (agent) {
-            await runWithTraceparent(message.traceparent, () =>
+            await runWithCarrier(frameCarrier(message), () =>
               agent.resolveTask(message)
             )
           }
@@ -556,21 +576,21 @@ class ManagedRemoteAgent {
   // Deliveries we've routed into a conversation runtime but haven't yet been
   // observed completing (via the reverse-MCP complete-deliveries tool) or
   // failing. On runtime crash / stop, we POST these back to the server's
-  // fail-deliveries endpoint so the backoff worker can reschedule.
+  // fail-deliveries endpoint so the backoff worker can reschedule. Capped per
+  // conversation (oldest-evicted) — completions are only observed api-side, so
+  // this would otherwise grow unbounded on a long-lived conversation.
   private readonly pendingDeliveryIds = new Map<string, Set<string>>()
-  // Per-conversation W3C traceparent (from the api WS message that most recently
-  // drove this conversation). Async delivery processing + its failure-report
-  // callback happen OUTSIDE the WS handler's ALS scope, so we re-enter this
-  // traceparent at those sites to keep the daemon→api callbacks + logs on the
-  // originating trace. Each turn set-or-DELETEs its slot (enqueueDeliveries) so
-  // an untraced turn never inherits a prior turn's trace, and stopAll clears it
-  // so it cannot grow unbounded across reconnects.
-  // Single-slot fidelity caveat: if turns on ONE conversation overlap with mixed
-  // sampling (a later untraced turn deletes the slot while an earlier traced
-  // turn's subprocess callback is still in flight), that callback loses its
-  // trace_id. Observability-only, never cross-user (one conversation = one
-  // principal); a refcounted/stacked slot would remove it if it ever matters.
-  private readonly traceparentByConversation = new Map<string, string>()
+  // Per-DELIVERY W3C trace carriers (from the api's agent:deliver items). One
+  // batch fans in deliveries from MANY requests, each with its own trace, and
+  // the async callbacks (subprocess crash → fail-deliveries, drainEvents →
+  // task creation) run OUTSIDE the WS handler's ALS scope — so every traced
+  // delivery keeps its own carrier here until it is reported failed (deleted)
+  // or evicted (bounded FIFO, observability-only). Scopes are resolved per
+  // callback from exactly the delivery ids it concerns: one distinct origin
+  // trace ⇒ that carrier; mixed origins ⇒ no ambient carrier (the per-delivery
+  // carriers still ride the fail-deliveries body / origin_carriers field).
+  // stopAll clears it so nothing leaks across reconnects.
+  private readonly deliveryCarriers = new DeliveryCarrierMap()
 
   constructor(
     private readonly params: {
@@ -580,11 +600,6 @@ class ManagedRemoteAgent {
       getMachineId: () => string | null
     }
   ) {}
-
-  /** Stash the originating traceparent for a conversation (see the map doc). */
-  rememberConversationTrace(conversationId: string, traceparent: string) {
-    this.traceparentByConversation.set(conversationId, traceparent)
-  }
 
   private trackPendingDeliveries(
     conversationId: string,
@@ -597,6 +612,15 @@ class ManagedRemoteAgent {
       this.pendingDeliveryIds.set(conversationId, set)
     }
     for (const id of deliveryIds) set.add(id)
+    // Bound the per-conversation set (oldest first — Set preserves insertion
+    // order). An evicted id can no longer be failed-back on crash; the api's
+    // retry worker re-notifies it, so this is loss-of-eagerness only.
+    while (set.size > MAX_PENDING_DELIVERY_IDS_PER_CONVERSATION) {
+      const oldest = set.values().next().value
+      if (oldest === undefined) break
+      set.delete(oldest)
+      this.deliveryCarriers.delete(oldest)
+    }
   }
 
   private drainPendingDeliveries(conversationId: string): string[] {
@@ -605,6 +629,24 @@ class ManagedRemoteAgent {
     const ids = [...set]
     this.pendingDeliveryIds.delete(conversationId)
     return ids
+  }
+
+  /**
+   * Origin carriers of a conversation's pending deliveries: the deduped-by-
+   * trace-id list (≤20) for the `origin_carriers` wire field, plus the
+   * single-origin carrier scope for the POST (undefined on mixed origins —
+   * header present iff exactly one distinct origin trace).
+   */
+  private pendingOriginCarriers(conversationId: string): {
+    originCarriers: TraceCarrier[]
+    scope: TraceCarrier | undefined
+  } {
+    const pendingIds = this.pendingDeliveryIds.get(conversationId)
+    const carriers = this.deliveryCarriers.collect(pendingIds ?? [])
+    return {
+      originCarriers: dedupeCarriersByTraceId(carriers),
+      scope: singleTraceScope(carriers),
+    }
   }
 
   private async reportDeliveryFailure(
@@ -620,15 +662,24 @@ class ManagedRemoteAgent {
         if (set.size === 0) this.pendingDeliveryIds.delete(conversationId)
       }
     }
-    // This runs from async subprocess-crash / stopAll callbacks that are outside
-    // the WS-handler ALS scope, so re-enter the conversation's originating
-    // traceparent (falling back to any ambient one) → the fail-deliveries POST
-    // and its logs rejoin the request trace.
-    const traceparent =
-      (conversationId && this.traceparentByConversation.get(conversationId)) ||
-      getTraceparent()
+    // This runs from async subprocess-crash / stopAll callbacks that are
+    // outside the WS-handler ALS scope. Every failed delivery carries ITS OWN
+    // originating carrier in the body (the api LINKs each one), and the POST
+    // itself re-enters a carrier only when ALL of them share one distinct
+    // trace (single-origin ⇒ parented; mixed ⇒ fresh api-side root with
+    // per-delivery links) — `buildFailDeliveriesReport` is the pure,
+    // unit-tested assembly (delivery-carriers.test.ts drives the C3a repro).
+    // Map entries are deleted BEFORE the first await so a concurrent stopAll
+    // cannot double-report them with stale carriers.
+    const { deliveries, scope } = buildFailDeliveriesReport(
+      this.deliveryCarriers,
+      deliveryIds
+    )
+    // undefined scope (mixed origins / untraced) leaves the ambient context
+    // untouched — runWithCarrier(undefined, fn) is fn().
+    for (const id of deliveryIds) this.deliveryCarriers.delete(id)
     try {
-      await runWithTraceparent(traceparent, () =>
+      await runWithCarrier(scope, () =>
         requestJson(
           this.params.config.serverUrl,
           this.params.config.apiKey,
@@ -636,7 +687,7 @@ class ManagedRemoteAgent {
           {
             method: "POST",
             body: JSON.stringify({
-              delivery_ids: deliveryIds,
+              deliveries,
               reason: reason.slice(0, 2000),
             } satisfies RemoteAgentFailDeliveriesBody),
           },
@@ -751,24 +802,19 @@ class ManagedRemoteAgent {
       byConversation.set(delivery.conversationId, list)
     }
     for (const [conversationId, items] of byConversation) {
-      // Reflect THIS turn's trace in the stash: a batch fans in many requests,
-      // so take the last traced delivery for this conversation — but if none of
-      // this turn's deliveries is traced (e.g. tracing was off at enqueue), we
-      // DELETE the entry rather than leave it, so an untraced turn does not
-      // inherit the PRIOR turn's (already-ended, possibly other-user) trace on
-      // its async callbacks/logs. The stash exists to bridge the async gap to
-      // subprocess-driven callbacks that escape this ALS scope.
-      const turnTraceparent = items.reduce<string | undefined>(
-        (tp, item) => item.traceparent ?? tp,
-        undefined
-      )
-      if (turnTraceparent) {
-        this.traceparentByConversation.set(conversationId, turnTraceparent)
-      } else {
-        this.traceparentByConversation.delete(conversationId)
+      // Remember EVERY traced delivery's own carrier (see the deliveryCarriers
+      // doc) — within-batch contexts are preserved per delivery, not collapsed
+      // into a last-writer-wins conversation slot. The routing work below runs
+      // inside a carrier scope only when this conversation's slice of the
+      // batch has ONE distinct origin trace; a mixed-origin slice runs
+      // untraced (its failure report still carries every per-delivery
+      // carrier).
+      for (const item of items) {
+        this.deliveryCarriers.set(item.deliveryId, frameCarrier(item))
       }
-      await runWithTraceparent(turnTraceparent, async () => {
-        const deliveryIds = items.map((item) => item.deliveryId)
+      const deliveryIds = items.map((item) => item.deliveryId)
+      const scope = this.deliveryCarriers.scopeFor(deliveryIds)
+      await runWithCarrier(scope, async () => {
         this.trackPendingDeliveries(conversationId, deliveryIds)
         const hasRuntime = this.runtimes.has(conversationId)
         try {
@@ -898,14 +944,15 @@ class ManagedRemoteAgent {
       this.runtimes.delete(conversationId)
       const ids = this.drainPendingDeliveries(conversationId)
       if (ids.length > 0) {
-        // reportDeliveryFailure reads traceparentByConversation synchronously
-        // (before its first await), so the post-loop clear() below is safe.
+        // reportDeliveryFailure snapshots (and deletes) each delivery's
+        // carrier synchronously before its first await, so the post-loop
+        // clear() below is safe.
         void this.reportDeliveryFailure(ids, reason, conversationId)
       }
     }
-    // All runtimes are gone → drop every stashed trace so the map cannot grow
-    // across reconnects or leak a stale trace into a future turn.
-    this.traceparentByConversation.clear()
+    // All runtimes are gone → drop every stashed carrier so the map cannot
+    // grow across reconnects or leak a stale trace into a future turn.
+    this.deliveryCarriers.clear()
     this.publishStatus({
       conversationId: null,
       state: "offline",
@@ -921,6 +968,7 @@ class ManagedRemoteAgent {
           remote_agent_id: this.params.remoteAgentId,
           conversation_id: conversationId,
           session_id: sessionId,
+          ...activeWireTraceFields(),
         } satisfies RemoteAgentSessionMessage)
         // A fresh session means we're starting clean — any error from the
         // previous lifecycle is stale by definition. Use the empty-string
@@ -970,27 +1018,33 @@ class ManagedRemoteAgent {
       onUserInputRequested: async (conversationId, event) => {
         try {
           const runKey = `remote-agent:${this.params.remoteAgentId}:user-input:${randomUUID()}`
-          // This callback fires from the detached drainEvents loop, OUTSIDE the
-          // enqueueDeliveries ALS scope, so re-enter the conversation's trace to
-          // keep the task-creation POST on the originating request's trace.
-          const result = await runWithTraceparent(
-            this.traceparentByConversation.get(conversationId),
-            () =>
-              requestJson(
-                this.params.config.serverUrl,
-                this.params.config.apiKey,
-                `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/user-input`,
-                {
-                  method: "POST",
-                  body: JSON.stringify({
-                    conversation_id: conversationId,
-                    run_key: runKey,
-                    title: event.title,
-                    questions: event.questions,
-                  } satisfies RemoteAgentUserInputTaskBody),
-                },
-                RemoteAgentTaskCreateResponseSchema
-              )
+          // This callback fires from the detached drainEvents loop, OUTSIDE
+          // the enqueueDeliveries ALS scope. Attach every pending delivery's
+          // origin carrier (deduped by trace id, ≤20) so the api can LINK the
+          // task to each originating trace, and re-enter a carrier on the
+          // POST itself only when the pending set has exactly ONE distinct
+          // origin trace.
+          const { originCarriers, scope } =
+            this.pendingOriginCarriers(conversationId)
+          const result = await runWithCarrier(scope, () =>
+            requestJson(
+              this.params.config.serverUrl,
+              this.params.config.apiKey,
+              `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/user-input`,
+              {
+                method: "POST",
+                body: JSON.stringify({
+                  conversation_id: conversationId,
+                  run_key: runKey,
+                  title: event.title,
+                  questions: event.questions,
+                  ...(originCarriers.length > 0
+                    ? { origin_carriers: originCarriers }
+                    : {}),
+                } satisfies RemoteAgentUserInputTaskBody),
+              },
+              RemoteAgentTaskCreateResponseSchema
+            )
           )
           this.pendingTasks.set(result.task.id, {
             taskId: result.task.id,
@@ -1020,28 +1074,31 @@ class ManagedRemoteAgent {
       onPlanApprovalRequested: async (conversationId, event) => {
         try {
           const runKey = `remote-agent:${this.params.remoteAgentId}:plan:${randomUUID()}`
-          // Detached drainEvents callback (see onUserInputRequested) → re-enter
-          // the conversation's trace for the task-creation POST.
-          const result = await runWithTraceparent(
-            this.traceparentByConversation.get(conversationId),
-            () =>
-              requestJson(
-                this.params.config.serverUrl,
-                this.params.config.apiKey,
-                `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/plan-approval`,
-                {
-                  method: "POST",
-                  body: JSON.stringify({
-                    conversation_id: conversationId,
-                    run_key: runKey,
-                    title: event.title,
-                    summary: event.summary,
-                    plan_markdown: event.planMarkdown,
-                    checklist: event.checklist,
-                  } satisfies RemoteAgentPlanApprovalTaskBody),
-                },
-                RemoteAgentTaskCreateResponseSchema
-              )
+          // Detached drainEvents callback (see onUserInputRequested) →
+          // origin_carriers from the pending deliveries + single-origin scope.
+          const { originCarriers, scope } =
+            this.pendingOriginCarriers(conversationId)
+          const result = await runWithCarrier(scope, () =>
+            requestJson(
+              this.params.config.serverUrl,
+              this.params.config.apiKey,
+              `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/plan-approval`,
+              {
+                method: "POST",
+                body: JSON.stringify({
+                  conversation_id: conversationId,
+                  run_key: runKey,
+                  title: event.title,
+                  summary: event.summary,
+                  plan_markdown: event.planMarkdown,
+                  checklist: event.checklist,
+                  ...(originCarriers.length > 0
+                    ? { origin_carriers: originCarriers }
+                    : {}),
+                } satisfies RemoteAgentPlanApprovalTaskBody),
+              },
+              RemoteAgentTaskCreateResponseSchema
+            )
           )
           this.pendingTasks.set(result.task.id, {
             taskId: result.task.id,
@@ -1130,6 +1187,7 @@ class ManagedRemoteAgent {
       last_error: params.lastError ?? null,
       run_key: params.runKey ?? null,
       capabilities: runtimeCapabilitiesToWire(this.runtimeCapabilities()),
+      ...activeWireTraceFields(),
     } satisfies RemoteAgentStatusMessage)
   }
 

@@ -25,6 +25,9 @@ WORKDIR /app
 COPY sidecars/embed/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Shared sidecar tracing module (trace-correctness §4.E) — flat-COPY so
+# `_shared` is importable next to serve.py.
+COPY sidecars/_shared/ ./_shared/
 COPY sidecars/embed/ ./
 
 # Create the non-root user + chown /app BEFORE the model download (while /app holds

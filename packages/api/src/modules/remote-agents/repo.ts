@@ -104,9 +104,17 @@ export function runOnDb<T extends object = Record<string, unknown>>(
 export async function listPendingDeliveryRefs(
   params: { remoteAgentId: string; conversationId: string },
   executor: Executor = db
-): Promise<Array<{ id: string; itemId: string }>> {
-  const result = await sql<{ id: string; itemId: string }>`
-          SELECT delivery.id, delivery.item_id
+): Promise<
+  Array<{ id: string; itemId: string; originTraceparent: string | null }>
+> {
+  // origin_traceparent feeds the reverse-MCP delivery-origin span links only —
+  // the presenter never surfaces it to agent-facing tool results.
+  const result = await sql<{
+    id: string
+    itemId: string
+    originTraceparent: string | null
+  }>`
+          SELECT delivery.id, delivery.item_id, delivery.origin_traceparent
           FROM remote_agent_message_deliveries delivery
           WHERE delivery.remote_agent_id = ${params.remoteAgentId}
             AND delivery.conversation_id = ${params.conversationId}
@@ -437,13 +445,15 @@ export async function loadReplayResolvedTaskTargetsRepo(
     remoteAgentId: string
     activeTaskId: string
     lifecycleStatus: string
+    resolutionTraceparent: string | null
   }>(
     executor,
     `
       SELECT
         ctx.remote_agent_id AS "remoteAgentId",
         ctx.active_task_id AS "activeTaskId",
-        task.lifecycle_status AS "lifecycleStatus"
+        task.lifecycle_status AS "lifecycleStatus",
+        task.resolution_traceparent AS "resolutionTraceparent"
       FROM remote_agent_conversation_contexts ctx
       INNER JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = ctx.remote_agent_id
@@ -1837,6 +1847,9 @@ export async function checkRemoteAgentMessagesRepo(
     values.push(params.conversationId)
     conversationFilter = ` AND delivery.conversation_id = $${values.length}::uuid`
   }
+  // originTraceparent feeds the reverse-MCP delivery-origin span links only —
+  // the presenter (presentMessageDelivery) keeps it out of agent-facing tool
+  // results.
   const result = await runOn<{
     id: string
     remoteAgentId: string
@@ -1845,6 +1858,7 @@ export async function checkRemoteAgentMessagesRepo(
     status: string
     createdAt: Date
     sequence: string | number
+    originTraceparent: string | null
   }>(
     executor,
     `
@@ -1855,7 +1869,8 @@ export async function checkRemoteAgentMessagesRepo(
         delivery.item_id AS "itemId",
         delivery.status,
         delivery.created_at AS "createdAt",
-        item.sequence
+        item.sequence,
+        delivery.origin_traceparent AS "originTraceparent"
       FROM remote_agent_message_deliveries delivery
       INNER JOIN conversation_items item ON item.id = delivery.item_id
       WHERE delivery.remote_agent_id = $1

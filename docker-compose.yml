@@ -248,8 +248,10 @@ services:
       # Device log-ingest token secret (POST /api/v1/logs device-bearer path).
       # Empty => device log回传 disabled (browser/mobile session path still works).
       SYNAPSE_LOG_INGEST_SECRET: ${SYNAPSE_LOG_INGEST_SECRET:-}
-      # Expose the OTel trace_id to clients in response headers (Server-Timing
-      # trace;desc + W3C traceresponse). off | errors (default, 5xx only) | on.
+      # Expose the active trace to clients via the Server-Timing `trace` metric
+      # (W3C trace-context Level 3 editor's draft:
+      # trace;desc=00-<trace-id>-<span-id>-<flags>). off | errors (default,
+      # 5xx only) | on.
       SYNAPSE_SERVER_TIMING_TRACE: ${SYNAPSE_SERVER_TIMING_TRACE:-errors}
     ports:
       - "127.0.0.1:3001:3001"
@@ -308,6 +310,18 @@ services:
       # Bounded worker pool — returns 503 (retryable) when saturated so a burst
       # of parses can't blow every request's timeout on one CPU container.
       TESSERACT_MAX_CONCURRENCY: ${TESSERACT_MAX_CONCURRENCY:-2}
+      # OTLP tracing (trace-correctness §4.E): no-op unless the endpoint is
+      # set (http://alloy:4318 with the observability profile). Do NOT pass
+      # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT through compose — the `${VAR:-}`
+      # idiom materializes an empty string, which poisons the pinned Python
+      # exporter's endpoint resolution (single-endpoint convention).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: tesseract-ocr
+      # [adj 20] passthroughs — the Python SDK honors these natively.
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     expose:
       - "8771"
     healthcheck:
@@ -352,6 +366,18 @@ services:
       DOCEXTRACT_MAX_CONCURRENCY: ${DOCEXTRACT_MAX_CONCURRENCY:-2}
       # JVM heap cap for the internal Tika Server (bounded well under mem_limit).
       DOCEXTRACT_JAVA_OPTS: ${DOCEXTRACT_JAVA_OPTS:--Xmx1024m}
+      # OTLP tracing (trace-correctness §4.E): no-op unless the endpoint is
+      # set (http://alloy:4318 with the observability profile). Do NOT pass
+      # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT through compose — the `${VAR:-}`
+      # idiom materializes an empty string, which poisons the pinned Python
+      # exporter's endpoint resolution (single-endpoint convention).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: docextract
+      # [adj 20] passthroughs — the Python SDK honors these natively.
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     expose:
       - "8776"
     healthcheck:
@@ -399,6 +425,18 @@ services:
       # paddlepaddle 3.x's PIR executor (verified on 3.3.1). Only set =1 on a
       # paddle build where you've verified oneDNN+PIR inference runs.
       PPOCR_ENABLE_MKLDNN: ${PPOCR_ENABLE_MKLDNN:-}
+      # OTLP tracing (trace-correctness §4.E): no-op unless the endpoint is
+      # set (http://alloy:4318 with the observability profile). Do NOT pass
+      # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT through compose — the `${VAR:-}`
+      # idiom materializes an empty string, which poisons the pinned Python
+      # exporter's endpoint resolution (single-endpoint convention).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: ppocr
+      # [adj 20] passthroughs — the Python SDK honors these natively.
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     expose:
       - "8770"
     healthcheck:
@@ -440,6 +478,18 @@ services:
       # audio can't pile onto one CPU container and blow every request's timeout.
       SHERPA_ASR_MAX_CONCURRENCY: ${SHERPA_ASR_MAX_CONCURRENCY:-2}
       SHERPA_ASR_NUM_THREADS: ${SHERPA_ASR_NUM_THREADS:-4}
+      # OTLP tracing (trace-correctness §4.E): no-op unless the endpoint is
+      # set (http://alloy:4318 with the observability profile). Do NOT pass
+      # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT through compose — the `${VAR:-}`
+      # idiom materializes an empty string, which poisons the pinned Python
+      # exporter's endpoint resolution (single-endpoint convention).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: sherpa-asr
+      # [adj 20] passthroughs — the Python SDK honors these natively.
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     expose:
       - "8772"
     healthcheck:
@@ -485,6 +535,18 @@ services:
       WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
       WHISPER_MAX_CONCURRENCY: ${WHISPER_MAX_CONCURRENCY:-2}
       WHISPER_CPU_THREADS: ${WHISPER_CPU_THREADS:-4}
+      # OTLP tracing (trace-correctness §4.E): no-op unless the endpoint is
+      # set (http://alloy:4318 with the observability profile). Do NOT pass
+      # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT through compose — the `${VAR:-}`
+      # idiom materializes an empty string, which poisons the pinned Python
+      # exporter's endpoint resolution (single-endpoint convention).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: whisper
+      # [adj 20] passthroughs — the Python SDK honors these natively.
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     expose:
       - "8773"
     healthcheck:
@@ -528,6 +590,18 @@ services:
       EMBED_PORT: "8775"
       EMBED_MAX_CONCURRENCY: ${EMBED_MAX_CONCURRENCY:-2}
       EMBED_ONNX_THREADS: ${EMBED_ONNX_THREADS:-4}
+      # OTLP tracing (trace-correctness §4.E): no-op unless the endpoint is
+      # set (http://alloy:4318 with the observability profile). Do NOT pass
+      # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT through compose — the `${VAR:-}`
+      # idiom materializes an empty string, which poisons the pinned Python
+      # exporter's endpoint resolution (single-endpoint convention).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: embed
+      # [adj 20] passthroughs — the Python SDK honors these natively.
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     expose:
       - "8775"
     healthcheck:
@@ -570,6 +644,18 @@ services:
       # the api's REALTIME_ASR_SHERPA_MAX_CONCURRENCY.
       SHERPA_STREAM_MAX_CONCURRENCY: ${SHERPA_STREAM_MAX_CONCURRENCY:-4}
       SHERPA_STREAM_NUM_THREADS: ${SHERPA_STREAM_NUM_THREADS:-2}
+      # OTLP tracing (trace-correctness §4.E): no-op unless the endpoint is
+      # set (http://alloy:4318 with the observability profile). Do NOT pass
+      # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT through compose — the `${VAR:-}`
+      # idiom materializes an empty string, which poisons the pinned Python
+      # exporter's endpoint resolution (single-endpoint convention).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: sherpa-asr-streaming
+      # [adj 20] passthroughs — the Python SDK honors these natively.
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     expose:
       - "8774"
     healthcheck:
@@ -612,6 +698,11 @@ services:
       # profile so mijia exports request spans into the cross-process trace tree.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: mijia-mcp
+      # [adj 20] passthroughs — the Python SDK honors these natively.
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     # Internal network only — reachable by the api container at
     # http://mijia-mcp:8765/mcp/, not exposed to the host.
     expose:
@@ -642,6 +733,11 @@ services:
       # profile so notion exports request spans into the cross-process trace tree.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: notion-mcp
+      # [adj 20] passthroughs — the Python SDK honors these natively.
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     # Internal network only — reachable by the api container at
     # http://notion-mcp:8766/mcp/, not exposed to the host.
     expose:
@@ -679,6 +775,11 @@ services:
       # profile so xhs exports request spans into the cross-process trace tree.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: xhs-mcp
+      # [adj 20] passthroughs — the Python SDK honors these natively.
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     # Internal network only — reachable by the api container at
     # http://xhs-mcp:8769/mcp/, not exposed to the host.
     expose:
@@ -709,6 +810,11 @@ services:
       BILIBILI_TENANT_ROOT: /data/tenants
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_SERVICE_NAME: bilibili-mcp
+      # [adj 20] passthroughs — the Python SDK honors these natively.
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     # Internal network only — reachable by the api container at
     # http://bilibili-mcp:8768/mcp/, not exposed to the host.
     expose:

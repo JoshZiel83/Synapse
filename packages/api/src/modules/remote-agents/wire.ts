@@ -24,21 +24,36 @@ export type RemoteAgentRuntimeCatalogRecord = {
   lastError?: string
 }
 
+/**
+ * Optional W3C trace context on the four work-triggering daemon→api machine
+ * messages (never heartbeat), stamped from the daemon's carrier ALS. The
+ * `/ws/remote-agents` message handler extracts these into the per-message
+ * SERVER span's parent context (extract-or-ROOT, §4.C/§4.D) — already
+ * degrade-not-reject-validated by the device-protocol wire schemas.
+ */
+export type RemoteAgentMachineMessageTraceContext = {
+  traceparent?: string
+  tracestate?: string
+}
+
 export type RemoteAgentMachineMessage =
   | { type: "heartbeat" }
-  | { type: "ready"; runtimeCatalog: RemoteAgentRuntimeCatalogRecord[] }
-  | {
+  | ({
+      type: "ready"
+      runtimeCatalog: RemoteAgentRuntimeCatalogRecord[]
+    } & RemoteAgentMachineMessageTraceContext)
+  | ({
       type: "runtime:catalog"
       runtimeCatalog: RemoteAgentRuntimeCatalogRecord[]
-    }
-  | {
+    } & RemoteAgentMachineMessageTraceContext)
+  | ({
       type: "agent:session"
       remoteAgentId: string
       conversationId: string
       state?: RemoteAgentRuntimeStateType
       sessionId?: string | null
-    }
-  | {
+    } & RemoteAgentMachineMessageTraceContext)
+  | ({
       type: "agent:status"
       remoteAgentId: string
       state: RemoteAgentRuntimeStateType
@@ -49,7 +64,7 @@ export type RemoteAgentMachineMessage =
       lastError?: string | null
       runKey?: string | null
       capabilities?: RemoteAgentRuntimeCapabilityRecord
-    }
+    } & RemoteAgentMachineMessageTraceContext)
 
 export type RemoteAgentApiToDaemonMessage =
   | {
@@ -71,7 +86,10 @@ export type RemoteAgentApiToDaemonMessage =
       sessionId?: string | null
       fencingToken?: string
       serverUrl?: string
+      // Minted via activeTraceCarrier() on live paths; the persisted
+      // delivery-replay path is traceparent-only (§3c).
       traceparent?: string
+      tracestate?: string
     }
   | { type: "agent:stop"; remoteAgentId: string }
   | {
@@ -82,6 +100,7 @@ export type RemoteAgentApiToDaemonMessage =
         conversationId: string
         itemId: string
         traceparent?: string
+        tracestate?: string
       }>
     }
   | {
@@ -90,6 +109,7 @@ export type RemoteAgentApiToDaemonMessage =
       taskId: string
       task: Record<string, unknown>
       traceparent?: string
+      tracestate?: string
     }
 
 export function parseRemoteAgentMachineMessage(
@@ -120,11 +140,15 @@ function fromWireMessage(
       return {
         type: "ready",
         runtimeCatalog: message.runtime_catalog.map(fromWireCatalogEntry),
+        traceparent: message.traceparent,
+        tracestate: message.tracestate,
       }
     case "runtime:catalog":
       return {
         type: "runtime:catalog",
         runtimeCatalog: message.runtime_catalog.map(fromWireCatalogEntry),
+        traceparent: message.traceparent,
+        tracestate: message.tracestate,
       }
     case "agent:session":
       return {
@@ -133,6 +157,8 @@ function fromWireMessage(
         conversationId: message.conversation_id,
         state: message.state,
         sessionId: message.session_id,
+        traceparent: message.traceparent,
+        tracestate: message.tracestate,
       }
     case "agent:status":
       return {
@@ -148,6 +174,8 @@ function fromWireMessage(
         capabilities: message.capabilities
           ? fromWireCapabilities(message.capabilities)
           : undefined,
+        traceparent: message.traceparent,
+        tracestate: message.tracestate,
       }
   }
 }
@@ -187,6 +215,7 @@ function toWireApiMessage(
         fencing_token: message.fencingToken,
         server_url: message.serverUrl,
         traceparent: message.traceparent,
+        tracestate: message.tracestate,
       }
     case "agent:stop":
       return {
@@ -202,6 +231,7 @@ function toWireApiMessage(
           conversation_id: delivery.conversationId,
           item_id: delivery.itemId,
           traceparent: delivery.traceparent,
+          tracestate: delivery.tracestate,
         })),
       }
     case "agent:task:resolved":
@@ -211,6 +241,7 @@ function toWireApiMessage(
         task_id: message.taskId,
         task: message.task,
         traceparent: message.traceparent,
+        tracestate: message.tracestate,
       }
   }
 }

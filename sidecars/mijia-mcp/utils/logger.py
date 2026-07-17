@@ -5,7 +5,6 @@
 
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -19,8 +18,9 @@ _log_file_path: Optional[Path] = None
 class _JsonFormatter(logging.Formatter):
     """结构化 NDJSON 输出（与系统其余日志一致，便于 Alloy/Loki 采集）。
 
-    stdout 留给 MCP/协议，日志一律走 stderr。携带 service 与（若父进程注入）
-    traceparent，使设备侧日志可与发起请求关联。
+    stdout 留给 MCP/协议，日志一律走 stderr。请求级 trace 关联走 OTLP span
+    （_shared/tracing.py），不在日志行里冒充：进程级静态 traceparent env
+    （SYNAPSE_TRACEPARENT spawn-env 约定）已全仓退役，零写入方（adj 16）。
     """
 
     def format(self, record: logging.LogRecord) -> str:
@@ -31,11 +31,6 @@ class _JsonFormatter(logging.Formatter):
             "logger": record.name,
             "msg": record.getMessage(),
         }
-        traceparent = os.environ.get("SYNAPSE_TRACEPARENT") or os.environ.get(
-            "TRACEPARENT"
-        )
-        if traceparent:
-            payload["traceparent"] = traceparent
         if record.exc_info:
             payload["exc"] = self.formatException(record.exc_info)
         return json.dumps(payload, ensure_ascii=False)

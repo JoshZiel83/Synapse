@@ -1,5 +1,28 @@
 import { z } from "zod"
 import { RUNTIME_KINDS, type RuntimeKind } from "./drivers/types.js"
+import { isValidTraceparent, MAX_TRACESTATE_LENGTH } from "./trace-context.js"
+
+// Degrade-not-reject trace fields (remediation plan §3c receiver rule): a
+// malformed or oversized value drops the FIELD, never the frame — a
+// frame-level parse failure here would drop deliveries. This also closes the
+// old accepts-empty-string weakness (an empty string is not a valid
+// traceparent, so it degrades to undefined).
+const traceparentField = z
+  .string()
+  .optional()
+  .transform((value) =>
+    value !== undefined && isValidTraceparent(value) ? value : undefined
+  )
+const tracestateField = z
+  .string()
+  .optional()
+  .transform((value) =>
+    value !== undefined &&
+    value.length > 0 &&
+    value.length <= MAX_TRACESTATE_LENGTH
+      ? value
+      : undefined
+  )
 
 export type AgentStartMessage = {
   type: "agent:start"
@@ -11,8 +34,9 @@ export type AgentStartMessage = {
   sessionId?: string | null
   fencingToken?: string
   serverUrl?: string
-  /** W3C traceparent of the api-side request that triggered this start. */
+  /** W3C trace context of the api-side request that triggered this start. */
   traceparent?: string
+  tracestate?: string
 }
 
 export type Delivery = {
@@ -20,8 +44,12 @@ export type Delivery = {
   deliveryId: string
   conversationId: string
   itemId: string
-  /** Per-delivery W3C traceparent (the enqueuing request's persisted trace). */
+  /**
+   * Per-delivery W3C trace context (the enqueuing request's trace; traceparent
+   * persisted on the delivery row, tracestate live-path only).
+   */
   traceparent?: string
+  tracestate?: string
 }
 
 export type DeliveryMessage = {
@@ -34,8 +62,9 @@ export type TaskResolvedMessage = {
   remoteAgentId: string
   taskId: string
   task: Record<string, unknown>
-  /** W3C traceparent of the request that resolved this task. */
+  /** W3C trace context of the request that resolved this task. */
   traceparent?: string
+  tracestate?: string
 }
 
 export type AgentStopMessage = {
@@ -107,7 +136,8 @@ const agentStartSchema = z.strictObject({
   session_id: z.string().nullable().optional(),
   fencing_token: z.string().optional(),
   server_url: z.string().optional(),
-  traceparent: z.string().optional(),
+  traceparent: traceparentField,
+  tracestate: tracestateField,
 })
 
 const agentStopSchema = z.strictObject({
@@ -120,7 +150,8 @@ const deliverySchema = z.strictObject({
   delivery_id: z.string().min(1),
   conversation_id: z.string().min(1),
   item_id: z.string().min(1),
-  traceparent: z.string().optional(),
+  traceparent: traceparentField,
+  tracestate: tracestateField,
 })
 
 const agentDeliverSchema = z.strictObject({
@@ -133,7 +164,8 @@ const taskResolvedSchema = z.strictObject({
   remote_agent_id: z.string().min(1),
   task_id: z.string().min(1),
   task: z.record(z.string(), z.unknown()),
-  traceparent: z.string().optional(),
+  traceparent: traceparentField,
+  tracestate: tracestateField,
 })
 
 const serverMessageWireSchema = z.discriminatedUnion("type", [
@@ -190,6 +222,7 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
         fencingToken: message.fencing_token,
         serverUrl: message.server_url,
         traceparent: message.traceparent,
+        tracestate: message.tracestate,
       }
     case "agent:stop":
       return {
@@ -205,6 +238,7 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
           conversationId: delivery.conversation_id,
           itemId: delivery.item_id,
           traceparent: delivery.traceparent,
+          tracestate: delivery.tracestate,
         })),
       }
     case "agent:task:resolved":
@@ -214,6 +248,7 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
         taskId: message.task_id,
         task: message.task,
         traceparent: message.traceparent,
+        tracestate: message.tracestate,
       }
   }
 }

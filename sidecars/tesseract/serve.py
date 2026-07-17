@@ -18,13 +18,23 @@ import base64
 import binascii
 import io
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytesseract
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from PIL import Image
 from pydantic import BaseModel
+
+# `_shared` import bootstrap: the image flat-COPYs sidecars/_shared/ next to
+# this file (importable via the /app script dir); in the repo it lives one
+# level up (sidecars/_shared), so put sidecars/ on sys.path there.
+if not (Path(__file__).resolve().parent / "_shared").is_dir():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _shared import tracing
 
 DEFAULT_LANGS = os.environ.get("TESSERACT_DEFAULT_LANGS", "eng").strip() or "eng"
 TESSDATA_DIR = os.environ.get("TESSDATA_DIR", "").strip()
@@ -34,6 +44,8 @@ MAX_IMAGE_BYTES = int(
 )
 
 app = FastAPI(title="synapse-tesseract-ocr")
+tracing.setup_tracing("tesseract-ocr")
+tracing.instrument_app(app)
 _executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY)
 
 # Non-blocking concurrency gate: reject (503) rather than queue past the cap.

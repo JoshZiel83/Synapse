@@ -15,40 +15,21 @@
 // No redaction (out of scope per locked decision D3). Records are size/count
 // capped to bound abuse; per-record fields are passed through as structured
 // pino fields.
+//
+// DEGRADE-NOT-REJECT: trace_id degrades at the field level and malformed
+// records are salvaged per record — see ingest-schema.ts (plan §4.I change 5,
+// adjudication 11/12 + the §3c receiver rule).
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import fp from "fastify-plugin"
-import { z } from "zod"
 import { logger } from "../../infrastructure/logger/index.js"
 import { wireRoute } from "../../infrastructure/http/route.js"
 import { authenticateRequestSession } from "../auth/service.js"
 import { verifyRuntimeLogToken } from "./device-token.js"
+import { LEVELS, salvageLogBatch, type Level } from "./ingest-schema.js"
 
-const LEVELS = ["debug", "info", "warn", "error"] as const
-type Level = (typeof LEVELS)[number]
-
-const MAX_RECORDS = 200
-const MAX_MSG_LEN = 4_000
 const MAX_FIELD_BYTES = 16_000
 
 const ingestLog = logger.child({ domain: "server", component: "log-ingest" })
-
-const RecordSchema = z
-  .object({
-    level: z.enum(LEVELS).default("info"),
-    // Client-side domain/component (their own taxonomy, e.g. web.client.*); kept
-    // as fields, not forced into the api LOG_DOMAINS enum.
-    domain: z.string().max(120).optional(),
-    component: z.string().max(120).optional(),
-    msg: z.string().max(MAX_MSG_LEN).default(""),
-    time: z.string().max(64).optional(),
-    trace_id: z.string().max(64).optional(),
-    fields: z.record(z.string(), z.unknown()).optional(),
-  })
-  .strip()
-
-const BodySchema = z.object({
-  records: z.array(RecordSchema).max(MAX_RECORDS),
-})
 
 function clampLevel(level: Level): Level {
   return LEVELS.includes(level) ? level : "info"
@@ -96,14 +77,16 @@ export default fp(
           })
         }
 
-        const parsed = BodySchema.safeParse(request.body)
-        if (!parsed.success) {
+        // Per-record salvage (ingest-schema.ts): only a malformed batch
+        // ENVELOPE is a 400; malformed records are counted, valid ones kept.
+        const batch = salvageLogBatch(request.body)
+        if (!batch) {
           return reply
             .status(400)
             .send({ error: "invalid log batch", code: "invalid_request" })
         }
 
-        for (const record of parsed.data.records) {
+        for (const record of batch.records) {
           const level = clampLevel(record.level)
           // Cap the structured payload to bound abuse; drop on overflow.
           let fields: Record<string, unknown> | undefined = record.fields
@@ -133,9 +116,11 @@ export default fp(
           )
         }
 
-        return reply
-          .status(202)
-          .send({ ok: true, accepted: parsed.data.records.length })
+        return reply.status(202).send({
+          ok: true,
+          accepted: batch.records.length,
+          rejected: batch.rejected,
+        })
       }
     )
   },

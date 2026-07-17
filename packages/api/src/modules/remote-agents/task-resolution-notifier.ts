@@ -2,11 +2,18 @@ import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 import { TaskSummarySchema } from "@synapse/shared/schemas"
 import type { TaskSummary } from "@synapse/shared/types"
 import type { RemoteAgentApiToDaemonMessage } from "./wire.js"
-import { activeTraceparent } from "../../infrastructure/observability/traceparent.js"
+import { activeTraceCarrier } from "../../infrastructure/observability/traceparent.js"
 
 export type ReplayResolvedTaskTarget = {
   remoteAgentId: string
   activeTaskId: string
+  /**
+   * W3C traceparent persisted at the task's terminal flip
+   * (`tool_call_tasks.resolution_traceparent`) — the resolver's trace, which
+   * the reconnect-replay leg carries to the daemon. Persisted trace context is
+   * traceparent-only (§3c). NULL when tracing was off at resolution.
+   */
+  resolutionTraceparent: string | null
 }
 
 export type ReplayResolvedRemoteAgentTasksDeps = {
@@ -75,15 +82,11 @@ export async function replayResolvedRemoteAgentTasksUseCase(
         remoteAgentId: row.remoteAgentId,
         taskId: row.activeTaskId,
         task: taskAsWirePayload(task),
-        // KNOWN LIMITATION: this is the reconnect REPLAY path (driven by the
-        // daemon `ready` handler, no request span), so activeTraceparent() is
-        // undefined and the replayed resolution is NOT trace-correlated. Unlike
-        // deliveries (which persist origin_traceparent to survive reconnect),
-        // resolved tasks have no persisted trace column — correlating the replay
-        // leg would need a traceparent column on the task's resolved state.
-        // Deferred as observability-only; the LIVE resolution path below IS
-        // correlated.
-        traceparent: activeTraceparent(),
+        // Reconnect REPLAY path (driven by the daemon `ready` handler): the
+        // resolver's trace survives the daemon restart via the persisted
+        // resolution_traceparent column — traceparent-only, like every
+        // persisted carrier (§3c).
+        traceparent: row.resolutionTraceparent ?? undefined,
       })
     ) {
       sent += 1
@@ -113,13 +116,16 @@ export async function notifyRemoteAgentTaskResolvedUseCase(
   if (!machineId) {
     return false
   }
+  // Live path: runs under the resolving request's span (e.g. a user-input
+  // reply), so the daemon's continued turn rejoins the resolver's trace —
+  // both carrier fields via the canonical mint.
+  const carrier = activeTraceCarrier()
   return deps.sendToMachine(machineId, {
     type: "agent:task:resolved",
     remoteAgentId: task.requester.remoteAgentId,
     taskId,
     task: taskPayload,
-    // Live path: runs under the resolving request's span (e.g. a user-input
-    // reply), so the daemon's continued turn rejoins the resolver's trace.
-    traceparent: activeTraceparent(),
+    traceparent: carrier?.traceparent,
+    tracestate: carrier?.tracestate,
   })
 }

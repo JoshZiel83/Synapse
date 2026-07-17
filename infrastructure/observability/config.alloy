@@ -79,7 +79,8 @@ loki.write "default" {
 }
 
 // OTLP trace ingest from the api (OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy:4318)
-// and, later, device-runtime / daemon / sidecars. Forwarded to Tempo.
+// and, later, device-runtime / daemon / sidecars. Forwarded to Tempo through the
+// health-span filter below.
 otelcol.receiver.otlp "default" {
   grpc {
     endpoint = "0.0.0.0:4317"
@@ -87,6 +88,29 @@ otelcol.receiver.otlp "default" {
   http {
     endpoint = "0.0.0.0:4318"
   }
+  output {
+    traces = [otelcol.processor.filter.drop_probe_spans.input]
+  }
+}
+
+// Polyglot health-span SAFETY NET (docs/trace-correctness-remediation-plan-
+// 2026-07-12.md §4.I change 8): drop any health-probe span a producer failed to
+// suppress at the SDK layer. SDK-layer suppression is PRIMARY (api
+// HttpInstrumentation ignore-hooks + @fastify/otel ignorePaths; Python sidecar
+// `excluded_urls`); this filter only backstops future/foreign OTLP producers.
+// Both legacy (`http.target`) and stable (`url.path`) semconv names are matched
+// so a producer's semconv mode can't leak probe spans past the net.
+otelcol.processor.filter "drop_probe_spans" {
+  error_mode = "ignore"
+
+  traces {
+    span = [
+      "attributes[\"url.path\"] == \"/healthz\" or attributes[\"url.path\"] == \"/api/v1/health\"",
+      "attributes[\"http.route\"] == \"/healthz\" or attributes[\"http.route\"] == \"/api/v1/health\"",
+      "attributes[\"http.target\"] == \"/healthz\" or attributes[\"http.target\"] == \"/api/v1/health\"",
+    ]
+  }
+
   output {
     traces = [otelcol.exporter.otlphttp.tempo.input]
   }

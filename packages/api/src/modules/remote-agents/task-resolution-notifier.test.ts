@@ -32,7 +32,11 @@ function taskSummary(values: Partial<TaskSummary> = {}): TaskSummary {
 
 function deps(params: {
   hasConnection?: boolean
-  targets?: Array<{ remoteAgentId: string; activeTaskId: string }>
+  targets?: Array<{
+    remoteAgentId: string
+    activeTaskId: string
+    resolutionTraceparent: string | null
+  }>
   tasksById?: Map<string, TaskSummary>
   machineId?: string | null
   sendResult?: boolean
@@ -62,6 +66,8 @@ test("replayResolvedRemoteAgentTasksUseCase sends resolved task frames and skips
   const machineId = randomUUID()
   const remoteAgentId = randomUUID()
   const task = taskSummary()
+  const untracedTask = taskSummary()
+  const RESOLVER_TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
   const sent: Array<{
     machineId: string
     message: RemoteAgentApiToDaemonMessage
@@ -74,23 +80,48 @@ test("replayResolvedRemoteAgentTasksUseCase sends resolved task frames and skips
     },
     deps({
       targets: [
-        { remoteAgentId, activeTaskId: task.id },
-        { remoteAgentId, activeTaskId: randomUUID() },
+        {
+          remoteAgentId,
+          activeTaskId: task.id,
+          resolutionTraceparent: RESOLVER_TP,
+        },
+        {
+          remoteAgentId,
+          activeTaskId: untracedTask.id,
+          resolutionTraceparent: null,
+        },
+        {
+          remoteAgentId,
+          activeTaskId: randomUUID(),
+          resolutionTraceparent: null,
+        },
       ],
-      tasksById: new Map([[task.id, task]]),
+      tasksById: new Map([
+        [task.id, task],
+        [untracedTask.id, untracedTask],
+      ]),
       sent,
     })
   )
 
-  assert.deepEqual(result, { sent: 1, skippedMissingTask: 1 })
-  assert.equal(sent.length, 1)
+  assert.deepEqual(result, { sent: 2, skippedMissingTask: 1 })
+  assert.equal(sent.length, 2)
   assert.equal(sent[0]!.machineId, machineId)
   assert.deepEqual(sent[0]!.message, {
     type: "agent:task:resolved",
     remoteAgentId,
     taskId: task.id,
     task,
-    // No active OTel span in the unit context → activeTraceparent() is undefined.
+    // Replay leg (no request span): the resolver's trace survives the daemon
+    // restart via the persisted resolution_traceparent column.
+    traceparent: RESOLVER_TP,
+  })
+  assert.deepEqual(sent[1]!.message, {
+    type: "agent:task:resolved",
+    remoteAgentId,
+    taskId: untracedTask.id,
+    task: untracedTask,
+    // Tracing was off at resolution → the frame is simply untraced.
     traceparent: undefined,
   })
 })
@@ -115,7 +146,13 @@ test("replayResolvedRemoteAgentTasksUseCase validates task payload before sendin
         remoteAgentIds: [remoteAgentId],
       },
       deps({
-        targets: [{ remoteAgentId, activeTaskId: invalidTask.id }],
+        targets: [
+          {
+            remoteAgentId,
+            activeTaskId: invalidTask.id,
+            resolutionTraceparent: null,
+          },
+        ],
         tasksById: new Map([[invalidTask.id, invalidTask]]),
         sent,
       })
@@ -178,7 +215,10 @@ test("notifyRemoteAgentTaskResolvedUseCase sends only remote-agent-requested tas
         remoteAgentId,
         taskId: task.id,
         task,
+        // No active OTel span in the unit context → activeTraceCarrier() is
+        // undefined for the live path.
         traceparent: undefined,
+        tracestate: undefined,
       },
     },
   ])

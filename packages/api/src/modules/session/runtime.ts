@@ -1025,12 +1025,15 @@ export async function getPendingWakeups(sessionId: string) {
   const rows = await repo.listPendingSessionWakeups(sessionId)
 
   // Fan-in causal join. The draining turn's requeue is rooted (session-thinking
-  // withRootTrace), so instead of a false single-parent we attach each drained
+  // withRootTrace — its trace is rooted at its own `send session-thinking`
+  // PRODUCER span), so instead of a false single-parent we attach each drained
   // wakeup's originating trace — captured in the origin_traceparent column at
-  // enqueue — as a span LINK on the active CONSUMER span. Reads the SAME rows (no
-  // second query → no TOCTOU vs the drained set); no-op when OTEL is off or on
-  // the idle→enqueue self-trace path. The DTO shape is unchanged (trace stays out
-  // of ActorRuntimeWakeup).
+  // enqueue — as a span LINK on the active CONSUMER span. Unsampled (flags-00)
+  // origins are skipped and counted in `synapse.wakeup.links_skipped_unsampled`
+  // (a link to a trace the head-sampled backend never stored can't resolve).
+  // Reads the SAME rows (no second query → no TOCTOU vs the drained set); no-op
+  // when OTEL is off or on the idle→enqueue self-trace path. The DTO shape is
+  // unchanged (trace stays out of ActorRuntimeWakeup).
   linkUpstreamTraces(
     rows
       .map((row) => row.originTraceparent)

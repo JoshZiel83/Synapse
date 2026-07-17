@@ -10,6 +10,7 @@
 // tunnel endpoint, no registry entry, and the endpoint scheme is non-dialable.
 
 import { join } from "node:path"
+import { SpanKind, SpanStatusCode, trace, type Span } from "@opentelemetry/api"
 import type { OperationEnvelope } from "@synapse/device-protocol"
 import { fromExternalRfc3339 } from "@synapse/device-protocol/instant"
 import { STORAGE_DIR } from "../../infrastructure/storage/index.js"
@@ -38,12 +39,23 @@ import {
 } from "./data-plane.js"
 import type { SandboxCapabilityDescriptor } from "./model.js"
 
+// [D2] tracer for the `sandbox.dispatch <toolName>` INTERNAL parity span
+// (trace plan §4.G change 4 / §9 D2) — the Mode-B analogue of the resident
+// path's `tools/call` CLIENT edge in devices/dispatch.ts.
+const tracer = trace.getTracer("synapse-sandbox-dispatch")
+
 // ── live plane registry ───────────────────────────────────────────────────────
 // Keyed by runtimeId, populated by the bare adapter's create() and drained on
 // teardown. A registry HIT means the plane is live (teardown always unregisters),
 // so the hot path never touches the DB. A MISS is the ONLY place the lazy
 // rebuild-on-restart runs — never a registry-first gate (preservation #2).
-const liveBarePlanes = new Map<string, SandboxDataPlane>()
+// Each entry carries the adapter tag ([D2]) so the HIT path can stamp
+// `synapse.sandbox.adapter` on the parity span without a DB read.
+interface LiveBarePlaneEntry {
+  plane: SandboxDataPlane
+  adapter: string
+}
+const liveBarePlanes = new Map<string, LiveBarePlaneEntry>()
 
 // (#5-B) Which live planes front an OFF-BOX runtime (a shared remote VM). The HIT
 // re-check fails CLOSED for these on a DB read error: a slipped-through write to a
@@ -60,7 +72,7 @@ const offBoxBarePlanes = new Set<string>()
 // runtimeId; the body does a compare-and-set + disposes any loser.
 const inflightBareRebuilds = new Map<
   string,
-  Promise<{ plane: SandboxDataPlane } | { deny: McpDispatchResult }>
+  Promise<LiveBarePlaneEntry | { deny: McpDispatchResult }>
 >()
 
 // R3.3 (rebuild/teardown race — generation fence). A teardown that unregisters a
@@ -109,11 +121,14 @@ function bareTargetIdentityOk(row: {
 export function registerBareDataPlane(
   runtimeId: string,
   plane: SandboxDataPlane,
+  // [D2] the adapter tag ('local' | 'docker' | 'cubesandbox') — stamped as
+  // `synapse.sandbox.adapter` on the parity span's HIT path.
+  adapter: string,
   // (#5-B) whether this runtime is off-box (a shared remote VM). Drives the HIT
   // re-check's fail-closed-on-DB-error decision. Defaults false (host bare).
   offBox = false
 ): void {
-  liveBarePlanes.set(runtimeId, plane)
+  liveBarePlanes.set(runtimeId, { plane, adapter })
   if (offBox) offBoxBarePlanes.add(runtimeId)
   else offBoxBarePlanes.delete(runtimeId)
 }
@@ -121,18 +136,18 @@ export function registerBareDataPlane(
 export function unregisterBareDataPlane(
   runtimeId: string
 ): SandboxDataPlane | undefined {
-  const plane = liveBarePlanes.get(runtimeId)
+  const entry = liveBarePlanes.get(runtimeId)
   liveBarePlanes.delete(runtimeId)
   offBoxBarePlanes.delete(runtimeId)
   // R3.3: invalidate any in-flight rebuild that started before this unregister.
   bareTeardownGen.set(runtimeId, (bareTeardownGen.get(runtimeId) ?? 0) + 1)
-  return plane
+  return entry?.plane
 }
 
 export function getLiveBareDataPlane(
   runtimeId: string
 ): SandboxDataPlane | undefined {
-  return liveBarePlanes.get(runtimeId)
+  return liveBarePlanes.get(runtimeId)?.plane
 }
 
 /**
@@ -313,9 +328,83 @@ function errResult(
 /**
  * The bare fork. Returns the SAME McpDispatchResult shape dispatchSyncTool does,
  * so `completeRuntimeOperation` + downstream handling are byte-identical.
+ *
+ * [D2] (trace plan §4.G change 4, §9 — REQUIRED): the full body runs inside a
+ * `sandbox.dispatch ${toolName}` INTERNAL parity span. `startActiveSpan` (not
+ * a detached span) is load-bearing — the active-context parenting is what
+ * makes the cubesandbox envd/control undici auto-spans nest as CLIENT
+ * CHILDREN of this span instead of landing as anonymous `POST` siblings under
+ * the turn span. So NO `suppressTracing` here (unlike devices/dispatch.ts,
+ * there is no manual CLIENT span duplicating an HTTP edge; the auto undici
+ * children are wanted). This ONE span covers both production call sites
+ * (capability-projection + auto-retry) and ALL THREE bare schemes
+ * (local:bare, docker:bare, cubesandbox:bare off-box) — they all dispatch
+ * through this single fork, and the compile-closed ADAPTER_FACTORIES means
+ * any future adapter inherits it.
+ *
+ * Every DISPATCH-level failure is an errResult return, so error recording is
+ * primarily a STATUS MAPPING: any ok:false result sets status ERROR +
+ * `error.type` = the SynapseError code. The function is NOT total, though —
+ * an infrastructure throw ESCAPES it: the unwrapped DB reads
+ * (getBareSandboxForDispatch inside the rebuild, verifyBareDispatchTarget)
+ * and the deliberate non-EmptyScopeDeniedError rethrow in the confinement
+ * step all propagate to the caller (which has no try/catch — see the note at
+ * the call-signature docs). The catch below therefore records the escape on
+ * the parity span (recordException + ERROR + `error.type` = the error name)
+ * before rethrowing, so an errored dispatch can never export as UNSET.
  */
 export async function dispatchBareRuntimeTool(
   input: DispatchBareRuntimeToolInput
+): Promise<McpDispatchResult> {
+  return tracer.startActiveSpan(
+    `sandbox.dispatch ${input.toolName}`,
+    {
+      kind: SpanKind.INTERNAL,
+      attributes: {
+        "synapse.runtime.id": input.runtimeId,
+        "synapse.tool.name": input.toolName,
+        ...(input.builtinKind !== null
+          ? { "synapse.builtin.kind": input.builtinKind }
+          : {}),
+      },
+    },
+    async (span): Promise<McpDispatchResult> => {
+      try {
+        const result = await dispatchBareRuntimeToolInner(input, span)
+        if (!result.ok) {
+          span.setAttribute(
+            "error.type",
+            result.error?.code ?? "runtime_constraint"
+          )
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: result.error?.message,
+          })
+        }
+        return result
+      } catch (err) {
+        // Escaped infrastructure throw (DB failure etc.) — record it so the
+        // exported span reads as the error it is, then rethrow unchanged.
+        span.recordException(err as Error)
+        span.setAttribute(
+          "error.type",
+          err instanceof Error && err.name ? err.name : "internal_error"
+        )
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: err instanceof Error ? err.message : String(err),
+        })
+        throw err
+      } finally {
+        span.end()
+      }
+    }
+  )
+}
+
+async function dispatchBareRuntimeToolInner(
+  input: DispatchBareRuntimeToolInput,
+  span: Span
 ): Promise<McpDispatchResult> {
   const now = input.now ?? Date.now
 
@@ -346,8 +435,12 @@ export async function dispatchBareRuntimeTool(
 
   // (1) Resolve the plane. HIT = live; MISS = singleflighted lazy rebuild — the
   // only place the rebuild-on-restart runs (never a registry-first gate).
-  let plane = liveBarePlanes.get(input.runtimeId)
-  if (plane) {
+  const hit = liveBarePlanes.get(input.runtimeId)
+  let plane = hit?.plane
+  if (hit) {
+    // [D2] the HIT path stamps the adapter tag from the registry entry — no
+    // DB read needed for the parity span attribute.
+    span.setAttribute("synapse.sandbox.adapter", hit.adapter)
     // (R4 §3.4 #5-B) cross-process HIT re-check — a HIT proves the plane is live in
     // THIS process, not that the runtime is still active elsewhere. On a stale HIT
     // (a cross-process teardown / reaper drove the row non-active), drop the local
@@ -369,7 +462,7 @@ export async function dispatchBareRuntimeTool(
       // concurrent unregister (which bumps it) is detected at the compare-and-set.
       const genAtStart = bareTeardownGen.get(input.runtimeId) ?? 0
       inflight = (async (): Promise<
-        { plane: SandboxDataPlane } | { deny: McpDispatchResult }
+        LiveBarePlaneEntry | { deny: McpDispatchResult }
       > => {
         const row = await getBareSandboxForDispatch(input.runtimeId, input.run)
         // A missing row / soft-deleted runtime / non-live state / non-bare mode ⇒
@@ -462,7 +555,7 @@ export async function dispatchBareRuntimeTool(
         if (existing) {
           // P1.3(b): a concurrent miss already registered — keep that, dispose ours.
           await built.dispose().catch(() => {})
-          return { plane: existing }
+          return existing
         }
         // R3.3 fence + R3.7 tombstone: a teardown fired (or is firing) during our
         // async build window → do NOT resurrect a plane. Dispose + deny.
@@ -478,7 +571,8 @@ export async function dispatchBareRuntimeTool(
             ),
           }
         }
-        liveBarePlanes.set(input.runtimeId, built)
+        const entry: LiveBarePlaneEntry = { plane: built, adapter: row.adapter }
+        liveBarePlanes.set(input.runtimeId, entry)
         // (#5-B) track off-box provenance for a REBUILT plane too (create() sets it
         // at register time; a cross-restart rebuild resolves it from the row's
         // adapter tag) so the HIT re-check fails closed for it on a DB read error.
@@ -489,7 +583,7 @@ export async function dispatchBareRuntimeTool(
         } else {
           offBoxBarePlanes.delete(input.runtimeId)
         }
-        return { plane: built }
+        return entry
       })().finally(() => {
         inflightBareRebuilds.delete(input.runtimeId)
       })
@@ -497,6 +591,8 @@ export async function dispatchBareRuntimeTool(
     }
     const resolved = await inflight
     if ("deny" in resolved) return resolved.deny
+    // [D2] the rebuild/MISS path stamps the adapter tag from the row.
+    span.setAttribute("synapse.sandbox.adapter", resolved.adapter)
     plane = resolved.plane
   }
 

@@ -1,5 +1,36 @@
+// Reverse-MCP endpoint: the per-conversation MCP server the remote-agent
+// daemon's spawned runtime (claude / codex CLI) talks back to over
+// Streamable HTTP.
+//
+// TRACING RULE (remediation plan §4.C, runtime-probe-proven): NO traceparent
+// is EVER injected into the agent-runtime MCP config (headers baked into the
+// claude/codex MCP server entry). The runtime's config is frozen at spawn, so
+// a static header would glue every tool call of a whole multi-turn session
+// under one long-dead parent — strictly worse than no correlation. Instead,
+// correlation is server-side: ONE self-created span per tools/call invocation
+// (parented on `params._meta.{traceparent,tracestate}` per SEP-414 when a
+// future runtime sends it, else the ambient request span) plus span LINKS to
+// the delivery-origin traces of the turn (`synapse.link.kind=delivery_origin`)
+// via the session-scoped turn-carrier cache. Do not "fix" this by adding a
+// traceparent header to the runtime MCP config.
+
 import { randomUUID } from "node:crypto"
 import type { FastifyRequest, FastifyReply } from "fastify"
+import {
+  context,
+  defaultTextMapGetter,
+  isSpanContextValid,
+  propagation,
+  ROOT_CONTEXT,
+  SpanKind,
+  SpanStatusCode,
+  trace,
+  TraceFlags,
+  type Attributes,
+  type Context,
+  type Link,
+} from "@opentelemetry/api"
+import { W3CTraceContextPropagator } from "@opentelemetry/core"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import {
@@ -45,14 +76,106 @@ import { listPendingDeliveryRefs, getConversationTypeFacts } from "./repo.js"
 import { requireRemoteAgentConversationAccessOnDefaultDb } from "../chat/remote-agent-bridge.js"
 import { projectToolsForPrincipal } from "../capability-projection/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
+import { isValidTraceparent } from "../../infrastructure/observability/traceparent.js"
+import { linkUpstreamTraces } from "../../workers/job-tracing.js"
+import { MAX_TRACESTATE_LENGTH, type TraceCarrier } from "@synapse/shared"
 
 const log = createLogger("remote-agent.mcp")
+const tracer = trace.getTracer("synapse-remote-agent-mcp")
+// Trace-context-only extraction for link building / `_meta` parenting — a
+// PRIVATE propagator instance per the §3c carrier contract (never the global
+// FirstPartyOnlyPropagator composite for manual carriers).
+const carrierPropagator = new W3CTraceContextPropagator()
+
+/**
+ * Session-scoped cache of the turn's delivery-origin traceparents (deduped by
+ * trace id, FIFO cap 20 — matches the origin_carriers wire cap). Every
+ * tools/call span is created with LINKS to the cached origins;
+ * check_messages / read_history refresh the cache from the delivery rows they
+ * fetch and post-`addLink` the origins discovered mid-handler.
+ */
+const TURN_CARRIER_CAP = 20
+export class TurnCarrierCache {
+  private readonly byTraceId = new Map<string, string>()
+
+  /**
+   * Remember valid, previously unseen origin traceparents; returns the NEWLY
+   * added ones (the post-fetch `addLink` set).
+   */
+  addAll(traceparents: Array<string | null | undefined>): string[] {
+    const added: string[] = []
+    for (const traceparent of traceparents) {
+      if (!isValidTraceparent(traceparent)) continue
+      const traceId = traceparent.slice(3, 35)
+      if (this.byTraceId.has(traceId)) continue
+      while (this.byTraceId.size >= TURN_CARRIER_CAP) {
+        const oldest = this.byTraceId.keys().next().value
+        if (oldest === undefined) break
+        this.byTraceId.delete(oldest)
+      }
+      this.byTraceId.set(traceId, traceparent)
+      added.push(traceparent)
+    }
+    return added
+  }
+
+  list(): string[] {
+    return [...this.byTraceId.values()]
+  }
+}
+
+/**
+ * Creation-time span links for the turn's delivery-origin traces. Unsampled
+ * origins are skipped (the head-sampled backend never stores them — same rule
+ * as linkUpstreamTraces), as is the would-be self-link when an origin IS the
+ * span's own trace (single-origin `_meta`/header-parented case).
+ */
+function deliveryOriginLinks(
+  traceparents: readonly string[],
+  ownTraceId: string | undefined
+): Link[] {
+  const links: Link[] = []
+  for (const traceparent of traceparents) {
+    const extracted = carrierPropagator.extract(
+      ROOT_CONTEXT,
+      { traceparent },
+      defaultTextMapGetter
+    )
+    const spanContext = trace.getSpanContext(extracted)
+    if (!spanContext || !isSpanContextValid(spanContext)) continue
+    if (spanContext.traceId === ownTraceId) continue
+    if ((spanContext.traceFlags & TraceFlags.SAMPLED) === 0) continue
+    links.push({
+      context: spanContext,
+      attributes: { "synapse.link.kind": "delivery_origin" },
+    })
+  }
+  return links
+}
+
+/**
+ * Cache-refresh + mid-handler link step shared by the tools that fetch
+ * delivery rows: newly discovered origins are LINKed onto the active
+ * tools/call span (post-creation `addLink` — the rows are only knowable
+ * inside the handler).
+ */
+function linkNewDeliveryOrigins(
+  turnCarriers: TurnCarrierCache,
+  originTraceparents: Array<string | null | undefined>
+): void {
+  const added = turnCarriers.addAll(originTraceparents)
+  if (added.length > 0) {
+    linkUpstreamTraces(added, "delivery_origin")
+  }
+}
 
 type ActiveTransport = {
   transport: StreamableHTTPServerTransport
   server: McpServer
   remoteAgentId: string
   conversationId: string
+  /** The session's delivery-origin trace cache (tools/call span links). */
+  turnCarriers: TurnCarrierCache
   shutdown: () => Promise<void>
   lastActivityAt: number
 }
@@ -142,6 +265,7 @@ function buildImTools(params: {
   remoteAgentId: string
   conversationId: string
   machineKey: string
+  turnCarriers: TurnCarrierCache
 }): RegisteredTool[] {
   const tools: RegisteredTool[] = []
 
@@ -181,6 +305,13 @@ function buildImTools(params: {
         conversationId: params.conversationId,
         limit,
       })
+      // Refresh the turn's origin cache + link origins discovered mid-handler
+      // onto the active tools/call span. The presenter below deliberately
+      // keeps origin_traceparent OUT of the agent-facing result.
+      linkNewDeliveryOrigins(
+        params.turnCarriers,
+        deliveries.map((delivery) => delivery.originTraceparent)
+      )
       return jsonToolResult({
         deliveries: deliveries.map(presentMessageDelivery),
       })
@@ -208,6 +339,12 @@ function buildImTools(params: {
         remoteAgentId: params.remoteAgentId,
         conversationId: params.conversationId,
       })
+      // Refresh the turn's origin cache from the pending rows (see
+      // check_messages) — origin_traceparent never reaches the tool result.
+      linkNewDeliveryOrigins(
+        params.turnCarriers,
+        deliveryRows.map((row) => row.originTraceparent)
+      )
       const itemIds = new Set(
         result.items
           .map((item) =>
@@ -280,7 +417,7 @@ export function __buildImToolsForTest(params: {
   conversationId: string
   machineKey: string
 }): RemoteAgentMcpToolForTest[] {
-  return buildImTools(params)
+  return buildImTools({ ...params, turnCarriers: new TurnCarrierCache() })
 }
 
 async function buildResolvedTools(params: {
@@ -358,15 +495,55 @@ async function buildResolvedTools(params: {
 }
 
 /**
+ * The parent Context + SpanKind for one tools/call invocation (§4.C C3b):
+ * a valid SEP-414 `params._meta.{traceparent,tracestate}` carrier wins
+ * (SERVER — the caller propagated a remote parent; installed MCP SDK 1.29.0
+ * parses `_meta` as a looseObject so the keys survive; claude/codex CLIs send
+ * none today — future-proofing), else the AMBIENT context (INTERNAL — child
+ * of the reverse-MCP HTTP request span).
+ */
+function toolCallParentContext(meta: unknown): {
+  parentContext: Context
+  kind: SpanKind
+} {
+  if (isRecord(meta) && isValidTraceparent(meta.traceparent)) {
+    const carrier: TraceCarrier = { traceparent: meta.traceparent }
+    if (
+      typeof meta.tracestate === "string" &&
+      meta.tracestate.length > 0 &&
+      meta.tracestate.length <= MAX_TRACESTATE_LENGTH
+    ) {
+      carrier.tracestate = meta.tracestate
+    }
+    // Global-propagator extract is the sanctioned receiver path (P-D2: the
+    // Sentry-ON composite extracts a plain carrier correctly).
+    return {
+      parentContext: propagation.extract(ROOT_CONTEXT, carrier),
+      kind: SpanKind.SERVER,
+    }
+  }
+  return { parentContext: context.active(), kind: SpanKind.INTERNAL }
+}
+
+/**
  * Register a single unified tool registry on the low-level Server via
  * setRequestHandler(ListTools/CallTool). This replaces per-tool
  * `registerTool(...)` so projected tools can advertise their full raw JSON
  * Schema without being forced through a lossy Zod round-trip, while IM tools
  * keep their Zod validation.
+ *
+ * Every invocation runs inside ONE self-created `tools/call {name}` span
+ * (creation-time links to the turn's delivery-origin traces; `isError`
+ * results mark ERROR; always ended in `finally`).
  */
 function installUnifiedToolRegistry(
   server: McpServer,
-  tools: RegisteredTool[]
+  tools: RegisteredTool[],
+  spanScope: {
+    remoteAgentId: string
+    conversationId: string
+    turnCarriers: TurnCarrierCache
+  }
 ): void {
   // Fail loud on a duplicate wire name rather than silently overwriting a
   // handler (e.g. a plugin tool shadowing a built-in IM tool). NamePolicy +
@@ -394,59 +571,104 @@ function installUnifiedToolRegistry(
   }))
 
   lowLevel.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const tool = byName.get(request.params.name)
-    if (!tool) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Unknown tool: ${request.params.name}`,
-          },
-        ],
-        isError: true,
-      }
+    const name = request.params.name
+    const { parentContext, kind } = toolCallParentContext(request.params._meta)
+    const parentSpanContext = trace.getSpanContext(parentContext)
+    const attributes: Attributes = {
+      "mcp.method.name": "tools/call",
+      "mcp.tool.name": name,
+      "synapse.remote_agent.id": spanScope.remoteAgentId,
+      "synapse.conversation.id": spanScope.conversationId,
     }
-    const rawArgs = (request.params.arguments ?? {}) as Record<string, unknown>
-    let args = rawArgs
-    // IM tools validate input against their Zod schema before dispatch (the
-    // old registerTool() did this automatically; the low-level path must do it
-    // explicitly so bad input is rejected, not silently accepted).
-    if (tool.zodSchema) {
-      const parsed = tool.zodSchema.safeParse(rawArgs)
-      if (!parsed.success) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Invalid arguments for ${tool.name}: ${parsed.error.message}`,
-            },
-          ],
-          isError: true,
+    return tracer.startActiveSpan(
+      `tools/call ${name}`,
+      {
+        kind,
+        attributes,
+        // Creation-time links to the turn's delivery-origin traces —
+        // send_message (and every other tool) joins the traces whose
+        // deliveries fed this turn.
+        links: deliveryOriginLinks(
+          spanScope.turnCarriers.list(),
+          parentSpanContext?.traceId
+        ),
+      },
+      parentContext,
+      async (span) => {
+        const fail = (text: string) => {
+          span.setStatus({ code: SpanStatusCode.ERROR, message: text })
+          return {
+            content: [{ type: "text" as const, text }],
+            isError: true,
+          }
+        }
+        try {
+          const tool = byName.get(name)
+          if (!tool) {
+            return fail(`Unknown tool: ${name}`)
+          }
+          const rawArgs = (request.params.arguments ?? {}) as Record<
+            string,
+            unknown
+          >
+          let args = rawArgs
+          // IM tools validate input against their Zod schema before dispatch
+          // (the old registerTool() did this automatically; the low-level path
+          // must do it explicitly so bad input is rejected, not silently
+          // accepted).
+          if (tool.zodSchema) {
+            const parsed = tool.zodSchema.safeParse(rawArgs)
+            if (!parsed.success) {
+              return fail(
+                `Invalid arguments for ${tool.name}: ${parsed.error.message}`
+              )
+            }
+            args = parsed.data as Record<string, unknown>
+          }
+          try {
+            const result = await tool.handler(args)
+            if (result.isError) {
+              span.setStatus({ code: SpanStatusCode.ERROR })
+            }
+            return result
+          } catch (error) {
+            span.recordException(error as Error)
+            return fail(error instanceof Error ? error.message : String(error))
+          }
+        } finally {
+          span.end()
         }
       }
-      args = parsed.data as Record<string, unknown>
-    }
-    try {
-      return await tool.handler(args)
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: error instanceof Error ? error.message : String(error),
-          },
-        ],
-        isError: true,
-      }
-    }
+    )
   })
 }
+
+/**
+ * Test seams for the CallTool span matrix (mcp-endpoint.test.ts): the
+ * registry installer takes any object shaped like `McpServer` (only
+ * `server.registerCapabilities` / `server.setRequestHandler` are touched), so
+ * tests capture the CallTool handler off a stub and invoke it directly —
+ * pinning SERVER-vs-INTERNAL parent selection, creation-time delivery-origin
+ * links (self-link + flags-00 exclusion), and the error→span status mapping
+ * without a transport.
+ */
+export const __installUnifiedToolRegistryForTest = installUnifiedToolRegistry
+export type RegisteredToolForSpanTest = RegisteredTool
 
 function reapIdleTransports() {
   const now = Date.now()
   for (const [sessionId, active] of transportsBySessionId) {
     if (now - active.lastActivityAt > IDLE_TIMEOUT_MS) {
       transportsBySessionId.delete(sessionId)
+      log.info(
+        {
+          sessionId,
+          remoteAgentId: active.remoteAgentId,
+          conversationId: active.conversationId,
+          idleMs: now - active.lastActivityAt,
+        },
+        "reaped idle reverse-MCP session"
+      )
       void active.shutdown().catch(() => undefined)
       void active.server.close().catch(() => undefined)
       void active.transport.close().catch(() => undefined)
@@ -476,10 +698,12 @@ async function createSessionTransport(params: {
     { name: "synapse", version: "0.1.0" },
     { capabilities: { logging: {} } }
   )
+  const turnCarriers = new TurnCarrierCache()
   const imTools = buildImTools({
     remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
     machineKey: params.machineKey,
+    turnCarriers,
   })
   // Deliberately NOT wrapped in try/catch: a resolver failure must surface as
   // an initialize HTTP 500, not silently drop plugin/device grants.
@@ -495,7 +719,11 @@ async function createSessionTransport(params: {
       // that share a leaf name qualify instead of shadowing the IM handler.
       reservedNames: imTools.map((t) => t.name),
     })
-  installUnifiedToolRegistry(server, [...imTools, ...resolvedTools])
+  installUnifiedToolRegistry(server, [...imTools, ...resolvedTools], {
+    remoteAgentId: params.remoteAgentId,
+    conversationId: params.conversationId,
+    turnCarriers,
+  })
 
   let storedSessionId: string | undefined
   const transport = new StreamableHTTPServerTransport({
@@ -503,6 +731,15 @@ async function createSessionTransport(params: {
     onsessioninitialized: (id) => {
       storedSessionId = id
       transportsBySessionId.set(id, active)
+      log.info(
+        {
+          sessionId: id,
+          remoteAgentId: params.remoteAgentId,
+          conversationId: params.conversationId,
+          toolCount: imTools.length + resolvedTools.length,
+        },
+        "reverse-MCP session created"
+      )
     },
   })
   const active: ActiveTransport = {
@@ -510,6 +747,7 @@ async function createSessionTransport(params: {
     server,
     remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
+    turnCarriers,
     shutdown: pluginShutdown,
     lastActivityAt: Date.now(),
   }
@@ -526,6 +764,15 @@ export async function handleRemoteAgentMcpRequest(
   }>,
   reply: FastifyReply
 ) {
+  // Request-level correlation: the reverse-MCP HTTP request span (which the
+  // patched @fastify/otel now always ENDS, hijacked replies included) carries
+  // the agent/conversation identifiers so Tempo/logs queries can slice this
+  // ingress by principal.
+  const requestSpan = trace.getActiveSpan()
+  requestSpan?.setAttributes({
+    "synapse.remote_agent.id": request.params.remoteAgentId,
+    "synapse.conversation.id": request.params.conversationId,
+  })
   const machineKey = getMachineKeyFromHeaders(request)
   // Authentication (machineKey) and authorization (conversation belongs to
   // this remote_agent) are split deliberately:
@@ -540,6 +787,10 @@ export async function handleRemoteAgentMcpRequest(
     workspaceId = auth.workspaceId
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    log.warn(
+      { remoteAgentId: request.params.remoteAgentId, reason: message },
+      "reverse-MCP machine authentication failed"
+    )
     return reply.code(401).send({ error: message })
   }
   try {
@@ -549,6 +800,14 @@ export async function handleRemoteAgentMcpRequest(
     )
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    log.warn(
+      {
+        remoteAgentId: request.params.remoteAgentId,
+        conversationId: request.params.conversationId,
+        reason: message,
+      },
+      "reverse-MCP conversation access denied"
+    )
     return reply.code(403).send({ error: message })
   }
   const conversationFacts = await getConversationTypeFacts(
@@ -591,6 +850,15 @@ export async function handleRemoteAgentMcpRequest(
     })
   }
   active.lastActivityAt = Date.now()
+  log.debug(
+    {
+      method: request.method,
+      remoteAgentId: request.params.remoteAgentId,
+      conversationId: request.params.conversationId,
+      sessionId: sessionId ?? "initialize",
+    },
+    "reverse-MCP request"
+  )
 
   reply.hijack()
   try {
