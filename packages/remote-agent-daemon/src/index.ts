@@ -31,6 +31,7 @@ import {
   activeWireTraceFields,
   getTraceparent,
   runWithCarrier,
+  runWithoutCarrier,
   type TraceCarrier,
 } from "./trace-context.js"
 import {
@@ -675,25 +676,30 @@ class ManagedRemoteAgent {
       this.deliveryCarriers,
       deliveryIds
     )
-    // undefined scope (mixed origins / untraced) leaves the ambient context
-    // untouched — runWithCarrier(undefined, fn) is fn().
     for (const id of deliveryIds) this.deliveryCarriers.delete(id)
-    try {
-      await runWithCarrier(scope, () =>
-        requestJson(
-          this.params.config.serverUrl,
-          this.params.config.apiKey,
-          `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/fail-deliveries`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              deliveries,
-              reason: reason.slice(0, 2000),
-            } satisfies RemoteAgentFailDeliveriesBody),
-          },
-          RemoteAgentFailDeliveriesResponseSchema
-        )
+    // Single-origin scope ⇒ the POST is parented under that one trace. An
+    // undefined scope (mixed origins / untraced) must MASK any ambient ALS
+    // carrier — this path can run inside enqueueDeliveries' per-conversation
+    // scope, whose carrier would otherwise leak onto the POST and parent the
+    // report under one origin. runWithoutCarrier makes the POST carry NO
+    // traceparent header, so the api creates a fresh root with per-delivery
+    // links to ALL origins.
+    const post = () =>
+      requestJson(
+        this.params.config.serverUrl,
+        this.params.config.apiKey,
+        `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/fail-deliveries`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            deliveries,
+            reason: reason.slice(0, 2000),
+          } satisfies RemoteAgentFailDeliveriesBody),
+        },
+        RemoteAgentFailDeliveriesResponseSchema
       )
+    try {
+      await (scope ? runWithCarrier(scope, post) : runWithoutCarrier(post))
     } catch (error) {
       log(
         "warn",

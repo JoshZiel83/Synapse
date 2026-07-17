@@ -5,7 +5,11 @@ import {
   RemoteAgentTaskCreateResponseSchema,
   requestJson,
 } from "./api-client.js"
-import { runWithCarrier } from "./trace-context.js"
+import {
+  buildFailDeliveriesReport,
+  DeliveryCarrierMap,
+} from "./delivery-carriers.js"
+import { runWithCarrier, runWithoutCarrier } from "./trace-context.js"
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -116,6 +120,51 @@ test("requestJson forwards the active turn's carrier as traceparent+tracestate h
     { traceparent: TP, tracestate: null },
     { traceparent: null, tracestate: null },
   ])
+})
+
+test("fail-deliveries POST contract: mixed-origin scope masks the ambient carrier (NO traceparent header ⇒ fresh api-side root); single-origin scope sends the header", async () => {
+  const TP1 = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+  const TP2 = "00-1af7651916cd43dd8448eb211c80319d-c7ad6b7169203332-01"
+  const AMBIENT = "00-2af7651916cd43dd8448eb211c80319e-d7ad6b7169203333-01"
+  const observed: Array<string | null> = []
+  const fetchImpl: typeof fetch = (async (_input, init) => {
+    observed.push(new Headers(init?.headers).get("traceparent"))
+    return jsonResponse({ rescheduled: 0 })
+  }) as typeof fetch
+
+  // Mirrors index.ts reportDeliveryFailure: the POST runs inside the scope
+  // when single-origin, and inside runWithoutCarrier when mixed/untraced.
+  const post = () =>
+    requestJson(
+      "https://api.example.test",
+      "machine-key",
+      "/fail-deliveries",
+      { method: "POST", body: "{}" },
+      RemoteAgentFailDeliveriesResponseSchema,
+      fetchImpl
+    )
+  const report = (map: DeliveryCarrierMap, ids: string[]) => {
+    const { scope } = buildFailDeliveriesReport(map, ids)
+    return scope ? runWithCarrier(scope, post) : runWithoutCarrier(post)
+  }
+
+  // The E2E-observed bug shape: reportDeliveryFailure fires inside an ambient
+  // per-conversation carrier scope (enqueueDeliveries routing failure).
+  await runWithCarrier({ traceparent: AMBIENT }, async () => {
+    const mixed = new DeliveryCarrierMap()
+    mixed.set("d-1", { traceparent: TP1 })
+    mixed.set("d-2", { traceparent: TP2 })
+    // Mixed-origin batch ⇒ NO outbound traceparent (the ambient carrier must
+    // not leak — the api creates a fresh root with per-delivery links).
+    await report(mixed, ["d-1", "d-2"])
+
+    const single = new DeliveryCarrierMap()
+    single.set("d-1", { traceparent: TP1 })
+    // Single-origin batch ⇒ parented under that one origin, as before.
+    await report(single, ["d-1"])
+  })
+
+  assert.deepEqual(observed, [null, TP1])
 })
 
 test("requestJson rejects malformed or drifted response payloads", async () => {

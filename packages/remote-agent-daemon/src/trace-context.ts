@@ -57,7 +57,14 @@ export function traceIdOf(traceparent: string): string | undefined {
   return TRACEPARENT_RE.test(traceparent) ? traceparent.slice(3, 35) : undefined
 }
 
-const store = new AsyncLocalStorage<TraceCarrier>()
+/**
+ * Explicit no-carrier sentinel stored by {@link runWithoutCarrier}. Distinct
+ * from an absent store entry: it MASKS any enclosing carrier scope, and
+ * `getCarrier()`/`getTraceparent()` map it to undefined.
+ */
+const NO_CARRIER = Symbol("no-carrier")
+
+const store = new AsyncLocalStorage<TraceCarrier | typeof NO_CARRIER>()
 
 /** Run `fn` with `carrier` as the active daemon trace context. */
 export function runWithCarrier<T>(
@@ -67,14 +74,27 @@ export function runWithCarrier<T>(
   return carrier ? store.run(carrier, fn) : fn()
 }
 
+/**
+ * Run `fn` with NO active trace carrier, masking any enclosing carrier scope
+ * (unlike `runWithCarrier(undefined, fn)`, which is a plain call-through that
+ * leaves the ambient scope visible). For outbound calls that must NOT inherit
+ * a single origin's trace — the mixed-origin fail-deliveries report (§4.C):
+ * the POST then carries no traceparent header, so the api creates a fresh
+ * root with per-delivery links instead of parenting under one origin.
+ */
+export function runWithoutCarrier<T>(fn: () => T): T {
+  return store.run(NO_CARRIER, fn)
+}
+
 /** The active turn's W3C trace carrier, if any. */
 export function getCarrier(): TraceCarrier | undefined {
-  return store.getStore()
+  const value = store.getStore()
+  return value === NO_CARRIER ? undefined : value
 }
 
 /** The active turn's W3C traceparent, if any. */
 export function getTraceparent(): string | undefined {
-  return store.getStore()?.traceparent
+  return getCarrier()?.traceparent
 }
 
 /**

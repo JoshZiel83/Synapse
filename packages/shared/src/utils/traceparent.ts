@@ -4,8 +4,8 @@
  * (docs/trace-correctness-remediation-plan-2026-07-12.md §3c).
  *
  * Dependency-free on purpose: consumed by the api (re-exported from
- * `infrastructure/observability/traceparent.ts`), device-runtime, and the
- * device-protocol zod schemas without pulling anything beyond this module.
+ * `infrastructure/observability/traceparent.ts`) and device-runtime without
+ * pulling anything beyond this module.
  *
  * Sanctioned literal duplicates — packages that must NOT depend on
  * `@synapse/shared` pin the SAME regex/cap with a cross-reference comment.

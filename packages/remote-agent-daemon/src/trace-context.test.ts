@@ -6,6 +6,7 @@ import {
   getTraceparent,
   isValidTraceparent,
   runWithCarrier,
+  runWithoutCarrier,
   traceIdOf,
 } from "./trace-context.js"
 
@@ -56,6 +57,29 @@ test("runWithCarrier: undefined scope is a plain call-through; scopes nest and r
     assert.equal(getTraceparent(), TP, "outer scope restored")
   })
   assert.equal(getTraceparent(), undefined, "no leak outside the scope")
+})
+
+test("runWithoutCarrier: masks an ambient carrier scope (unlike runWithCarrier(undefined)) and restores it after", () => {
+  runWithCarrier({ traceparent: TP, tracestate: "es=s:1.0" }, () => {
+    // runWithCarrier(undefined) is a plain call-through — ambient stays visible.
+    runWithCarrier(undefined, () => {
+      assert.equal(getTraceparent(), TP)
+    })
+    // runWithoutCarrier MASKS the ambient scope: nothing reads a carrier, so
+    // an outbound requestJson inside sends NO traceparent header (the
+    // mixed-origin fail-deliveries contract — fresh api-side root).
+    runWithoutCarrier(() => {
+      assert.equal(getCarrier(), undefined)
+      assert.equal(getTraceparent(), undefined)
+      assert.deepEqual(activeWireTraceFields(), {})
+    })
+    assert.equal(getTraceparent(), TP, "ambient scope restored")
+  })
+  // Outside any scope it is inert.
+  runWithoutCarrier(() => {
+    assert.equal(getCarrier(), undefined)
+  })
+  assert.equal(getTraceparent(), undefined)
 })
 
 test("traceIdOf / isValidTraceparent follow the pinned §3c contract", () => {
