@@ -26,7 +26,7 @@
     "@better-auth/expo": "1.6.13",
     "@expo/vector-icons": "^15.0.3",
     "@react-navigation/native": "^7.1.8",
-    "@sentry/react-native": "~7.2.0",
+    "@sentry/react-native": "~7.13.0",
     "@shopify/flash-list": "2.0.2",
     "@tanstack/react-query": "^5.100.14",
     "@vscode/markdown-it-katex": "^1.1.2",

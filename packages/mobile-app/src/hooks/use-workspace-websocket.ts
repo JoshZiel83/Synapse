@@ -2,11 +2,13 @@ import { useEffect, useRef, type MutableRefObject } from "react"
 
 import { getWebSocketUrl } from "@/lib/config"
 import { useSession } from "@/providers/session-provider"
+import { getActiveSpan, spanIsSampled, spanToJSON } from "@sentry/react-native"
 import type { ChatSocketEvent } from "@shared"
 import {
   createChatSocket,
   type ChatSocketHandle,
   type ChatSocketSubscription,
+  type ChatSocketTraceContext,
 } from "@shared/chat-socket"
 
 export type WorkspaceSocketSubscription = ChatSocketSubscription
@@ -56,6 +58,25 @@ function dispatchConnected() {
   }
 }
 
+/**
+ * W3C trace context for outgoing work-starting WS frames (auth/subscribe),
+ * built from the active Sentry span at frame-send time. The RN SDK does not
+ * re-export `getTraceData`, so the traceparent is assembled from
+ * `getActiveSpan()` + `spanToJSON()` + `spanIsSampled()` (spec form
+ * `00-<traceId>-<spanId>-<01|00>`). No active span (including Sentry
+ * uninitialized — DSN unset) ⇒ undefined ⇒ the frame goes out unstamped and
+ * the server starts a fresh root.
+ */
+function getWsTraceContext(): ChatSocketTraceContext | undefined {
+  const span = getActiveSpan()
+  if (!span) return undefined
+  const { trace_id: traceId, span_id: spanId } = spanToJSON(span)
+  if (!traceId || !spanId) return undefined
+  return {
+    traceparent: `00-${traceId}-${spanId}-${spanIsSampled(span) ? "01" : "00"}`,
+  }
+}
+
 let sharedHandle: ChatSocketHandle | null = null
 
 function getSharedHandle(): ChatSocketHandle {
@@ -81,6 +102,7 @@ function getSharedHandle(): ChatSocketHandle {
       }
       return [...byKey.values()]
     },
+    getTraceContext: getWsTraceContext,
     onEvent: (event) =>
       dispatchEvent(event as ChatSocketEvent | Record<string, unknown>),
     onConnected: () => dispatchConnected(),

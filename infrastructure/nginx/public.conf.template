@@ -121,6 +121,17 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Host $host;
+    # Trace trust boundary (Ring 0 -> 1, docs/trace-propagation-policy.md):
+    # strip vendor/trust-carrying trace headers at the public edge; an empty
+    # proxy_set_header value means the header is NOT passed upstream.
+    # `traceparent` is deliberately KEPT (the browser trace bridge needs it;
+    # the api validates it at extract and treats its flags as advisory — the
+    # api sampler owns the FORCE/ERASE defense, this strip is vendor-state
+    # hygiene). proxy_set_header does NOT inherit into a location that
+    # declares its own, so every such location below re-declares this trio.
+    proxy_set_header tracestate "";
+    proxy_set_header baggage "";
+    proxy_set_header sentry-trace "";
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
@@ -143,6 +154,11 @@ server {
         proxy_pass http://$api_upstream:3001;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
+        # Ring-0 strip re-declared: this location's own proxy_set_header
+        # kills server-level inheritance (traceparent still passes).
+        proxy_set_header tracestate "";
+        proxy_set_header baggage "";
+        proxy_set_header sentry-trace "";
         proxy_read_timeout 86400s;
     }
 
@@ -190,6 +206,11 @@ server {
         proxy_pass http://$web_upstream:3000;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
+        # Ring-0 strip re-declared: this location's own proxy_set_header
+        # kills server-level inheritance (traceparent still passes).
+        proxy_set_header tracestate "";
+        proxy_set_header baggage "";
+        proxy_set_header sentry-trace "";
         proxy_buffering off;
         proxy_read_timeout 86400s;
     }
@@ -199,6 +220,11 @@ server {
         proxy_pass http://$web_upstream:3000;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
+        # Ring-0 strip re-declared: this location's own proxy_set_header
+        # kills server-level inheritance (traceparent still passes).
+        proxy_set_header tracestate "";
+        proxy_set_header baggage "";
+        proxy_set_header sentry-trace "";
         proxy_buffering off;
         proxy_read_timeout 86400s;
         # Advertise the compression dictionary so browsers idle-fetch it (CDT).
@@ -257,6 +283,12 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Host $host;
+    # Trace trust boundary (Ring 0 -> 1): strip tracestate/baggage/sentry-trace,
+    # KEEP traceparent — same posture as the web vhost above; see
+    # docs/trace-propagation-policy.md. Re-declared in /ws (own proxy_set_header).
+    proxy_set_header tracestate "";
+    proxy_set_header baggage "";
+    proxy_set_header sentry-trace "";
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
@@ -279,6 +311,11 @@ server {
         proxy_pass http://$api_upstream:3001;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
+        # Ring-0 strip re-declared: this location's own proxy_set_header
+        # kills server-level inheritance (traceparent still passes).
+        proxy_set_header tracestate "";
+        proxy_set_header baggage "";
+        proxy_set_header sentry-trace "";
         proxy_read_timeout 86400s;
     }
 
@@ -333,6 +370,15 @@ server {
     # 512mb. The default proxy cap would reject a publish, so raise it here.
     client_max_body_size 512m;
 
+    # Trace trust boundary (Ring 0 -> 1): strip tracestate/baggage/sentry-trace,
+    # KEEP traceparent — same posture as the web vhost; see
+    # docs/trace-propagation-policy.md. The only proxied location below declares
+    # its own proxy_set_header set, so the trio is re-declared there; these
+    # server-level copies cover any future location that does not.
+    proxy_set_header tracestate "";
+    proxy_set_header baggage "";
+    proxy_set_header sentry-trace "";
+
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
         try_files $uri =404;
@@ -346,6 +392,11 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # Ring-0 strip re-declared: this location's own proxy_set_header
+        # kills server-level inheritance (traceparent still passes).
+        proxy_set_header tracestate "";
+        proxy_set_header baggage "";
+        proxy_set_header sentry-trace "";
         proxy_read_timeout 300s;
         proxy_send_timeout 300s;
         proxy_request_buffering off;

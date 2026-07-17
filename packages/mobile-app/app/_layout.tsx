@@ -17,6 +17,7 @@ import "react-native-url-polyfill/auto"
 import "../global.css"
 
 import "@/lib/chat-background-task"
+import { getSentryTracePropagationTargets } from "@/lib/config"
 import { AppProviders } from "@/providers/app-providers"
 import { useSession } from "@/providers/session-provider"
 import { useWorkspace } from "@/providers/workspace-provider"
@@ -37,15 +38,32 @@ const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN
 const sentryNavigationIntegration = Sentry.reactNavigationIntegration({
   enableTimeToInitialDisplay: !isRunningInExpoGo(),
 })
+
+// Build env materializes unset vars as EMPTY STRINGS and `Number("") === 0`
+// would silently zero sampling — `|| "0.1"` + isFinite keeps the 0.1 default
+// for empty/garbage while honoring an explicit 0.
+function parseSampleRate(raw: string | undefined): number {
+  const parsed = Number(raw || "0.1")
+  return Number.isFinite(parsed) ? parsed : 0.1
+}
+
 if (sentryDsn) {
   Sentry.init({
     dsn: sentryDsn,
     environment:
       process.env.EXPO_PUBLIC_SENTRY_ENVIRONMENT ||
       (__DEV__ ? "development" : "production"),
-    tracesSampleRate: Number(
-      process.env.EXPO_PUBLIC_SENTRY_TRACES_SAMPLE_RATE ?? "0.1"
+    tracesSampleRate: parseSampleRate(
+      process.env.EXPO_PUBLIC_SENTRY_TRACES_SAMPLE_RATE
     ),
+    // Emit W3C traceparent alongside sentry-trace on matching requests — the
+    // only trace header that survives the public edge's Ring-0 strip, and the
+    // header the api's OTel propagator extracts for mobile→api correlation.
+    propagateTraceparent: true,
+    // Trace headers ONLY to the API/auth origins. This replaces the RN native
+    // default [/.*/], which leaked sentry-trace/baggage (environment + DSN
+    // public key) to every third-party host over XHR with no CORS to stop it.
+    tracePropagationTargets: getSentryTracePropagationTargets(),
     integrations: [sentryNavigationIntegration],
     enableNativeFramesTracking: !isRunningInExpoGo(),
     sendDefaultPii: false,

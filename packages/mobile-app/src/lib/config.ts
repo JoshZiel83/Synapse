@@ -175,6 +175,35 @@ export function getApiBaseForDisplay(): string {
   return tryNormalizeApiBase(getRawApiUrl()) ?? "(未配置)"
 }
 
+/**
+ * Sentry `tracePropagationTargets` restricted to the API/auth origins. The RN
+ * SDK default is `[/.*\/]` — that would attach `sentry-trace`/`baggage`
+ * (environment + DSN public key) to EVERY third-party XHR with no CORS to stop
+ * it, so an explicit allowlist is mandatory. Anchored RegExps because Sentry
+ * treats plain string patterns as substring matches; native `shouldAttachHeaders`
+ * tests the raw absolute request URL, so one anchored-origin regex per origin
+ * covers it. Non-throwing and prerender-safe (tryNormalize* tier): unset or
+ * malformed env ⇒ `[]` = fail-safe, no trace headers anywhere.
+ */
+export function getSentryTracePropagationTargets(): RegExp[] {
+  const origins = new Set<string>()
+  const apiBase = tryNormalizeApiBase(getRawApiUrl())
+  if (apiBase) {
+    try {
+      origins.add(new URL(apiBase).origin)
+    } catch {
+      // unreachable after tryNormalize, but stay non-throwing by contract
+    }
+  }
+  const authOrigin = tryNormalizeOrigin(getRawAuthOrigin())
+  if (authOrigin) origins.add(authOrigin)
+
+  return [...origins].map(
+    (origin) =>
+      new RegExp(`^${origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(/|$)`)
+  )
+}
+
 // Content-addressed file ref render URL. file_ref blocks now carry a sha256
 // (+ optional path); bytes are served by GET /content/<sha256>. Returns
 // undefined when there is no sha256 to resolve OR when the API base is not

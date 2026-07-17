@@ -42,6 +42,16 @@ export interface ChatSocketAuth {
   workspaceId?: string | null
 }
 
+/**
+ * W3C trace context stamped onto the outgoing frames that start server-side
+ * work (`auth` and `subscribe` — the envelope-carried carrier contract, plan
+ * §3c/§4.B). `unsubscribe`/`pong` are pure bookkeeping and are never stamped.
+ */
+export interface ChatSocketTraceContext {
+  traceparent: string
+  tracestate?: string
+}
+
 export type ChatSocketSubscription =
   | { key: string; topic: "inbox" }
   | { key: string; topic: "conversation"; conversationId: string }
@@ -66,6 +76,15 @@ export interface ChatSocketDeps {
   getAuth: () => ChatSocketAuth | null
   /** Current desired subscription set (aggregated, for the multiplex case). */
   getSubscriptions: () => ChatSocketSubscription[]
+  /**
+   * Current W3C trace context for the sender, read at frame-send time. When it
+   * returns a carrier with a `traceparent`, outgoing `auth` and `subscribe`
+   * frames carry `{traceparent, tracestate}` on the envelope so the server
+   * parents its per-message spans to the client's active trace (web sources it
+   * from Sentry `getTraceData`; mobile builds it from the active span). Absent /
+   * undefined ⇒ frames go out unstamped and the server starts a fresh root.
+   */
+  getTraceContext?: () => ChatSocketTraceContext | undefined
   /** Called for every non-protocol frame (already parsed). */
   onEvent: (event: Record<string, unknown>) => void
   /** Called once per successful auth handshake (auth.ok). */
@@ -179,6 +198,22 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
     deps.onStateChange?.(state)
   }
 
+  /**
+   * Envelope trace fields for a work-starting frame (auth/subscribe), read at
+   * send time so each frame carries the trace that was active when it was sent.
+   * Empty when no context is available — the field simply stays off the frame
+   * (the server-side envelope schema treats absent as "fresh root").
+   */
+  function traceContextFields(): Partial<ChatSocketTraceContext> {
+    const carrier = deps.getTraceContext?.()
+    if (!carrier?.traceparent) return {}
+    const fields: Partial<ChatSocketTraceContext> = {
+      traceparent: carrier.traceparent,
+    }
+    if (carrier.tracestate) fields.tracestate = carrier.tracestate
+    return fields
+  }
+
   function clearReconnectTimer() {
     if (reconnectTimer !== null) {
       deps.clearTimer(reconnectTimer)
@@ -274,7 +309,15 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
 
     for (const [key, { serialized, subscription }] of desired) {
       if (sentSubscriptions.get(key) === serialized) continue
-      socket.send(serialize({ type: "subscribe", ...subscription }))
+      // Trace fields ride the frame but stay out of the dedupe signature (a
+      // trace change alone must not re-send an already-sent subscription).
+      socket.send(
+        serialize({
+          type: "subscribe",
+          ...subscription,
+          ...traceContextFields(),
+        })
+      )
       sentSubscriptions.set(key, serialized)
     }
   }
@@ -289,7 +332,10 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
 
     next.onopen = () => {
       reconnectAttempts = 0
-      const frame: Record<string, unknown> = { type: "auth" }
+      const frame: Record<string, unknown> = {
+        type: "auth",
+        ...traceContextFields(),
+      }
       if (auth.token) frame.token = auth.token
       if (auth.workspaceId) frame.workspaceId = auth.workspaceId
       next.send(serialize(frame))

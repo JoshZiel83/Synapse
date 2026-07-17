@@ -5,6 +5,7 @@ import {
   createChatSocket,
   type ChatSocketAuth,
   type ChatSocketSubscription,
+  type ChatSocketTraceContext,
   type SocketLike,
 } from "./index.js"
 
@@ -14,6 +15,7 @@ function makeHarness(opts: {
   subscriptions: ChatSocketSubscription[]
   authErrorIsFatal?: boolean
   authErrorRetryMs?: number
+  getTraceContext?: () => ChatSocketTraceContext | undefined
 }) {
   const sent: Array<Record<string, unknown>> = []
   const events: Array<Record<string, unknown>> = []
@@ -69,6 +71,7 @@ function makeHarness(opts: {
     },
     getAuth: () => auth,
     getSubscriptions: () => subscriptions,
+    getTraceContext: opts.getTraceContext,
     onEvent: (e) => events.push(e),
     onConnected: () => connectedCalls.push(connectedCalls.length),
     onStateChange: (s) => states.push(s),
@@ -394,5 +397,135 @@ test("auth identity change reconnects with the new identity", () => {
     type: "auth",
     token: "t2",
     workspaceId: "ws1",
+  })
+})
+
+// --- WS envelope trace stamping (plan §4.B change 11 / [adj 18]) -------------
+
+const TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+const TS = "vendor=abc"
+
+test("auth + subscribe frames carry {traceparent, tracestate} from getTraceContext", () => {
+  const h = makeHarness({
+    auth: { token: "t1", workspaceId: "ws1" },
+    subscriptions: [{ key: "inbox", topic: "inbox" }],
+    getTraceContext: () => ({ traceparent: TP, tracestate: TS }),
+  })
+  h.handle.start()
+  h.last().open()
+  assert.deepEqual(h.sent[0], {
+    type: "auth",
+    token: "t1",
+    workspaceId: "ws1",
+    traceparent: TP,
+    tracestate: TS,
+  })
+
+  h.last().receive({ type: "auth.ok" })
+  assert.deepEqual(h.sent[1], {
+    type: "subscribe",
+    key: "inbox",
+    topic: "inbox",
+    traceparent: TP,
+    tracestate: TS,
+  })
+})
+
+test("tracestate is optional: traceparent-only carriers stamp traceparent alone", () => {
+  const h = makeHarness({
+    auth: { workspaceId: "ws1" },
+    subscriptions: [],
+    getTraceContext: () => ({ traceparent: TP }),
+  })
+  h.handle.start()
+  h.last().open()
+  assert.deepEqual(h.sent[0], {
+    type: "auth",
+    workspaceId: "ws1",
+    traceparent: TP,
+  })
+})
+
+test("no active trace (getTraceContext undefined result) ⇒ unstamped frames", () => {
+  const h = makeHarness({
+    auth: { workspaceId: "ws1" },
+    subscriptions: [{ key: "inbox", topic: "inbox" }],
+    getTraceContext: () => undefined,
+  })
+  h.handle.start()
+  h.last().open()
+  h.last().receive({ type: "auth.ok" })
+  assert.deepEqual(h.sent[0], { type: "auth", workspaceId: "ws1" })
+  assert.deepEqual(h.sent[1], {
+    type: "subscribe",
+    key: "inbox",
+    topic: "inbox",
+  })
+})
+
+test("unsubscribe and pong frames are never stamped", () => {
+  const h = makeHarness({
+    auth: { workspaceId: "ws1" },
+    subscriptions: [{ key: "inbox", topic: "inbox" }],
+    getTraceContext: () => ({ traceparent: TP, tracestate: TS }),
+  })
+  h.handle.start()
+  h.last().open()
+  h.last().receive({ type: "auth.ok" })
+
+  h.last().receive({ type: "ping" })
+  assert.deepEqual(h.sent[h.sent.length - 1], { type: "pong" })
+
+  h.setSubscriptions([])
+  h.handle.sync()
+  assert.deepEqual(h.sent[h.sent.length - 1], {
+    type: "unsubscribe",
+    key: "inbox",
+  })
+})
+
+test("trace fields stay out of the subscription dedupe signature", () => {
+  let tp = TP
+  const h = makeHarness({
+    auth: { workspaceId: "ws1" },
+    subscriptions: [{ key: "inbox", topic: "inbox" }],
+    getTraceContext: () => ({ traceparent: tp }),
+  })
+  h.handle.start()
+  h.last().open()
+  h.last().receive({ type: "auth.ok" })
+  const before = h.sent.length
+
+  // A new active trace alone must NOT re-send an already-sent subscription.
+  tp = "00-1bf7651916cd43dd8448eb211c80319d-c8ad6b7169203332-00"
+  h.handle.sync()
+  assert.equal(h.sent.length, before)
+})
+
+test("trace context is read at send time (fresh trace stamps a NEW subscription)", () => {
+  const first = TP
+  const second = "00-1bf7651916cd43dd8448eb211c80319d-c8ad6b7169203332-00"
+  let tp = first
+  const h = makeHarness({
+    auth: { workspaceId: "ws1" },
+    subscriptions: [{ key: "inbox", topic: "inbox" }],
+    getTraceContext: () => ({ traceparent: tp }),
+  })
+  h.handle.start()
+  h.last().open()
+  h.last().receive({ type: "auth.ok" })
+
+  tp = second
+  h.setSubscriptions([
+    { key: "inbox", topic: "inbox" },
+    { key: "c:1", topic: "conversation", conversationId: "1" },
+  ])
+  h.handle.sync()
+  assert.deepEqual(h.sent[h.sent.length - 1], {
+    type: "subscribe",
+    key: "c:1",
+    topic: "conversation",
+    conversationId: "1",
+    traceparent: second,
   })
 })

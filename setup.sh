@@ -108,6 +108,13 @@ PUBLIC_NPM_REGISTRY_URL="${PUBLIC_NPM_REGISTRY_URL:-$PUBLIC_SCHEME://$REGISTRY_D
 # use `${VAR-default}` (not `:-`) to let `EXPO_PUBLIC_AUTH_ORIGIN= ./setup.sh`
 # clear a previously-customized value instead of resurrecting it from .env.
 EXPO_PUBLIC_AUTH_ORIGIN_VALUE="${EXPO_PUBLIC_AUTH_ORIGIN-$(read_env_value EXPO_PUBLIC_AUTH_ORIGIN)}"
+# Frontend Sentry DSNs — the web and mobile projects' OWN DSNs, distinct from
+# the api's SENTRY_DSN (three per-platform Sentry projects; never reuse one
+# value). Empty is meaningful (frontend Sentry + the W3C trace bridge off), so
+# `${VAR-...}` (not `:-`) lets `NEXT_PUBLIC_SENTRY_DSN= ./setup.sh` clear a
+# previously-set value while a plain re-run preserves it from .env.
+NEXT_PUBLIC_SENTRY_DSN_VALUE="${NEXT_PUBLIC_SENTRY_DSN-$(read_env_value NEXT_PUBLIC_SENTRY_DSN)}"
+EXPO_PUBLIC_SENTRY_DSN_VALUE="${EXPO_PUBLIC_SENTRY_DSN-$(read_env_value EXPO_PUBLIC_SENTRY_DSN)}"
 API_PROXY_ORIGIN="${SYNAPSE_API_PROXY_ORIGIN:-http://localhost:3001}"
 
 generate_password() {
@@ -319,6 +326,11 @@ EXPO_PUBLIC_API_URL=$APP_URL/api/v1
 # browser-facing public origin differs from the internal API origin.
 EXPO_PUBLIC_AUTH_ORIGIN=$EXPO_PUBLIC_AUTH_ORIGIN_VALUE
 EXPO_BASE_URL=/mobile
+# Frontend Sentry DSNs (per-platform projects — distinct from the api's
+# SENTRY_DSN; build-time inlined into the web/mobile-web images; empty =
+# frontend Sentry + trace bridge off). See .env.example (Observability).
+NEXT_PUBLIC_SENTRY_DSN=$NEXT_PUBLIC_SENTRY_DSN_VALUE
+EXPO_PUBLIC_SENTRY_DSN=$EXPO_PUBLIC_SENTRY_DSN_VALUE
 EOF
 
   chmod 600 "$ENV_FILE"
@@ -351,6 +363,8 @@ upsert_env_var "$ENV_FILE" NEXT_PUBLIC_SITE_URL "$APP_URL"
 upsert_env_var "$ENV_FILE" EXPO_PUBLIC_API_URL "$APP_URL/api/v1"
 upsert_env_var "$ENV_FILE" EXPO_PUBLIC_AUTH_ORIGIN "$EXPO_PUBLIC_AUTH_ORIGIN_VALUE"
 upsert_env_var "$ENV_FILE" EXPO_BASE_URL "/mobile"
+upsert_env_var "$ENV_FILE" NEXT_PUBLIC_SENTRY_DSN "$NEXT_PUBLIC_SENTRY_DSN_VALUE"
+upsert_env_var "$ENV_FILE" EXPO_PUBLIC_SENTRY_DSN "$EXPO_PUBLIC_SENTRY_DSN_VALUE"
 # Merge (not overwrite) so existing/customized .env files still trust the app
 # URL + the mobile app scheme required for native Feishu OAuth deep-link return.
 ensure_csv_env_contains "$ENV_FILE" AUTH_TRUSTED_ORIGINS "$APP_URL" "synapse://"
@@ -366,6 +380,8 @@ NEXT_PUBLIC_SITE_URL=$APP_URL
 # Optional: comma-separated hostnames or URLs for additional Next dev origins.
 # NEXT_ALLOWED_DEV_ORIGINS=$DOMAIN
 API_PROXY_ORIGIN=$API_PROXY_ORIGIN
+# Web Sentry project DSN (empty = web Sentry + trace bridge off).
+NEXT_PUBLIC_SENTRY_DSN=$NEXT_PUBLIC_SENTRY_DSN_VALUE
 EOF
 
   chmod 600 "$WEB_ENV_FILE"
@@ -380,6 +396,7 @@ upsert_env_var "$WEB_ENV_FILE" NEXT_PUBLIC_WS_URL "$WS_URL"
 upsert_env_var "$WEB_ENV_FILE" NEXT_PUBLIC_APP_URL "$APP_URL"
 upsert_env_var "$WEB_ENV_FILE" NEXT_PUBLIC_SITE_URL "$APP_URL"
 upsert_env_var "$WEB_ENV_FILE" API_PROXY_ORIGIN "$API_PROXY_ORIGIN"
+upsert_env_var "$WEB_ENV_FILE" NEXT_PUBLIC_SENTRY_DSN "$NEXT_PUBLIC_SENTRY_DSN_VALUE"
 
 # Mobile (Expo) reads .env ONLY from its own project dir (packages/mobile-app),
 # never the monorepo root, so the deploy address from the root .env must be
@@ -396,6 +413,8 @@ EXPO_PUBLIC_API_URL=$APP_URL/api/v1
 # origin differs from the internal API origin.
 EXPO_PUBLIC_AUTH_ORIGIN=$EXPO_PUBLIC_AUTH_ORIGIN_VALUE
 EXPO_BASE_URL=/mobile
+# Mobile Sentry project DSN (empty = mobile Sentry + trace bridge off).
+EXPO_PUBLIC_SENTRY_DSN=$EXPO_PUBLIC_SENTRY_DSN_VALUE
 EOF
 
   chmod 600 "$MOBILE_ENV_FILE"
@@ -408,6 +427,7 @@ fi
 upsert_env_var "$MOBILE_ENV_FILE" EXPO_PUBLIC_API_URL "$APP_URL/api/v1"
 upsert_env_var "$MOBILE_ENV_FILE" EXPO_PUBLIC_AUTH_ORIGIN "$EXPO_PUBLIC_AUTH_ORIGIN_VALUE"
 upsert_env_var "$MOBILE_ENV_FILE" EXPO_BASE_URL "/mobile"
+upsert_env_var "$MOBILE_ENV_FILE" EXPO_PUBLIC_SENTRY_DSN "$EXPO_PUBLIC_SENTRY_DSN_VALUE"
 
 if [ "$ROOT_ENV_CREATED" = false ] && [ "$WEB_ENV_CREATED" = false ] && [ "$MOBILE_ENV_CREATED" = false ] && [ "$ENV_FILES_UPDATED" = false ]; then
   echo "No env files were created."

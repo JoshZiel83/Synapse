@@ -1,11 +1,13 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import * as Sentry from "@sentry/nextjs"
 import type { ChatSocketEvent } from "@synapse/shared"
 import {
   createChatSocket,
   type ChatSocketHandle,
   type ChatSocketSubscription,
+  type ChatSocketTraceContext,
 } from "@synapse/shared/chat-socket"
 
 export type WebSocketSubscription = ChatSocketSubscription
@@ -40,6 +42,19 @@ function resolveWebSocketUrl(configuredUrl?: string) {
   }
 
   return "ws://localhost:3001/ws"
+}
+
+/**
+ * W3C trace context for outgoing work-starting WS frames (auth/subscribe),
+ * read from the active Sentry span/propagation context at frame-send time.
+ * `getTraceData` returns `{}` when Sentry is not enabled (no DSN), so frames
+ * simply go out unstamped and the server starts a fresh root. tracestate is
+ * deliberately not sent: the browser SDK carries its vendor state in
+ * sentry-trace/baggage, never as W3C tracestate.
+ */
+function getWsTraceContext(): ChatSocketTraceContext | undefined {
+  const { traceparent } = Sentry.getTraceData({ propagateTraceparent: true })
+  return traceparent ? { traceparent } : undefined
 }
 
 /**
@@ -92,6 +107,7 @@ export function useWebSocket({
       authErrorIsFatal: false,
       authErrorRetryMs: 30_000,
       getSubscriptions: () => subscriptionsRef.current,
+      getTraceContext: getWsTraceContext,
       onEvent: (event) =>
         onEventRef.current?.(
           event as ChatSocketEvent | Record<string, unknown>

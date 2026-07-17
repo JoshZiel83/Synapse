@@ -8,6 +8,14 @@ RUN npm config set registry https://registry.npmmirror.com \
   && npm config set fetch-retry-maxtimeout 120000
 
 COPY package.json package-lock.json ./
+# The root postinstall applies the api-only @fastify/otel patch via
+# patch-package — a root devDependency this filtered workspace install does
+# not install (and @fastify/otel is absent from this image's tree), so the
+# hook would fail with `patch-package: not found`. Drop it in-image; the
+# dependencies' own lifecycle scripts still run. Lockfile validation is
+# unaffected (npm ci validates deps, not scripts). The nested mobile-app
+# `npm ci` below has its own lockfile and no postinstall — untouched.
+RUN node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));delete p.scripts.postinstall;fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
 COPY tsconfig.base.json ./
 # All workspace manifests must exist so `npm ci` can validate the lockfile,
 # even though this image only builds device-protocol + shared (+ the
@@ -44,12 +52,22 @@ COPY packages/mobile-app/ packages/mobile-app/
 ARG EXPO_PUBLIC_API_URL
 ARG EXPO_PUBLIC_AUTH_ORIGIN
 ARG EXPO_BASE_URL=/mobile
+# Sentry (mobile project DSN — distinct from the api's SENTRY_DSN and web's
+# NEXT_PUBLIC_SENTRY_DSN). Must be set BEFORE `npx expo export`:
+# babel-preset-expo inlines EXPO_PUBLIC_* into the exported bundle, and the
+# final nginx image is static — there is no runtime env at all.
+ARG EXPO_PUBLIC_SENTRY_DSN
+ARG EXPO_PUBLIC_SENTRY_ENVIRONMENT
+ARG EXPO_PUBLIC_SENTRY_TRACES_SAMPLE_RATE
 ENV EXPO_PUBLIC_API_URL=${EXPO_PUBLIC_API_URL}
 # Public origin Better Auth is mounted on. Optional: defaults to the API origin
 # when unset (fine for same-origin deploys); set it when the browser-facing
 # public origin differs from the internal API origin.
 ENV EXPO_PUBLIC_AUTH_ORIGIN=${EXPO_PUBLIC_AUTH_ORIGIN}
 ENV EXPO_BASE_URL=${EXPO_BASE_URL}
+ENV EXPO_PUBLIC_SENTRY_DSN=${EXPO_PUBLIC_SENTRY_DSN}
+ENV EXPO_PUBLIC_SENTRY_ENVIRONMENT=${EXPO_PUBLIC_SENTRY_ENVIRONMENT}
+ENV EXPO_PUBLIC_SENTRY_TRACES_SAMPLE_RATE=${EXPO_PUBLIC_SENTRY_TRACES_SAMPLE_RATE}
 ENV NODE_ENV=production
 
 WORKDIR /app/packages/mobile-app
