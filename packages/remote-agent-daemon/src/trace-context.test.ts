@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { test } from "node:test"
 import {
   activeWireTraceFields,
@@ -7,6 +8,7 @@ import {
   isValidTraceparent,
   runWithCarrier,
   runWithoutCarrier,
+  sanitizeTracestateHeader,
   traceIdOf,
 } from "./trace-context.js"
 
@@ -93,4 +95,65 @@ test("traceIdOf / isValidTraceparent follow the pinned §3c contract", () => {
   assert.equal(isValidTraceparent(TP), true)
   assert.equal(isValidTraceparent(TP.toUpperCase()), false)
   assert.equal(isValidTraceparent(null), false)
+})
+
+// The SAME cross-language golden vectors the shared/Go/Rust tests read (test-
+// only, monorepo-relative — the published bin is untouched). Proves the daemon
+// duplicate returns verdicts byte-identical to the canonical gate.
+type CarrierVectors = {
+  traceparent: Array<{ v: string; accept: boolean; note: string }>
+  tracestate: Array<{
+    v: string
+    gate: boolean
+    capOnly: boolean
+    note: string
+  }>
+}
+const vectors = JSON.parse(
+  readFileSync(
+    new URL("../../shared/src/utils/traceparent-vectors.json", import.meta.url),
+    "utf8"
+  )
+) as CarrierVectors
+
+test("golden vectors: the daemon carrier gate matches the canonical gate", () => {
+  for (const { v, accept, note } of vectors.traceparent) {
+    assert.equal(
+      isValidTraceparent(v),
+      accept,
+      `traceparent ${note}: ${JSON.stringify(v)}`
+    )
+  }
+  for (const { v, gate, note } of vectors.tracestate) {
+    assert.equal(
+      sanitizeTracestateHeader(v) !== undefined,
+      gate,
+      `tracestate ${note}: ${JSON.stringify(v)}`
+    )
+  }
+})
+
+// The cap/member branches of THIS duplicate, asserted inline so they never
+// depend solely on the shared JSON being present + carrying those categories
+// (anti-drift belt-and-braces — a golden vector could be deleted upstream and
+// the byte guard would not notice a member-count regression here).
+test("daemon gate: >32 non-empty members and >512 chars both drop the whole header", () => {
+  // 33 non-empty members > MAX_TRACESTATE_MEMBERS (32): rejected on member
+  // count even though every member is individually legal and the header fits
+  // well under the length cap.
+  const overMembers = Array.from({ length: 33 }, (_, i) => `k${i}=v`).join(",")
+  assert.ok(
+    overMembers.length < 512,
+    "member-count fixture must stay under the length cap"
+  )
+  assert.equal(sanitizeTracestateHeader(overMembers), undefined)
+  // Exactly 32 members is still accepted (the boundary is inclusive).
+  const atMembers = Array.from({ length: 32 }, (_, i) => `k${i}=v`).join(",")
+  assert.equal(sanitizeTracestateHeader(atMembers), atMembers)
+
+  // 513 chars > MAX_TRACESTATE_LENGTH (512), two otherwise-valid members:
+  // rejected on length alone.
+  const overLength = `a=${"v".repeat(254)},b=${"v".repeat(254)}`
+  assert.equal(overLength.length, 513)
+  assert.equal(sanitizeTracestateHeader(overLength), undefined)
 })

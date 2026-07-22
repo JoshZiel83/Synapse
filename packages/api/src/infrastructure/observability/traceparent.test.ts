@@ -5,15 +5,21 @@ import {
   trace,
   ROOT_CONTEXT,
   TraceFlags,
+  type Context,
+  type TextMapGetter,
   type TraceState,
 } from "@opentelemetry/api"
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks"
 import {
+  TraceState as TraceStateImpl,
+  W3CTraceContextPropagator,
+} from "@opentelemetry/core"
+import {
   activeTraceCarrier,
   activeTraceparent,
   activeTracestate,
+  extractTraceCarrierContext,
   isValidTraceparent,
-  sanitizeTracestateHeader,
 } from "./traceparent.js"
 
 assert.ok(
@@ -22,39 +28,68 @@ assert.ok(
   )
 )
 
-test("stage 2 passes legitimate vendor lists verbatim", () => {
-  for (const header of [
-    "es=s:1.0",
-    "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7",
-    "tenant@system=1", // multi-tenant key form
-    "foo=bar,", // trailing empty member is spec-VALID (OWS alternative)
-    "foo=bar, baz=qux ", // OWS around members
-    "foo=bar,\tbaz=qux", // HTAB is OWS too
-    "a= b", // leading space inside a value is grammar-valid chr
-  ]) {
-    assert.equal(sanitizeTracestateHeader(header), header)
-  }
+// The full ABNF gate (sanitizeTracestateHeader) is exercised in the shared
+// package's traceparent.test.ts — the single implementation now lives there and
+// api re-exports it. Here we cover the api-only OTel-typed pieces: stage-1
+// Sentry stripping + active*, and stage-3 transport-salvage detection.
+
+const carrierPropagator = new W3CTraceContextPropagator()
+const STAGE3_TP = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+test("stage 3: a clean tracestate survives extract intact", () => {
+  const ctx = extractTraceCarrierContext(
+    ROOT_CONTEXT,
+    { traceparent: STAGE3_TP, tracestate: "ok=1,congo=t61" },
+    carrierPropagator
+  )
+  const sc = trace.getSpanContext(ctx)
+  assert.equal(sc?.traceId, "4bf92f3577b34da6a3ce929d0e0e4736")
+  assert.equal(sc?.traceState?.get("ok"), "1")
+  assert.equal(sc?.traceState?.get("congo"), "t61")
 })
 
-test("stage 2 drops the WHOLE header on any invalid member", () => {
-  for (const header of [
-    "sentry.dsc=trace_id=1", // `.` in key AND `=` in value
-    "othervendor=xyz,sentry.url=http://x", // one bad member poisons all
-    "a=b=c", // `=` in value
-    "Foo=bar", // uppercase key
-    "foobar", // no `=`
-    "日=1", // non-ASCII
-    "foo=bar,\nbaz=qux", // \n is NOT OWS — no String.trim() masking
-    `long=${"x".repeat(257)}`, // value over the 256-char ABNF bound
-    Array.from({ length: 33 }, (_, i) => `k${i}=v`).join(","), // >32 members
-  ]) {
-    assert.equal(sanitizeTracestateHeader(header), undefined, header)
-  }
+test("stage 3: a Level-2-only key the transport salvages drops the tracestate WHOLE, traceId kept", () => {
+  // `1abc` is gate-legal at Level 2 but OTel-JS validates keys at Level 1 and
+  // drops it, salvaging `ok=1,1abc=2` to `ok=1`. Stage 3 must drop the whole
+  // tracestate rather than re-mint the partially salvaged one — the traceparent
+  // (and the traceId) survives.
+  const ctx = extractTraceCarrierContext(
+    ROOT_CONTEXT,
+    { traceparent: STAGE3_TP, tracestate: "ok=1,1abc=2" },
+    carrierPropagator
+  )
+  const sc = trace.getSpanContext(ctx)
+  assert.equal(sc?.traceId, "4bf92f3577b34da6a3ce929d0e0e4736")
+  assert.equal(sc?.traceState, undefined)
 })
 
-test("stage 2 degrades headers with no key=value member to undefined", () => {
-  assert.equal(sanitizeTracestateHeader(""), undefined)
-  assert.equal(sanitizeTracestateHeader(" , ,"), undefined)
+test("stage 3: members ADDED on extract (Sentry composite) are not mistaken for salvage", () => {
+  // A composite that ADDS a member on extract must not trip the key-presence
+  // check — every GATED key still survives, so the tracestate is kept.
+  const addingPropagator = {
+    extract(
+      base: Context,
+      carrier: Record<string, string>,
+      getter: TextMapGetter<Record<string, string>>
+    ): Context {
+      const ctx = carrierPropagator.extract(base, carrier, getter)
+      const sc = trace.getSpanContext(ctx)
+      if (!sc) return ctx
+      const withAddition = (sc.traceState ?? new TraceStateImpl()).set(
+        "sentry",
+        "x"
+      )
+      return trace.setSpanContext(ctx, { ...sc, traceState: withAddition })
+    },
+  }
+  const ctx = extractTraceCarrierContext(
+    ROOT_CONTEXT,
+    { traceparent: STAGE3_TP, tracestate: "ok=1" },
+    addingPropagator
+  )
+  const sc = trace.getSpanContext(ctx)
+  assert.equal(sc?.traceState?.get("ok"), "1")
+  assert.equal(sc?.traceState?.get("sentry"), "x")
 })
 
 function withNonRecordingSpan<T>(
@@ -97,8 +132,8 @@ test("activeTracestate: stage 1 → serialize → stage 2 → cap", () => {
   )
   assert.equal(carried, "othervendor=xyz")
 
-  // > 1024 chars of individually-valid members degrades to absent — no
-  // member-boundary truncation.
+  // > 512 chars of individually-valid members degrades to absent — no
+  // member-boundary truncation (the cap now lives inside the gate).
   const oversized = Object.fromEntries(
     Array.from({ length: 5 }, (_, i) => [`k${i}`, "v".repeat(250)])
   )

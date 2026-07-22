@@ -48,15 +48,23 @@ test("absent / malformed / non-string traceparent ⇒ ROOT_CONTEXT (degrade-not-
   assert.equal(extractEnvelopeTraceContext(undefined), ROOT_CONTEXT)
 })
 
-test("oversized / non-string tracestate drops the FIELD but keeps the traceparent", () => {
-  const oversized = extractEnvelopeTraceContext({
-    traceparent: VALID_TRACEPARENT,
-    tracestate: `v=${"x".repeat(1024)}`,
-  })
-  const sc = trace.getSpanContext(oversized)
-  assert.ok(sc)
-  assert.equal(sc.traceId, TRACE_ID)
-  assert.equal(sc.traceState?.serialize() || "", "")
+test("over-512 / grammar-invalid / duplicate-key / non-string tracestate drops the FIELD but keeps the traceparent", () => {
+  // 513 chars — one past the gate's cap.
+  for (const bad of [
+    `v=${"x".repeat(512)}`, // 514 chars, over the cap
+    "Foo=bar", // uppercase key (grammar-invalid)
+    "ok=1,ok=2", // duplicate key (Level 2 MUST)
+    "a=b=c", // `=` in value
+  ]) {
+    const ctx = extractEnvelopeTraceContext({
+      traceparent: VALID_TRACEPARENT,
+      tracestate: bad,
+    })
+    const sc = trace.getSpanContext(ctx)
+    assert.ok(sc, bad)
+    assert.equal(sc.traceId, TRACE_ID, bad)
+    assert.equal(sc.traceState?.serialize() || "", "", bad)
+  }
 
   const nonString = extractEnvelopeTraceContext({
     traceparent: VALID_TRACEPARENT,
@@ -66,6 +74,19 @@ test("oversized / non-string tracestate drops the FIELD but keeps the traceparen
   assert.ok(sc2)
   assert.equal(sc2.traceId, TRACE_ID)
   assert.equal(sc2.traceState?.serialize() || "", "")
+})
+
+test("a Level-2-only key the transport salvages drops the tracestate WHOLE, traceparent kept", () => {
+  // `1abc` is gate-legal but OTel-JS drops it per-member; stage 3 (via
+  // extractTraceCarrierContext inside the helper) must drop the whole field.
+  const ctx = extractEnvelopeTraceContext({
+    traceparent: VALID_TRACEPARENT,
+    tracestate: "ok=1,1abc=2",
+  })
+  const sc = trace.getSpanContext(ctx)
+  assert.ok(sc)
+  assert.equal(sc.traceId, TRACE_ID)
+  assert.equal(sc.traceState?.serialize() || "", "")
 })
 
 test("a 5KB hostile traceparent degrades cleanly (batch-poisoning guard)", () => {

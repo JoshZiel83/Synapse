@@ -60,24 +60,29 @@ pub fn init_tracing() -> Option<SdkTracerProvider> {
     Some(provider)
 }
 
-// ─── §3c carrier contract (sanctioned literal duplicate) ────────────────────
+// ─── synapse-trace-contract v2 (sanctioned literal duplicate) ───────────────
 //
-// Canonical artifact: `packages/shared/src/utils/traceparent.ts` — this file
-// is one of the sanctioned duplicates on that artifact's sync list. The
-// contract pinned there (mirror any change byte-for-byte):
+// Canonical artifact: packages/shared/src/utils/traceparent.ts. The guard
+// scripts/guard-trace-propagation.mjs (rule carrier_contract_drift) byte-
+// compares the two values below against the canonical file and asserts the
+// numeric const matches. Mirror any change to the canonical file here:
 //
 //   TRACEPARENT_RE = /^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$/
-//   MAX_TRACESTATE_LENGTH = 1024
+//   MAX_TRACESTATE_LENGTH = 512
 //
-// Rust has no lookahead in `std` (and this crate carries no regex dep), so
-// `valid_traceparent` below implements EXACTLY that regex — strict version-00,
-// lowercase hex, all-zero trace-id/span-id rejected — by character checks.
-// Receiver rule (§3c): a malformed/oversized value degrades to ABSENT (root
-// span), it never rejects the frame; `tracestate` is honored only alongside a
-// valid `traceparent` and only up to MAX_TRACESTATE_LENGTH. The
-// TraceContextPropagator downstream re-validates as W3C defense-in-depth.
+// This helper pins ONLY traceparent + the 512 cap: opentelemetry 0.32.0's
+// TraceState::from_str drops the WHOLE tracestate on any parse error while
+// keeping the traceparent — exactly our whole-or-nothing contract — so
+// re-implementing the ABNF here would be drift for no gain. (Divergences from
+// the canonical gate, documented in docs/trace-propagation-policy.md:
+// opentelemetry 0.32.0 does NOT reject duplicate keys and enforces NO member
+// cap.) Rust has no lookahead in `std` (no regex dep), so `valid_traceparent`
+// rejects the all-zero trace-id/span-id by character checks instead of via
+// (?!0{32}). Receiver rule: a malformed/oversized value degrades to ABSENT
+// (root span); `tracestate` is honored only alongside a valid `traceparent`
+// and only up to MAX_TRACESTATE_LENGTH.
 
-const MAX_TRACESTATE_LENGTH: usize = 1024;
+const MAX_TRACESTATE_LENGTH: usize = 512;
 
 // One reusable extractor instance for the whole process (the propagator is
 // stateless, so per-RPC construction was a hot-path micro-allocation only).
@@ -176,7 +181,7 @@ mod tests {
         assert_eq!(
             accepted_tracestate(Some(&at_cap)),
             Some(at_cap.as_str()),
-            "a tracestate AT the cap (1024) is honored"
+            "a tracestate AT the cap (512) is honored"
         );
         let over = "a".repeat(MAX_TRACESTATE_LENGTH + 1);
         assert_eq!(
@@ -254,5 +259,47 @@ mod tests {
         assert!(!valid_traceparent(
             "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01-extra"
         ));
+    }
+
+    // Drives the SAME cross-language JSON the TS and Go tests read, so all three
+    // languages assert identical behaviour on identical inputs. `valid_traceparent`
+    // must match `accept`; `accepted_tracestate` (non-empty + within the cap — the
+    // ABNF whole-or-nothing is opentelemetry's job) must match `capOnly`. The read
+    // lives in `#[cfg(test)]`, so `cargo build` and the Docker image are unaffected.
+    #[test]
+    fn golden_vectors_match_the_shared_json() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/shared/src/utils/traceparent-vectors.json"
+        );
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("read golden vectors {path}: {e}"));
+        let vectors: serde_json::Value = serde_json::from_str(&raw).expect("parse vectors");
+
+        let tps = vectors["traceparent"].as_array().expect("traceparent array");
+        assert!(!tps.is_empty(), "traceparent vectors empty");
+        for v in tps {
+            let value = v["v"].as_str().unwrap();
+            let accept = v["accept"].as_bool().unwrap();
+            assert_eq!(
+                valid_traceparent(value),
+                accept,
+                "traceparent {value:?} ({})",
+                v["note"].as_str().unwrap_or("")
+            );
+        }
+
+        let tss = vectors["tracestate"].as_array().expect("tracestate array");
+        assert!(!tss.is_empty(), "tracestate vectors empty");
+        for v in tss {
+            let value = v["v"].as_str().unwrap();
+            let cap_only = v["capOnly"].as_bool().unwrap();
+            assert_eq!(
+                accepted_tracestate(Some(value)).is_some(),
+                cap_only,
+                "tracestate {value:?} ({})",
+                v["note"].as_str().unwrap_or("")
+            );
+        }
     }
 }

@@ -25,23 +25,35 @@ export type TraceCarrier = {
   tracestate?: string
 }
 
-/**
- * Strict version-00 traceparent — a sanctioned LITERAL DUPLICATE of the
- * canonical artifact `packages/shared/src/utils/traceparent.ts` (the daemon is
- * an independently published bin with no `@synapse/shared` dependency; it is
- * listed in that file's JSDoc sync list — any change there must be mirrored
- * byte-for-byte here). All-zero trace-id / span-id are rejected per W3C
- * trace-context §3.2. A valid value is exactly 55 characters.
- */
+// ─── synapse-trace-contract v2 (sanctioned literal duplicate) ───────────────
+//
+// Canonical artifact: packages/shared/src/utils/traceparent.ts. The daemon is
+// an independently published bin with NO `@synapse/shared` dependency, so the
+// carrier gate is re-declared here. scripts/guard-trace-propagation.mjs (rule
+// carrier_contract_drift) byte-compares every NAME below against the canonical
+// file AND against this file's real code, so drift fails CI; the shared golden
+// vectors (traceparent-vectors.json) are asserted from this file's tests too.
+// Mirror any change to the canonical file here, byte-for-byte:
+//
+//   TRACEPARENT_RE = /^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$/
+//   MAX_TRACESTATE_LENGTH = 512
+//   MAX_TRACESTATE_MEMBERS = 32
+//   TRACESTATE_KEY_RE = /^[a-z0-9][a-z0-9_\-*/@]{0,255}$/
+//   TRACESTATE_VALUE_RE = /^[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]$/
+//
+// TRACEPARENT_RE: strict version-00, all-zero trace-id/span-id rejected per W3C
+// §3.2 (a valid value is exactly 55 chars). 512 is OTel-JS core's
+// MAX_TRACE_STATE_LEN and the W3C §3.3.1 MUST-propagate floor; TRACESTATE_KEY_RE
+// is the W3C **Level 2** key grammar (`@` a plain keychar). Receiver rule: a
+// malformed value degrades to ABSENT — it never rejects the frame it rides on.
 export const TRACEPARENT_RE =
   /^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$/
-
-/**
- * Uniform cap on a serialized `tracestate` header (W3C trace-context §3.3.1's
- * smallest MUST-support size; same value as the canonical artifact). An
- * oversized value degrades to absent — never rejects the frame it rides on.
- */
-export const MAX_TRACESTATE_LENGTH = 1024
+export const MAX_TRACESTATE_LENGTH = 512
+export const MAX_TRACESTATE_MEMBERS = 32
+const TRACESTATE_KEY_RE = /^[a-z0-9][a-z0-9_\-*/@]{0,255}$/
+const TRACESTATE_VALUE_RE =
+  /^[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]$/
+const MEMBER_OWS_RE = /^[ \t]+|[ \t]+$/g
 
 /** True iff `value` is a strict version-00 traceparent (see TRACEPARENT_RE). */
 export function isValidTraceparent(value: unknown): value is string {
@@ -55,6 +67,37 @@ export function isValidTraceparent(value: unknown): value is string {
  */
 export function traceIdOf(traceparent: string): string | undefined {
   return TRACEPARENT_RE.test(traceparent) ? traceparent.slice(3, 35) : undefined
+}
+
+/**
+ * THE tracestate gate — byte-identical to the canonical
+ * `sanitizeTracestateHeader`: whole-or-nothing W3C Level-2 validation (≤512
+ * chars, key/value ABNF, no duplicate keys, ≤32 non-empty members). Returns
+ * `raw` verbatim when clean, `undefined` on any defect (partial salvage is the
+ * corruption vector). Empty/OWS-only members are spec-valid and not counted.
+ */
+export function sanitizeTracestateHeader(raw: string): string | undefined {
+  if (raw.length > MAX_TRACESTATE_LENGTH) return undefined
+  const seen = new Set<string>()
+  let nonEmpty = 0
+  for (const member of raw.split(",")) {
+    const m = member.replace(MEMBER_OWS_RE, "")
+    if (m === "") continue
+    const eq = m.indexOf("=")
+    if (eq === -1) return undefined
+    const key = m.slice(0, eq)
+    if (
+      !TRACESTATE_KEY_RE.test(key) ||
+      !TRACESTATE_VALUE_RE.test(m.slice(eq + 1))
+    ) {
+      return undefined
+    }
+    if (seen.has(key)) return undefined
+    seen.add(key)
+    nonEmpty += 1
+    if (nonEmpty > MAX_TRACESTATE_MEMBERS) return undefined
+  }
+  return nonEmpty > 0 ? raw : undefined
 }
 
 /**

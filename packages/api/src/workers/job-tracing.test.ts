@@ -574,6 +574,54 @@ test("withJobSpan: consumer span parents DIRECTLY to a real sendWithProducerSpan
   )
 })
 
+test("withJobSpan: an invalid/duplicate/oversized/Level-2-only __otelctx.tracestate continues the producer trace with the tracestate dropped WHOLE", async () => {
+  const TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+  const traceId = "0af7651916cd43dd8448eb211c80319c"
+  for (const bad of [
+    "Foo=bar", // grammar-invalid: gated out before extract
+    "ok=1,ok=2", // duplicate key: gated out before extract
+    `v=${"x".repeat(512)}`, // over the 512 cap: gated out before extract
+    "ok=1,1abc=2", // Level-2-only key: passes the gate, OTel-JS salvages, stage 3 drops
+  ]) {
+    tickExporter.reset()
+    const wrapped = withJobSpan("test-queue", async () => "done")
+    await wrapped(
+      stubJob({ data: { __otelctx: { traceparent: TP, tracestate: bad } } })
+    )
+    const consumer = tickExporter
+      .getFinishedSpans()
+      .find((s) => s.name === "process test-queue")
+    assert.ok(consumer, bad)
+    assert.equal(
+      consumer.spanContext().traceId,
+      traceId,
+      `continues producer trace: ${bad}`
+    )
+    assert.equal(
+      consumer.spanContext().traceState?.serialize() || "",
+      "",
+      `tracestate dropped whole (never partially salvaged): ${bad}`
+    )
+  }
+})
+
+test("withJobSpan: a CLEAN __otelctx.tracestate rides through to the consumer span", async () => {
+  const TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+  tickExporter.reset()
+  const wrapped = withJobSpan("test-queue", async () => "done")
+  await wrapped(
+    stubJob({
+      data: { __otelctx: { traceparent: TP, tracestate: "ok=1,congo=t61" } },
+    })
+  )
+  const consumer = tickExporter
+    .getFinishedSpans()
+    .find((s) => s.name === "process test-queue")
+  assert.ok(consumer)
+  assert.equal(consumer.spanContext().traceState?.get("ok"), "1")
+  assert.equal(consumer.spanContext().traceState?.get("congo"), "t61")
+})
+
 test("withJobSpan: semconv attribute names — operation.type/name present, deprecated bare messaging.operation absent", async () => {
   tickExporter.reset()
   const wrapped = withJobSpan("test-queue", async () => undefined)

@@ -11,10 +11,14 @@
 // message spans onto connection-lifetime state. A frame without (or with an
 // invalid) carrier gets a fresh root, full stop.
 
-import { propagation, ROOT_CONTEXT, type Context } from "@opentelemetry/api"
-import { MAX_TRACESTATE_LENGTH, type TraceCarrier } from "@synapse/shared"
+import { ROOT_CONTEXT, type Context } from "@opentelemetry/api"
+import type { TraceCarrier } from "@synapse/shared"
 import { createLogger } from "../logger/index.js"
-import { isValidTraceparent } from "./traceparent.js"
+import {
+  extractTraceCarrierContext,
+  isValidTraceparent,
+  sanitizeTracestateHeader,
+} from "./traceparent.js"
 
 const log = createLogger("server.ws")
 
@@ -45,14 +49,16 @@ function warnInvalidFieldOnce(
 
 /**
  * Per-message context from an envelope's optional `{traceparent, tracestate}`
- * fields: re-validate against the canonical strict regex (defense-in-depth —
- * the control-plane hands RAW pre-zod params in here; the zod fragments have
- * already `.catch(undefined)`-degraded parsed envelopes), then
- * `propagation.extract(ROOT_CONTEXT, carrier)` through the global propagator
- * (under Sentry-ON that is the composite behind FirstPartyOnlyPropagator,
- * whose extract delegates unconditionally — probe P-D2). Anything invalid ⇒
- * `ROOT_CONTEXT`; a malformed tracestate drops the FIELD, never the
- * traceparent (degrade-not-reject, §4.F).
+ * fields: re-validate the traceparent against the canonical strict regex, run
+ * the tracestate through the canonical gate (`sanitizeTracestateHeader`:
+ * Level-2 ABNF, no duplicate keys, ≤32 members, ≤512 chars), then extract via
+ * `extractTraceCarrierContext(ROOT_CONTEXT, carrier)`. This is defence-in-depth
+ * — the control-plane hands RAW pre-zod params in here; the zod fragments have
+ * already `.catch(undefined)`-degraded parsed envelopes — AND the stage-3
+ * salvage guard: a gated key OTel-JS still drops per-member causes the whole
+ * tracestate to fall away rather than re-mint partially salvaged. Anything
+ * invalid ⇒ `ROOT_CONTEXT`; a malformed tracestate drops the FIELD, never the
+ * traceparent (degrade-not-reject).
  */
 export function extractEnvelopeTraceContext(envelope: unknown): Context {
   if (typeof envelope !== "object" || envelope === null) return ROOT_CONTEXT
@@ -63,15 +69,14 @@ export function extractEnvelopeTraceContext(envelope: unknown): Context {
     return ROOT_CONTEXT
   }
   const carrier: TraceCarrier = { traceparent }
-  if (
-    typeof tracestate === "string" &&
-    tracestate.length <= MAX_TRACESTATE_LENGTH
-  ) {
-    carrier.tracestate = tracestate
+  if (typeof tracestate === "string") {
+    const gated = sanitizeTracestateHeader(tracestate)
+    if (gated !== undefined) carrier.tracestate = gated
+    else warnInvalidFieldOnce("tracestate", tracestate)
   } else if (tracestate !== undefined) {
     warnInvalidFieldOnce("tracestate", tracestate)
   }
-  return propagation.extract(ROOT_CONTEXT, carrier)
+  return extractTraceCarrierContext(ROOT_CONTEXT, carrier)
 }
 
 /**

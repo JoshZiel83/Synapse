@@ -74,12 +74,19 @@ test("traceContextFromMeta: tracestate WITHOUT a valid traceparent is dropped wh
   )
 })
 
-test("traceContextFromMeta: oversized tracestate (>1024) degrades to traceparent-only", () => {
-  const carrier = traceContextFromMeta({
-    traceparent: VALID_TP,
-    tracestate: `vendor=${"x".repeat(1024)}`,
-  })
-  assert.deepEqual(carrier, { traceparent: VALID_TP })
+test("traceContextFromMeta: over-512 / grammar-invalid / duplicate-key tracestate degrades to traceparent-only", () => {
+  for (const bad of [
+    `vendor=${"x".repeat(512)}`, // 519 chars, over the 512 cap
+    "Foo=bar", // uppercase key (grammar-invalid)
+    "ok=1,ok=2", // duplicate key (Level 2 MUST)
+    "a=b=c", // `=` in value
+  ]) {
+    assert.deepEqual(
+      traceContextFromMeta({ traceparent: VALID_TP, tracestate: bad }),
+      { traceparent: VALID_TP },
+      bad
+    )
+  }
 })
 
 test("traceContextFromMeta: non-string / empty tracestate degrades to traceparent-only", () => {

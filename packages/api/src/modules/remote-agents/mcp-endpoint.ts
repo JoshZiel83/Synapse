@@ -20,7 +20,6 @@ import {
   context,
   defaultTextMapGetter,
   isSpanContextValid,
-  propagation,
   ROOT_CONTEXT,
   SpanKind,
   SpanStatusCode,
@@ -76,9 +75,13 @@ import { listPendingDeliveryRefs, getConversationTypeFacts } from "./repo.js"
 import { requireRemoteAgentConversationAccessOnDefaultDb } from "../chat/remote-agent-bridge.js"
 import { projectToolsForPrincipal } from "../capability-projection/index.js"
 import { createLogger } from "../../infrastructure/logger/index.js"
-import { isValidTraceparent } from "../../infrastructure/observability/traceparent.js"
+import {
+  extractTraceCarrierContext,
+  isValidTraceparent,
+  sanitizeTracestateHeader,
+} from "../../infrastructure/observability/traceparent.js"
 import { linkUpstreamTraces } from "../../workers/job-tracing.js"
-import { MAX_TRACESTATE_LENGTH, type TraceCarrier } from "@synapse/shared"
+import type { TraceCarrier } from "@synapse/shared"
 
 const log = createLogger("remote-agent.mcp")
 const tracer = trace.getTracer("synapse-remote-agent-mcp")
@@ -508,17 +511,16 @@ function toolCallParentContext(meta: unknown): {
 } {
   if (isRecord(meta) && isValidTraceparent(meta.traceparent)) {
     const carrier: TraceCarrier = { traceparent: meta.traceparent }
-    if (
-      typeof meta.tracestate === "string" &&
-      meta.tracestate.length > 0 &&
-      meta.tracestate.length <= MAX_TRACESTATE_LENGTH
-    ) {
-      carrier.tracestate = meta.tracestate
+    if (typeof meta.tracestate === "string") {
+      const gated = sanitizeTracestateHeader(meta.tracestate)
+      if (gated !== undefined) carrier.tracestate = gated
     }
     // Global-propagator extract is the sanctioned receiver path (P-D2: the
-    // Sentry-ON composite extracts a plain carrier correctly).
+    // Sentry-ON composite extracts a plain carrier correctly), wrapped by
+    // stage 3 so a Level-2-only key OTel-JS salvages drops the tracestate whole
+    // rather than parenting under a partially-repaired header.
     return {
-      parentContext: propagation.extract(ROOT_CONTEXT, carrier),
+      parentContext: extractTraceCarrierContext(ROOT_CONTEXT, carrier),
       kind: SpanKind.SERVER,
     }
   }

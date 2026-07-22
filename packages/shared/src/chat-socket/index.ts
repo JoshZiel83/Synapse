@@ -26,6 +26,8 @@
  * own), and the core only ever reads `event.data`. Typing them loosely lets a raw
  * `new WebSocket(url)` be passed to `connect` from either platform with no cast.
  */
+import { sanitizeTracestateHeader } from "../utils/traceparent.js"
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface SocketLike {
   send(data: string): void
@@ -203,6 +205,12 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
    * send time so each frame carries the trace that was active when it was sent.
    * Empty when no context is available — the field simply stays off the frame
    * (the server-side envelope schema treats absent as "fresh root").
+   *
+   * This is a MINT point, and every mint point runs the canonical tracestate
+   * gate: `tracestate` is stamped only when it passes `sanitizeTracestateHeader`
+   * (Level-2 ABNF, no duplicate keys, ≤32 members, ≤512 chars). Web/mobile mint
+   * no tracestate today, so this is defence-in-depth — but it keeps the
+   * "every mint gates" invariant true without exception.
    */
   function traceContextFields(): Partial<ChatSocketTraceContext> {
     const carrier = deps.getTraceContext?.()
@@ -210,7 +218,10 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
     const fields: Partial<ChatSocketTraceContext> = {
       traceparent: carrier.traceparent,
     }
-    if (carrier.tracestate) fields.tracestate = carrier.tracestate
+    if (carrier.tracestate) {
+      const gated = sanitizeTracestateHeader(carrier.tracestate)
+      if (gated !== undefined) fields.tracestate = gated
+    }
     return fields
   }
 

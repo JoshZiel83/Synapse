@@ -84,21 +84,25 @@ type rpcRequest struct {
 	Tracestate  string `json:"tracestate,omitempty"`
 }
 
-// ─── §3c carrier contract (sanctioned literal duplicate) ────────────────────
+// ─── synapse-trace-contract v2 (sanctioned literal duplicate) ───────────────
 //
-// Canonical artifact: `packages/shared/src/utils/traceparent.ts` — this file
-// is one of the sanctioned duplicates on that artifact's sync list. The
-// contract pinned there (mirror any change byte-for-byte):
+// Canonical artifact: packages/shared/src/utils/traceparent.ts. The guard
+// scripts/guard-trace-propagation.mjs (rule carrier_contract_drift) byte-
+// compares the two values below against the canonical file and asserts the
+// numeric const matches. Mirror any change to the canonical file here:
 //
 //	TRACEPARENT_RE = /^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$/
-//	MAX_TRACESTATE_LENGTH = 1024
+//	MAX_TRACESTATE_LENGTH = 512
 //
-// Go's regexp (RE2) has no lookahead, so the shape is compiled without the
-// all-zero guards and validTraceparent rejects the all-zero trace-id/span-id
-// explicitly. Receiver rule (§3c): a malformed/oversized value degrades to
-// ABSENT (root span); tracestate is honored only alongside a valid
-// traceparent and only up to maxTracestateLength.
-const maxTracestateLength = 1024
+// This helper pins ONLY traceparent + the 512 cap: go.opentelemetry.io/otel's
+// ParseTraceState already enforces the tracestate ABNF at Level 1, whole-or-
+// nothing, with errDuplicate and a 32-member cap, the moment the propagator
+// extracts — so re-implementing the key/value grammar here would be drift for
+// no gain. Go's RE2 has no lookahead, so validTraceparent rejects the all-zero
+// trace-id/span-id explicitly instead of via (?!0{32}). Receiver rule: a
+// malformed/oversized value degrades to ABSENT (root span); tracestate is
+// honored only alongside a valid traceparent and only up to maxTracestateLength.
+const maxTracestateLength = 512
 
 var traceparentShapeRe = regexp.MustCompile(
 	`^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$`,

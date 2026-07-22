@@ -43,6 +43,9 @@ npm run guard:layering -w packages/api
 node ./scripts/guard-datetime-boundaries.mjs
 node ./scripts/guard-logging.mjs
 node ./scripts/guard-trace-propagation.mjs
+# Self-test the carrier-contract engine so a future refactor that silently stops
+# detecting ledger drift is caught here rather than passing CI with a dead ratchet.
+node --test ./scripts/guard-trace-propagation.test.mjs
 # patches/@fastify+otel+0.19.0.patch must be applied to the installed tree
 # (postinstall runs `patch-package --error-on-fail`, but a dependency bump
 # whose stale patch still applies cleanly only warns — this pins the marker).
@@ -110,7 +113,16 @@ else
   # seams (Node 22 gates mock.module behind this flag; it only enables the API).
   ( cd packages/api && npx tsx --test --experimental-test-module-mocks --test-concurrency=4 "src/**/*.test.ts" )
   npm run test -w packages/web-next
-  ok "test suites pass"
+  # Cross-language carrier-contract golden vectors (workstream F, adjudication
+  # R8): run the SHARED packages/shared/src/utils/traceparent-vectors.json
+  # THROUGH the Go (cua) and Rust (fs-helper) helper code, so behaviour — not
+  # just the regex TEXT that guard-trace-propagation.mjs byte-compares — stays
+  # identical across all three languages. Neither `go test` nor `cargo test` ran
+  # in this gate before, so the cross-language assertions were never executed.
+  step "test: go (sidecars/cua) + cargo (sidecars/fs-helper) carrier vectors"
+  ( cd sidecars/cua && go test ./... )
+  ( cd sidecars/fs-helper && cargo test )
+  ok "cross-language carrier-contract tests pass"
 fi
 
 printf '\n\033[1;32m✓ verify:boundary passed\033[0m\n'

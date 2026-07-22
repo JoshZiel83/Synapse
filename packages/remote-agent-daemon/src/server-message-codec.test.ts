@@ -216,26 +216,33 @@ test("parseServerMessage degrades malformed/oversized trace fields without dropp
     )
   }
 
-  // Oversized tracestate (cap 1024) degrades; the valid traceparent survives.
-  const deliver = parseServerMessage(
-    JSON.stringify({
-      type: "agent:deliver",
-      deliveries: [
-        {
-          remote_agent_id: "agent-1",
-          delivery_id: "delivery-1",
-          conversation_id: "conversation-1",
-          item_id: "item-1",
-          traceparent: TP,
-          tracestate: "x".repeat(1025),
-        },
-      ],
-    })
-  )
-  assert.equal(deliver?.type, "agent:deliver")
-  if (deliver?.type === "agent:deliver") {
-    assert.equal(deliver.deliveries[0].traceparent, TP)
-    assert.equal(deliver.deliveries[0].tracestate, undefined)
+  // Over-512 / duplicate-key / grammar-invalid tracestate degrades the FIELD;
+  // the valid traceparent survives and the frame is never dropped.
+  for (const badTracestate of [
+    `v=${"x".repeat(512)}`, // 514 chars, over the 512 cap
+    "ok=1,ok=2", // duplicate key (Level 2 MUST)
+    "Foo=bar", // uppercase key (grammar-invalid)
+  ]) {
+    const deliver = parseServerMessage(
+      JSON.stringify({
+        type: "agent:deliver",
+        deliveries: [
+          {
+            remote_agent_id: "agent-1",
+            delivery_id: "delivery-1",
+            conversation_id: "conversation-1",
+            item_id: "item-1",
+            traceparent: TP,
+            tracestate: badTracestate,
+          },
+        ],
+      })
+    )
+    assert.equal(deliver?.type, "agent:deliver", badTracestate)
+    if (deliver?.type === "agent:deliver") {
+      assert.equal(deliver.deliveries[0].traceparent, TP, badTracestate)
+      assert.equal(deliver.deliveries[0].tracestate, undefined, badTracestate)
+    }
   }
 })
 

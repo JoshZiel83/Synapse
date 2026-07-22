@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import {
   isValidTraceparent,
-  MAX_TRACESTATE_LENGTH,
+  sanitizeTracestateHeader,
   type TraceCarrier,
 } from "@synapse/shared"
 import { createDeviceLogger } from "./logger.js"
@@ -18,10 +18,12 @@ import { createDeviceLogger } from "./logger.js"
  * string-only carrier — no OpenTelemetry SDK on this published bin.
  *
  * Validation is the canonical `@synapse/shared` artifact (strict version-00
- * regex, all-zero rejected; tracestate capped at MAX_TRACESTATE_LENGTH and
- * accepted only alongside a valid traceparent). Receiver rule (§3c): a
- * malformed value degrades to ABSENT — never rejected, never forwarded, never
- * logged raw.
+ * regex, all-zero rejected; tracestate through the full Level-2 gate
+ * `sanitizeTracestateHeader` — key/value ABNF, no duplicate keys, ≤32 members,
+ * ≤512 chars — and accepted only alongside a valid traceparent). Receiver rule:
+ * a malformed value degrades to ABSENT — never rejected, never forwarded, never
+ * logged raw. No extract happens here: the carrier is re-stamped onto JSON-RPC
+ * frames, where cua/fs-helper apply their own whole-or-nothing tracestate parse.
  */
 const store = new AsyncLocalStorage<TraceCarrier>()
 
@@ -58,9 +60,12 @@ function warnInvalidOnce(field: string, length: number): void {
 
 /**
  * Extract + validate a `{traceparent, tracestate?}` carrier from a tools/call
- * `_meta` object. Invalid/oversized values degrade to undefined (the frame is
- * never rejected for a trace field); tracestate is accepted only alongside a
- * valid traceparent and only up to MAX_TRACESTATE_LENGTH.
+ * `_meta` object. An invalid traceparent degrades the whole carrier to
+ * undefined (the frame is never rejected for a trace field); tracestate is
+ * accepted only alongside a valid traceparent and only when it passes the full
+ * gate (`sanitizeTracestateHeader`: Level-2 ABNF, no duplicate keys, ≤32
+ * members, ≤512 chars) — otherwise the tracestate drops and the traceparent
+ * still rides.
  */
 export function traceContextFromMeta(meta: unknown): TraceCarrier | undefined {
   if (!meta || typeof meta !== "object") return undefined
@@ -72,10 +77,11 @@ export function traceContextFromMeta(meta: unknown): TraceCarrier | undefined {
     return undefined
   }
   const ts = record["tracestate"]
-  if (typeof ts !== "string" || ts.length === 0) return { traceparent: tp }
-  if (ts.length > MAX_TRACESTATE_LENGTH) {
-    warnInvalidOnce("tracestate", ts.length)
+  if (typeof ts !== "string") return { traceparent: tp }
+  const gated = sanitizeTracestateHeader(ts)
+  if (gated === undefined) {
+    if (ts.length > 0) warnInvalidOnce("tracestate", ts.length)
     return { traceparent: tp }
   }
-  return { traceparent: tp, tracestate: ts }
+  return { traceparent: tp, tracestate: gated }
 }

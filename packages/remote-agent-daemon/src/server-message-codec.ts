@@ -1,12 +1,15 @@
 import { z } from "zod"
 import { RUNTIME_KINDS, type RuntimeKind } from "./drivers/types.js"
-import { isValidTraceparent, MAX_TRACESTATE_LENGTH } from "./trace-context.js"
+import {
+  isValidTraceparent,
+  sanitizeTracestateHeader,
+} from "./trace-context.js"
 
-// Degrade-not-reject trace fields (remediation plan §3c receiver rule): a
-// malformed or oversized value drops the FIELD, never the frame — a
-// frame-level parse failure here would drop deliveries. This also closes the
-// old accepts-empty-string weakness (an empty string is not a valid
-// traceparent, so it degrades to undefined).
+// Degrade-not-reject trace fields (receiver rule): a malformed, duplicate-keyed
+// or oversized value drops the FIELD, never the frame — a frame-level parse
+// failure here would drop deliveries. `tracestate` runs the full Level-2 gate
+// (`sanitizeTracestateHeader`), which also returns undefined for the empty
+// string, so the old accepts-empty-string weakness stays closed.
 const traceparentField = z
   .string()
   .optional()
@@ -17,11 +20,7 @@ const tracestateField = z
   .string()
   .optional()
   .transform((value) =>
-    value !== undefined &&
-    value.length > 0 &&
-    value.length <= MAX_TRACESTATE_LENGTH
-      ? value
-      : undefined
+    value !== undefined ? sanitizeTracestateHeader(value) : undefined
   )
 
 export type AgentStartMessage = {

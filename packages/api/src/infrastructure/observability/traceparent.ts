@@ -1,8 +1,17 @@
-import { isSpanContextValid, trace, type TraceState } from "@opentelemetry/api"
+import {
+  defaultTextMapGetter,
+  isSpanContextValid,
+  propagation,
+  trace,
+  type Context,
+  type TextMapPropagator,
+  type TraceState,
+} from "@opentelemetry/api"
 import {
   isValidTraceparent,
-  MAX_TRACESTATE_LENGTH,
+  sanitizeTracestateHeader,
   TRACEPARENT_RE,
+  tracestateKeys,
   type TraceCarrier,
 } from "@synapse/shared"
 
@@ -19,10 +28,13 @@ import {
  * under Sentry would serialize sentry-trace/baggage into message payloads and
  * Redis (the anti-PII precedent set by workers/job-tracing.ts).
  *
- * Validation is re-exported from `@synapse/shared` (the single in-repo regex);
- * api-side receivers import it from here.
+ * The tracestate GATE (`sanitizeTracestateHeader`) and traceparent regex are
+ * the single in-repo artifact in `@synapse/shared`; this file re-exports them
+ * so api-side receivers import from here. It adds only the OTel-typed pieces:
+ * the Sentry key stripping, `active*` minting, and the stage-3 salvage detector
+ * `extractTraceCarrierContext`.
  */
-export { isValidTraceparent, TRACEPARENT_RE }
+export { isValidTraceparent, sanitizeTracestateHeader, TRACEPARENT_RE }
 
 /**
  * W3C `traceparent` string for the active OTel span, or `undefined` when there
@@ -74,63 +86,51 @@ export function sanitizeTraceState(
   return sanitized.serialize() === "" ? undefined : sanitized
 }
 
-// W3C trace-context §3.3.2.2: key = simple-key / multi-tenant-key.
-const TRACESTATE_KEY_RE =
-  /^(?:[a-z][a-z0-9_\-*/]{0,255}|[a-z0-9][a-z0-9_\-*/]{0,240}@[a-z][a-z0-9_\-*/]{0,13})$/
-// value = 0*255(chr) nblk-chr — chr excludes `,` (0x2c) and `=` (0x3d), and the
-// last char additionally excludes space.
-const TRACESTATE_VALUE_RE =
-  /^[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]$/
-// OWS = *( SP / HTAB ) — deliberately NOT String.trim(), which would also
-// erase spec-invalid padding (\n, \v, …) and mask a malformed member.
-const MEMBER_OWS_RE = /^[ \t]+|[ \t]+$/g
-
 /**
- * Stage 2 (final gate): whole-or-nothing validation of a serialized tracestate
- * header against the W3C §3.3.2 list ABNF (≤32 members; key/value grammar per
- * §3.3.2.1–2). ANY invalid member ⇒ undefined — partial salvage IS the
- * corruption mechanism (runtime-reproduced), and discarding the entire header
- * is spec-sanctioned. Empty/whitespace-only list members are spec-VALID (the
- * OWS alternative — `foo=bar,` passes); a header with no key=value member at
- * all carries nothing and degrades to undefined. Legitimate vendor members
- * (`es=s:1.0`, `congo=…`) pass verbatim.
- */
-export function sanitizeTracestateHeader(raw: string): string | undefined {
-  const members = raw.split(",")
-  if (members.length > 32) return undefined
-  let nonEmpty = 0
-  for (const member of members) {
-    const m = member.replace(MEMBER_OWS_RE, "")
-    if (m === "") continue
-    const eq = m.indexOf("=")
-    if (eq === -1) return undefined
-    if (
-      !TRACESTATE_KEY_RE.test(m.slice(0, eq)) ||
-      !TRACESTATE_VALUE_RE.test(m.slice(eq + 1))
-    ) {
-      return undefined
-    }
-    nonEmpty++
-  }
-  return nonEmpty > 0 ? raw : undefined
-}
-
-/**
- * Serialized tracestate of the active span, run through both sanitizer stages
- * and the uniform size cap: stage 1 → serialize → stage 2 → ≤1024 chars.
- * Oversized degrades to absent (no member-boundary truncation — same
- * whole-or-nothing posture as stage 2).
+ * Serialized tracestate of the active span, run through Sentry-key stripping
+ * (stage 1) then the canonical gate: stage 1 → serialize → sanitizeTracestate-
+ * Header (which now owns the ≤512 cap). Oversized/duplicate/grammar-invalid
+ * degrade to absent whole — no member-boundary truncation.
  */
 export function activeTracestate(): string | undefined {
   const sc = trace.getActiveSpan()?.spanContext()
   if (!sc || !isSpanContextValid(sc)) return undefined
   const serialized = sanitizeTraceState(sc.traceState)?.serialize()
   if (!serialized) return undefined
-  const validated = sanitizeTracestateHeader(serialized)
-  if (validated === undefined || validated.length > MAX_TRACESTATE_LENGTH) {
-    return undefined
-  }
-  return validated
+  return sanitizeTracestateHeader(serialized)
+}
+
+/**
+ * Stage 3 (receive, transport-salvage detection): `propagator.extract` the
+ * carrier, then assert every key of the ALREADY-GATED `carrier.tracestate`
+ * survived into the resulting span context. OTel-JS still validates tracestate
+ * keys at Level 1, so a Level-2-only key we accept (`1abc`, `a@b@c`, a >13-char
+ * system id) is dropped per-member by the transport — spike-confirmed
+ * `ok=1,1abc=2` extracts as `ok=1`. Rather than let that partially-salvaged
+ * state re-mint downstream (the corruption the policy forbids), drop the
+ * tracestate WHOLE and keep the traceparent (degrade-not-reject).
+ *
+ * Key-presence — not member count — is the test, so the Sentry-ON composite
+ * (which ADDS sentry.* members on extract) is never mistaken for a salvage.
+ * The caller MUST gate `carrier.tracestate` through `sanitizeTracestateHeader`
+ * before calling; an absent tracestate short-circuits to the plain extract.
+ */
+export function extractTraceCarrierContext(
+  base: Context,
+  carrier: TraceCarrier | Record<string, string>,
+  propagator: Pick<TextMapPropagator, "extract"> = propagation
+): Context {
+  const extracted = propagator.extract(base, carrier, defaultTextMapGetter)
+  const gated = carrier["tracestate"]
+  if (gated === undefined) return extracted
+  const sc = trace.getSpanContext(extracted)
+  if (!sc) return extracted
+  const survived = sc.traceState
+  const allPresent = tracestateKeys(gated).every(
+    (key) => survived?.get(key) !== undefined
+  )
+  if (allPresent) return extracted
+  return trace.setSpanContext(extracted, { ...sc, traceState: undefined })
 }
 
 /**

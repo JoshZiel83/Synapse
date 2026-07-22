@@ -398,8 +398,14 @@ export { parseJsonObject, parseJsonObjectOrUndefined } from "./json.js"
 
 export {
   isValidTraceparent,
+  isValidTracestateHeader,
   MAX_TRACESTATE_LENGTH,
+  MAX_TRACESTATE_MEMBERS,
+  sanitizeTracestateHeader,
   TRACEPARENT_RE,
   traceIdFromTraceparent,
+  TRACESTATE_KEY_RE,
+  TRACESTATE_VALUE_RE,
+  tracestateKeys,
 } from "./traceparent.js"
 export type { TraceCarrier } from "./traceparent.js"

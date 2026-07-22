@@ -70,8 +70,9 @@ export interface OneShotFsHelperOptions {
    */
   traceparent?: string
   /**
-   * W3C `tracestate` (§3c). Threaded onto request frames only ever alongside
-   * a traceparent; the api mints it pre-sanitized (two-stage, ≤1024 chars).
+   * W3C `tracestate`. Threaded onto request frames only ever alongside a
+   * traceparent; the api mints it pre-sanitized through the canonical gate
+   * (Level-2 ABNF, no duplicate keys, ≤32 members, ≤512 chars).
    */
   tracestate?: string
   /** Spawn override (tests). */

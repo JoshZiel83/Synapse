@@ -4,6 +4,7 @@
 // the degrade-not-reject receiver rule (a malformed trace field becomes
 // ABSENT; the business frame/body is never rejected).
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { test } from "node:test"
 import {
   RemoteAgentApiDeliveryWireSchema,
@@ -153,6 +154,78 @@ test("api→daemon messages pair tracestate with every traceparent (adjudication
     tracestate: VALID_TRACESTATE,
   })
   assert.equal(resolved.tracestate, VALID_TRACESTATE)
+})
+
+// The SAME cross-language golden vectors the shared/Go/Rust tests read (test-
+// only, monorepo-relative). The local zod-only gate is not exported, so it is
+// driven through the wire fragment (`RemoteAgentMachineReadyMessageSchema` spreads
+// `...wireTraceContextFields`): a surviving field ⇔ the gate accepted.
+type CarrierVectors = {
+  traceparent: Array<{ v: string; accept: boolean; note: string }>
+  tracestate: Array<{
+    v: string
+    gate: boolean
+    capOnly: boolean
+    note: string
+  }>
+}
+const vectors = JSON.parse(
+  readFileSync(
+    new URL("../../shared/src/utils/traceparent-vectors.json", import.meta.url),
+    "utf8"
+  )
+) as CarrierVectors
+
+test("golden vectors: the device-protocol carrier gate matches the canonical gate", () => {
+  for (const { v, accept, note } of vectors.traceparent) {
+    const parsed = RemoteAgentMachineReadyMessageSchema.parse({
+      type: "ready",
+      runtime_catalog: [],
+      traceparent: v,
+    })
+    assert.equal(
+      parsed.traceparent !== undefined,
+      accept,
+      `traceparent ${note}: ${JSON.stringify(v)}`
+    )
+  }
+  for (const { v, gate, note } of vectors.tracestate) {
+    const parsed = RemoteAgentMachineReadyMessageSchema.parse({
+      type: "ready",
+      runtime_catalog: [],
+      traceparent: VALID_TRACEPARENT,
+      tracestate: v,
+    })
+    assert.equal(
+      parsed.tracestate !== undefined,
+      gate,
+      `tracestate ${note}: ${JSON.stringify(v)}`
+    )
+  }
+})
+
+test("api→daemon start/delivery schemas now GATE a malformed tracestate to absent, traceparent survives", () => {
+  for (const bad of ["ok=1,ok=2", "Foo=bar", "a=b=c"]) {
+    const start = RemoteAgentApiStartMessageSchema.parse({
+      type: "agent:start",
+      remote_agent_id: "ra-1",
+      runtime_kind: "claude_code",
+      traceparent: VALID_TRACEPARENT,
+      tracestate: bad,
+    })
+    assert.equal(start.traceparent, VALID_TRACEPARENT, bad)
+    assert.equal(start.tracestate, undefined, bad)
+
+    const delivery = RemoteAgentApiDeliveryWireSchema.parse({
+      remote_agent_id: "ra-1",
+      delivery_id: "d-1",
+      conversation_id: CONVERSATION_ID,
+      item_id: "i-1",
+      traceparent: VALID_TRACEPARENT,
+      tracestate: bad,
+    })
+    assert.equal(delivery.tracestate, undefined, bad)
+  }
 })
 
 const userInputBase = {

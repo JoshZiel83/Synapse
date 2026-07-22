@@ -213,6 +213,33 @@ test("tools/call span: valid _meta carrier ⇒ ONE SERVER span remote-parented o
   assert.equal(span.status.code, SpanStatusCode.UNSET)
 })
 
+test("tools/call span: an invalid _meta.tracestate is dropped WHOLE while SERVER kind + the remote parent survive", async () => {
+  exporter.reset()
+  const handler = captureCallToolHandler([OK_TOOL])
+  const result = await handler({
+    method: "tools/call",
+    params: {
+      name: "echo",
+      arguments: { msg: "hi" },
+      _meta: {
+        traceparent: `00-${META_TRACE_ID}-${META_SPAN_ID}-01`,
+        tracestate: "ok=1,ok=2", // duplicate key — gated out before extract
+      },
+    },
+  })
+  assert.equal(result.isError, undefined)
+  const span = exporter.getFinishedSpans()[0]!
+  assert.equal(span.kind, SpanKind.SERVER, "carrier still ⇒ SERVER kind")
+  assert.equal(span.spanContext().traceId, META_TRACE_ID, "remote parent kept")
+  assert.equal(span.parentSpanContext?.spanId, META_SPAN_ID)
+  assert.equal(span.parentSpanContext?.isRemote, true)
+  assert.equal(
+    span.spanContext().traceState?.serialize() || "",
+    "",
+    "the malformed tracestate degrades to absent"
+  )
+})
+
 test("tools/call span: no _meta ⇒ INTERNAL child of the ambient request span", async () => {
   exporter.reset()
   const handler = captureCallToolHandler([OK_TOOL])

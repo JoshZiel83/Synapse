@@ -32,30 +32,80 @@ import {
   SERVER_FACADE_ERROR_CODES,
 } from "./enums.js"
 
-// ───────────────────────── W3C trace-context wire fragment ───────────────────
-// device-protocol is zod-only (deliberately NO dependency on @synapse/shared),
-// so this pins the SAME regex + tracestate cap as the canonical artifact
-// `packages/shared/src/utils/traceparent.ts` — a sanctioned literal duplicate
-// listed in that file's JSDoc sync list; any change there must be mirrored
-// byte-for-byte here. Receiver rule (degrade-not-reject, uniform): a malformed
-// or oversized trace field `.catch(undefined)`s to ABSENT — it never rejects
-// the business frame it rides on (works inside strictObject too: the failed
-// key is dropped from the parse output on zod 4.3.6).
+// ─── synapse-trace-contract v2 (sanctioned literal duplicate) ───────────────
 //
-// The api→daemon direction (`agent:start` / `agent:deliver` items /
-// `agent:task:resolved`) deliberately carries BARE `z.string().optional()`
-// trace fields instead of this fragment: the api is the ONLY producer and
-// mints the pair via activeTraceCarrier(), whose activeTracestate() enforces
-// the same 1024 cap at the single emission point — receiver-side re-validation
-// on that trusted first-party hop would be dead weight.
+// device-protocol is zod-only (deliberately NO dependency on @synapse/shared,
+// and @synapse/shared DEPENDS ON this package, so importing the gate would be a
+// cycle), so the carrier gate is re-declared here. Canonical artifact:
+// packages/shared/src/utils/traceparent.ts. scripts/guard-trace-propagation.mjs
+// (rule carrier_contract_drift) byte-compares every NAME below against the
+// canonical file AND against this file's real code. Mirror any change there,
+// byte-for-byte:
+//
+//   TRACEPARENT_RE = /^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$/
+//   MAX_TRACESTATE_LENGTH = 512
+//   MAX_TRACESTATE_MEMBERS = 32
+//   TRACESTATE_KEY_RE = /^[a-z0-9][a-z0-9_\-*/@]{0,255}$/
+//   TRACESTATE_VALUE_RE = /^[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]$/
+//
+// Receiver rule (degrade-not-reject, uniform): a malformed / duplicate-keyed /
+// oversized trace field `.catch(undefined)`s to ABSENT — it never rejects the
+// business frame it rides on (works inside strictObject too on zod 4.3.6: the
+// failed key is dropped from the parse output). EVERY frame — api→daemon
+// included — carries this same gate; there is no bare-string first-party
+// exemption. TRACESTATE_KEY_RE is the W3C Level-2 key grammar; 512 is what
+// OTel-JS core enforces and the W3C §3.3.1 MUST-propagate floor.
 
 const TRACEPARENT_RE =
   /^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$/
-const MAX_TRACESTATE_LENGTH = 1024
+const MAX_TRACESTATE_LENGTH = 512
+const MAX_TRACESTATE_MEMBERS = 32
+const TRACESTATE_KEY_RE = /^[a-z0-9][a-z0-9_\-*/@]{0,255}$/
+const TRACESTATE_VALUE_RE =
+  /^[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]$/
+const MEMBER_OWS_RE = /^[ \t]+|[ \t]+$/g
+
+// THE tracestate gate — byte-identical to the canonical sanitizeTracestateHeader:
+// whole-or-nothing W3C Level-2 validation (≤512 chars, key/value ABNF, no
+// duplicate keys, ≤32 non-empty members). undefined on any defect (partial
+// salvage is the corruption vector). Empty/OWS-only members are spec-valid and
+// not counted.
+function sanitizeTracestateHeader(raw: string): string | undefined {
+  if (raw.length > MAX_TRACESTATE_LENGTH) return undefined
+  const seen = new Set<string>()
+  let nonEmpty = 0
+  for (const member of raw.split(",")) {
+    const m = member.replace(MEMBER_OWS_RE, "")
+    if (m === "") continue
+    const eq = m.indexOf("=")
+    if (eq === -1) return undefined
+    const key = m.slice(0, eq)
+    if (
+      !TRACESTATE_KEY_RE.test(key) ||
+      !TRACESTATE_VALUE_RE.test(m.slice(eq + 1))
+    ) {
+      return undefined
+    }
+    if (seen.has(key)) return undefined
+    seen.add(key)
+    nonEmpty += 1
+    if (nonEmpty > MAX_TRACESTATE_MEMBERS) return undefined
+  }
+  return nonEmpty > 0 ? raw : undefined
+}
+
+/** Predicate form of the gate for zod `.refine(...)`. */
+function isValidTracestateHeader(raw: string): boolean {
+  return sanitizeTracestateHeader(raw) !== undefined
+}
 
 const wireTraceContextFields = {
   traceparent: z.string().regex(TRACEPARENT_RE).optional().catch(undefined),
-  tracestate: z.string().max(MAX_TRACESTATE_LENGTH).optional().catch(undefined),
+  tracestate: z
+    .string()
+    .refine(isValidTracestateHeader)
+    .optional()
+    .catch(undefined),
 }
 
 // A complete `{traceparent, tracestate?}` carrier as a list element (e.g.
@@ -64,7 +114,11 @@ const wireTraceContextFields = {
 // entry (see originCarriersField), never as a per-key absence.
 const WireTraceCarrierSchema = z.object({
   traceparent: z.string().regex(TRACEPARENT_RE),
-  tracestate: z.string().max(MAX_TRACESTATE_LENGTH).optional().catch(undefined),
+  tracestate: z
+    .string()
+    .refine(isValidTracestateHeader)
+    .optional()
+    .catch(undefined),
 })
 
 // Trace-carrier LIST field (origin_carriers) with PER-ENTRY salvage: a
@@ -727,10 +781,9 @@ export const RemoteAgentApiStartMessageSchema = z.strictObject({
   server_url: z.string().optional(),
   // W3C trace context of the request that triggered this start, so the daemon
   // can continue the same distributed trace across its subprocess + api
-  // callbacks. tracestate rides with traceparent (vendor members survive
-  // first-party hops; the pair is minted via activeTraceCarrier()).
-  traceparent: z.string().optional(),
-  tracestate: z.string().optional(),
+  // callbacks. Gated like every other carrier position (no bare-string
+  // first-party exemption) — a malformed value degrades to absent.
+  ...wireTraceContextFields,
 })
 export type RemoteAgentApiStartMessage = z.infer<
   typeof RemoteAgentApiStartMessageSchema
@@ -752,9 +805,9 @@ export const RemoteAgentApiDeliveryWireSchema = z.strictObject({
   // Per-delivery W3C trace context (the enqueuing request's trace; traceparent
   // persisted on the delivery row, tracestate live-path only). Per-delivery,
   // NOT per-frame: one agent:deliver batch fans in deliveries from many
-  // conversations/requests, each with its own trace.
-  traceparent: z.string().optional(),
-  tracestate: z.string().optional(),
+  // conversations/requests, each with its own trace. Gated (no bare-string
+  // first-party exemption).
+  ...wireTraceContextFields,
 })
 export type RemoteAgentApiDeliveryWire = z.infer<
   typeof RemoteAgentApiDeliveryWireSchema
@@ -774,9 +827,9 @@ export const RemoteAgentApiTaskResolvedMessageSchema = z.strictObject({
   task_id: z.string().min(1),
   task: z.record(z.string(), z.unknown()),
   // W3C trace context of the request resolving this task (e.g. a user-input
-  // reply), so the daemon's continued turn rejoins the resolver's trace.
-  traceparent: z.string().optional(),
-  tracestate: z.string().optional(),
+  // reply), so the daemon's continued turn rejoins the resolver's trace. Gated
+  // (no bare-string first-party exemption).
+  ...wireTraceContextFields,
 })
 export type RemoteAgentApiTaskResolvedMessage = z.infer<
   typeof RemoteAgentApiTaskResolvedMessageSchema

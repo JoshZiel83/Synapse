@@ -1,0 +1,169 @@
+{
+  "_comment": "Cross-language golden vectors for the W3C trace-context carrier contract. Asserted BYTE-IDENTICALLY from the TS gate (packages/shared/src/utils/traceparent.test.ts + the daemon/device-protocol duplicates), the Go helper (sidecars/cua .../trace_test.go) and the Rust helper (sidecars/fs-helper/src/telemetry.rs). traceparent[].accept = isValidTraceparent verdict. tracestate[].gate = the full-ABNF sanitizeTracestateHeader verdict the TS gates implement; tracestate[].capOnly = the non-empty + <=512-char verdict the Go/Rust helpers apply before handing the value to their OTel library (which owns the ABNF whole-or-nothing).",
+  "traceparent": [
+    {
+      "v": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      "accept": true,
+      "note": "canonical sampled"
+    },
+    {
+      "v": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+      "accept": true,
+      "note": "flags 00 is syntactically valid"
+    },
+    {
+      "v": "ff-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+      "accept": false,
+      "note": "non-00 version"
+    },
+    {
+      "v": "00-00000000000000000000000000000000-b7ad6b7169203331-01",
+      "accept": false,
+      "note": "all-zero trace-id"
+    },
+    {
+      "v": "00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01",
+      "accept": false,
+      "note": "all-zero span-id"
+    },
+    {
+      "v": "00-0AF7651916CD43DD8448EB211C80319C-B7AD6B7169203331-01",
+      "accept": false,
+      "note": "uppercase hex"
+    },
+    {
+      "v": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01-extra",
+      "accept": false,
+      "note": "trailing extra"
+    },
+    {
+      "v": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b716920333g-01",
+      "accept": false,
+      "note": "non-hex in span-id"
+    },
+    { "v": "garbage", "accept": false, "note": "junk" },
+    { "v": "", "accept": false, "note": "empty" }
+  ],
+  "tracestate": [
+    {
+      "v": "es=s:1.0",
+      "gate": true,
+      "capOnly": true,
+      "note": "single vendor member"
+    },
+    {
+      "v": "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7",
+      "gate": true,
+      "capOnly": true,
+      "note": "two members"
+    },
+    {
+      "v": "tenant@system=1",
+      "gate": true,
+      "capOnly": true,
+      "note": "Level-1 multi-tenant key still legal at L2"
+    },
+    {
+      "v": "1abc=v",
+      "gate": true,
+      "capOnly": true,
+      "note": "Level-2-only: digit-initial key"
+    },
+    {
+      "v": "a@b@c=v",
+      "gate": true,
+      "capOnly": true,
+      "note": "Level-2-only: multiple @ in key"
+    },
+    {
+      "v": "a@abcdefghijklmno=v",
+      "gate": true,
+      "capOnly": true,
+      "note": "Level-2-only: 15-char system id (>13)"
+    },
+    {
+      "v": "foo=bar,",
+      "gate": true,
+      "capOnly": true,
+      "note": "trailing empty member is spec-valid OWS"
+    },
+    {
+      "v": "foo=bar, baz=qux ",
+      "gate": true,
+      "capOnly": true,
+      "note": "OWS around members"
+    },
+    {
+      "v": "foo=bar,\tbaz=qux",
+      "gate": true,
+      "capOnly": true,
+      "note": "HTAB is OWS"
+    },
+    {
+      "v": "@x=v",
+      "gate": false,
+      "capOnly": true,
+      "note": "key may not start with @ (ABNF), but non-empty+<=512"
+    },
+    {
+      "v": "ok=1,ok=2",
+      "gate": false,
+      "capOnly": true,
+      "note": "duplicate key rejected by ABNF gate"
+    },
+    {
+      "v": "Foo=bar",
+      "gate": false,
+      "capOnly": true,
+      "note": "uppercase key rejected by ABNF gate"
+    },
+    {
+      "v": "a=b=c",
+      "gate": false,
+      "capOnly": true,
+      "note": "= in value rejected by ABNF gate"
+    },
+    {
+      "v": "foobar",
+      "gate": false,
+      "capOnly": true,
+      "note": "no = in the only member"
+    },
+    {
+      "v": "foo=bar,\nbaz=qux",
+      "gate": false,
+      "capOnly": true,
+      "note": "\\n is not OWS"
+    },
+    {
+      "v": "",
+      "gate": false,
+      "capOnly": false,
+      "note": "empty string: no member AND capOnly rejects empty"
+    },
+    {
+      "v": " , ,",
+      "gate": false,
+      "capOnly": true,
+      "note": "only OWS/empty members: no key=value"
+    },
+    {
+      "v": "k0=v,k1=v,k2=v,k3=v,k4=v,k5=v,k6=v,k7=v,k8=v,k9=v,k10=v,k11=v,k12=v,k13=v,k14=v,k15=v,k16=v,k17=v,k18=v,k19=v,k20=v,k21=v,k22=v,k23=v,k24=v,k25=v,k26=v,k27=v,k28=v,k29=v,k30=v,k31=v,k32=v",
+      "gate": false,
+      "capOnly": true,
+      "note": "33 non-empty members > MAX_TRACESTATE_MEMBERS(32): TS/daemon/device-protocol gate rejects on member count; Go frameCarrier / Rust accepted_tracestate admit (length-only cap, no member count)"
+    },
+    {
+      "v": "a=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv,b=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
+      "gate": false,
+      "capOnly": false,
+      "note": "513 chars > MAX_TRACESTATE_LENGTH(512), two valid members: TS gate + Go + Rust all reject on length"
+    },
+    {
+      "v": "k=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
+      "gate": false,
+      "capOnly": true,
+      "note": "single 257-char value > W3C value max (256): TS gate fails TRACESTATE_VALUE_RE; Go/Rust admit (header 259<=512, non-empty)"
+    }
+  ]
+}

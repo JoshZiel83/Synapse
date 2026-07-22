@@ -9,6 +9,8 @@ package main
 // the TS matrix (device-runtime trace-context.test.ts).
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -64,7 +66,7 @@ func TestFrameCarrierTracestateGating(t *testing.T) {
 		t.Errorf("empty tracestate must be ABSENT, got %v", c)
 	}
 
-	// Valid tracestate at the cap (1024) rides along verbatim.
+	// Valid tracestate at the cap (512) rides along verbatim.
 	atCap := "es=" + strings.Repeat("a", maxTracestateLength-3)
 	if len(atCap) != maxTracestateLength {
 		t.Fatalf("fixture bug: len=%d", len(atCap))
@@ -82,5 +84,54 @@ func TestFrameCarrierTracestateGating(t *testing.T) {
 	}
 	if _, ok := c["tracestate"]; ok {
 		t.Errorf("tracestate over MAX_TRACESTATE_LENGTH must be dropped")
+	}
+}
+
+// TestGoldenVectors drives the SAME cross-language JSON the TS and Rust tests
+// read, so all three languages assert identical behaviour on identical inputs.
+// validTraceparent must match `accept`; frameCarrier's tracestate decision
+// (non-empty + within the cap — the ABNF whole-or-nothing is the OTel library's
+// job, not this helper's) must match `capOnly`.
+func TestGoldenVectors(t *testing.T) {
+	const vectorsPath = "../../../../packages/shared/src/utils/traceparent-vectors.json"
+	raw, err := os.ReadFile(vectorsPath)
+	if err != nil {
+		t.Fatalf("read golden vectors %s: %v", vectorsPath, err)
+	}
+	var vectors struct {
+		Traceparent []struct {
+			V      string `json:"v"`
+			Accept bool   `json:"accept"`
+			Note   string `json:"note"`
+		} `json:"traceparent"`
+		Tracestate []struct {
+			V       string `json:"v"`
+			Gate    bool   `json:"gate"`
+			CapOnly bool   `json:"capOnly"`
+			Note    string `json:"note"`
+		} `json:"tracestate"`
+	}
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatalf("parse golden vectors: %v", err)
+	}
+	if len(vectors.Traceparent) == 0 || len(vectors.Tracestate) == 0 {
+		t.Fatalf("golden vectors are empty (traceparent=%d tracestate=%d)",
+			len(vectors.Traceparent), len(vectors.Tracestate))
+	}
+
+	for _, v := range vectors.Traceparent {
+		if got := validTraceparent(v.V); got != v.Accept {
+			t.Errorf("traceparent %q (%s): validTraceparent=%v want %v", v.V, v.Note, got, v.Accept)
+		}
+	}
+
+	const tp = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+	for _, v := range vectors.Tracestate {
+		carrier := frameCarrier(tp, v.V)
+		_, present := carrier["tracestate"]
+		if present != v.CapOnly {
+			t.Errorf("tracestate %q (%s): frameCarrier tracestate present=%v want capOnly=%v",
+				v.V, v.Note, present, v.CapOnly)
+		}
 	}
 }

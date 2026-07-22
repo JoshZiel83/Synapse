@@ -46,13 +46,32 @@ test("wireTraceContextFields: malformed traceparent degrades to absent, never re
   }
 })
 
-test("wireTraceContextFields: oversized tracestate degrades to absent", () => {
+test("wireTraceContextFields: over-512 tracestate degrades to absent, traceparent survives", () => {
+  // 513 chars — one past the cap now inside the gate.
+  const over = `v=${"x".repeat(MAX_TRACESTATE_LENGTH - 1)}`
+  assert.equal(over.length, MAX_TRACESTATE_LENGTH + 1)
   const parsed = Fragment.parse({
     traceparent: VALID_TRACEPARENT,
-    tracestate: `v=${"x".repeat(MAX_TRACESTATE_LENGTH)}`,
+    tracestate: over,
   })
   assert.equal(parsed.traceparent, VALID_TRACEPARENT)
   assert.equal(parsed.tracestate, undefined)
+})
+
+test("wireTraceContextFields: duplicate-key / grammar-invalid tracestate degrade to absent, traceparent survives", () => {
+  for (const bad of [
+    "ok=1,ok=2",
+    "Foo=bar",
+    "a=b=c",
+    "sentry.dsc=trace_id=1",
+  ]) {
+    const parsed = Fragment.parse({
+      traceparent: VALID_TRACEPARENT,
+      tracestate: bad,
+    })
+    assert.equal(parsed.traceparent, VALID_TRACEPARENT, bad)
+    assert.equal(parsed.tracestate, undefined, bad)
+  }
 })
 
 test("chat frames: auth/subscribe/typing carry the fragment; a malformed value never rejects the frame", () => {

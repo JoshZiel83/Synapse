@@ -23,6 +23,7 @@ import {
   MESSAGING_OPERATION_TYPE_VALUE_SEND,
 } from "@opentelemetry/semantic-conventions/incubating"
 import {
+  extractTraceCarrierContext,
   sanitizeTraceState,
   sanitizeTracestateHeader,
 } from "../infrastructure/observability/traceparent.js"
@@ -291,6 +292,25 @@ type AnyJob = Job<unknown, unknown, string>
  * Worker — job-tracing.test.ts drives it with a stub Job). Production code
  * uses `tracedWorker`.
  */
+/**
+ * A shallow copy of an inbound `__otelctx` carrier with its `tracestate` run
+ * through the canonical gate: a grammar-invalid / duplicate-keyed / over-512
+ * value is DROPPED (the key removed) so only a gate-clean tracestate reaches
+ * `extractTraceCarrierContext`. The traceparent is untouched.
+ */
+function gateInboundCarrier(
+  carrier: Record<string, string>
+): Record<string, string> {
+  const gated: Record<string, string> = { ...carrier }
+  const ts = carrier["tracestate"]
+  if (typeof ts === "string") {
+    const clean = sanitizeTracestateHeader(ts)
+    if (clean === undefined) delete gated["tracestate"]
+    else gated["tracestate"] = clean
+  }
+  return gated
+}
+
 export function withJobSpan(
   queueName: string,
   processor: Processor<unknown, unknown, string>
@@ -301,12 +321,16 @@ export function withJobSpan(
       data && typeof data === "object" && !Array.isArray(data)
         ? (data as Record<string, unknown>)[CARRIER_KEY]
         : undefined
+    // Gate the inbound `__otelctx` tracestate (previously zero validation) and
+    // route the extract through stage 3 so a Level-2-only key the transport
+    // salvages drops the tracestate whole, never partially. The traceparent —
+    // and the producer trace continuation — always survive.
     const parent =
       carrier && typeof carrier === "object"
-        ? tracePropagator.extract(
+        ? extractTraceCarrierContext(
             context.active(),
-            carrier as Record<string, string>,
-            defaultTextMapGetter
+            gateInboundCarrier(carrier as Record<string, string>),
+            tracePropagator
           )
         : context.active()
 
