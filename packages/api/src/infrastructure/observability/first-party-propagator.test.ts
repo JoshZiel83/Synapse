@@ -189,7 +189,7 @@ test("firstPartyPropagator factory builds its allowlist from process.env", () =>
   const prev = process.env.SYNAPSE_TRACE_FIRST_PARTY_HOSTS
   process.env.SYNAPSE_TRACE_FIRST_PARTY_HOSTS = ".factory.example"
   try {
-    const wrapper = firstPartyPropagator(new W3CTraceContextPropagator(), false)
+    const wrapper = firstPartyPropagator(new W3CTraceContextPropagator())
     const { span, ctx } = recordingSpanContext("https://api.factory.example/x")
     assert.ok("traceparent" in injectInto(wrapper, ctx))
     span.end()
@@ -208,7 +208,6 @@ test("deny writes NOTHING through the composite while the span still exports", (
     new CompositePropagator({
       propagators: [new W3CTraceContextPropagator()],
     }),
-    false,
     EMPTY_ALLOWLIST
   )
   const { span, ctx } = recordingSpanContext(
@@ -226,7 +225,6 @@ test("deny writes NOTHING through the composite while the span still exports", (
 test("first-party URL delegates to the composite", () => {
   const wrapper = new FirstPartyOnlyPropagator(
     new W3CTraceContextPropagator(),
-    false,
     EMPTY_ALLOWLIST
   )
   const { span, ctx } = recordingSpanContext("http://127.0.0.1:8775/embed")
@@ -239,7 +237,6 @@ test("first-party URL delegates to the composite", () => {
 test("recording span without a resolvable URL fails closed", () => {
   const wrapper = new FirstPartyOnlyPropagator(
     new W3CTraceContextPropagator(),
-    false,
     EMPTY_ALLOWLIST
   )
   const { span, ctx } = recordingSpanContext()
@@ -247,30 +244,48 @@ test("recording span without a resolvable URL fails closed", () => {
   span.end()
 })
 
-test("non-recording carve-out delegates under Sentry-off only", () => {
-  // Unsampled requests yield attribute-less NonRecordingSpans; Sentry-on
-  // resolves via the sentry.url traceState fallback instead.
+test("F12: non-recording span with no resolvable URL fails closed — no carve-out, both composites", () => {
+  // Unsampled requests yield attribute-less NonRecordingSpans. The old carve-out
+  // delegated for them under Sentry-off, leaking a flags-00 traceparent (and any
+  // inherited tracestate) to third parties. Now they fail closed UNCONDITIONALLY,
+  // whether the wrapped composite is the Sentry-off W3C-only one or a Sentry-on
+  // composite — the propagator no longer knows or cares about the Sentry config.
   const nonRecording = trace.wrapSpanContext({
     traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
     spanId: "00f067aa0ba902b7",
     traceFlags: TraceFlags.NONE,
   })
   const ctx = trace.setSpan(ROOT_CONTEXT, nonRecording)
-  const sentryOff = new FirstPartyOnlyPropagator(
+  const w3cOnly = new FirstPartyOnlyPropagator(
     new W3CTraceContextPropagator(),
-    false,
     EMPTY_ALLOWLIST
   )
-  const sentryOn = new FirstPartyOnlyPropagator(
-    new W3CTraceContextPropagator(),
-    true,
+  const sentryShaped = new FirstPartyOnlyPropagator(
+    new CompositePropagator({
+      propagators: [new SentryPropagator(), new W3CTraceContextPropagator()],
+    }),
     EMPTY_ALLOWLIST
   )
-  assert.equal(
-    injectInto(sentryOff, ctx).traceparent,
-    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+  assert.deepEqual(injectInto(w3cOnly, ctx), {})
+  assert.deepEqual(injectInto(sentryShaped, ctx), {})
+})
+
+test("F12: an inherited vendor tracestate no longer rides a non-recording span onward", () => {
+  // verify-F12 extraFinding: under the old carve-out an inbound `tracestate`
+  // extracted onto a non-recording parent reached third-party hosts. Fail-closed
+  // suppresses the WHOLE header — no traceparent, no tracestate.
+  const nonRecording = trace.wrapSpanContext({
+    traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+    spanId: "00f067aa0ba902b7",
+    traceFlags: TraceFlags.NONE,
+    traceState: createTraceState("congo=congosSecret,es=s:1.0"),
+  })
+  const ctx = trace.setSpan(ROOT_CONTEXT, nonRecording)
+  const wrapper = new FirstPartyOnlyPropagator(
+    new W3CTraceContextPropagator(),
+    EMPTY_ALLOWLIST
   )
-  assert.deepEqual(injectInto(sentryOn, ctx), {})
+  assert.deepEqual(injectInto(wrapper, ctx), {})
 })
 
 // Minimal TraceState double with Sentry's semantics: their vendored class
@@ -296,9 +311,12 @@ function sentryStyleTraceState(entries: Record<string, string>): TraceState {
 }
 
 test("sentry.url traceState fallback resolves non-recording spans under Sentry-on", () => {
+  // The lossless Sentry-ON path survives F12: `resolveDestinationUrl` reads the
+  // `sentry.url` traceState member even on a non-recording CLIENT span, so its
+  // first-party hop still propagates — the fail-closed rule only bites when NO
+  // URL is resolvable at all.
   const wrapper = new FirstPartyOnlyPropagator(
     new W3CTraceContextPropagator(),
-    true,
     EMPTY_ALLOWLIST
   )
   const mk = (url: string) =>
@@ -323,7 +341,6 @@ test("sentry.url traceState fallback resolves non-recording spans under Sentry-o
 test("extract delegates unconditionally; garbage extract is a safe no-op", () => {
   const wrapper = new FirstPartyOnlyPropagator(
     new W3CTraceContextPropagator(),
-    false,
     EMPTY_ALLOWLIST
   )
   const good = wrapper.extract(
@@ -517,7 +534,7 @@ async function fetchUnderRootSpan(url: string): Promise<void> {
 
 test("[D1] wire probe: sanitized member keeps sentry.* off the wire; DSC rides sentry-trace/baggage", async () => {
   setGlobalPropagator(
-    new FirstPartyOnlyPropagator(sentryOnComposite(), true, EMPTY_ALLOWLIST)
+    new FirstPartyOnlyPropagator(sentryOnComposite(), EMPTY_ALLOWLIST)
   )
   receivedHeaders = undefined
   await fetchUnderRootSpan(`${serverUrl}/sanitized`)
@@ -561,7 +578,6 @@ test("[D1] wire probe negative control: unsanitized W3C member leaks sentry.* tr
       new CompositePropagator({
         propagators: [new SentryPropagator(), new W3CTraceContextPropagator()],
       }),
-      true,
       EMPTY_ALLOWLIST
     )
   )
@@ -574,7 +590,7 @@ test("[D1] wire probe negative control: unsanitized W3C member leaks sentry.* tr
 
 test("[D1] wire probe: vendor tracestate member passes verbatim to a first-party host", async () => {
   setGlobalPropagator(
-    new FirstPartyOnlyPropagator(sentryOnComposite(), true, EMPTY_ALLOWLIST)
+    new FirstPartyOnlyPropagator(sentryOnComposite(), EMPTY_ALLOWLIST)
   )
   // Remote parent carrying a legitimate co-resident vendor member.
   const parentCtx = sentryOnComposite().extract(
@@ -605,7 +621,6 @@ test("third-party destination receives ZERO trace headers under Sentry-on", asyn
   // third-party URL and the whole composite must write nothing.)
   const wrapper = new FirstPartyOnlyPropagator(
     sentryOnComposite(),
-    true,
     EMPTY_ALLOWLIST
   )
   const span = trace.getTracer("wire-probe").startSpan("client", {

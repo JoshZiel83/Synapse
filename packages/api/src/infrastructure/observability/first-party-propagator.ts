@@ -162,22 +162,27 @@ const NO_URL_WARN_INTERVAL_MS = 60_000
  * delegate unconditionally (inbound trust is Ring 0's job — nginx strips
  * vendor state; traceparent is kept-but-untrusted, flags advisory).
  *
- * Recording spans without a resolvable URL fail CLOSED (grep-verified: nothing
- * in-repo calls the global propagator's inject outside HttpInstrumentation/
- * UndiciInstrumentation, and both set `url.full`/`http.url` on recording
- * CLIENT spans pre-inject). One narrow carve-out: non-recording spans under
- * Sentry-OFF delegate — unsampled requests yield attribute-less
- * NonRecordingSpans there, so first- vs third-party is undecidable and
- * severing every unsampled first-party hop would be the greater loss. The
- * disclosure surface (flags-00 traceparent to third parties, Sentry-off +
- * ratio sampler only) is recorded in the policy doc.
+ * `inject` fails CLOSED with NO exceptions (F12): a span whose destination URL
+ * is unresolvable injects NOTHING, recording or not. The previous carve-out
+ * delegated for non-recording spans under Sentry-OFF, which put a flags-00
+ * `traceparent` — and any inherited `tracestate` — onto THIRD-party wires for
+ * unsampled requests; that leak is now closed unconditionally. `resolveDest-
+ * inationUrl`'s `sentry.url` traceState fallback stays, so under Sentry-ON a
+ * non-recording CLIENT span still resolves and its first-party hop keeps
+ * propagating (lossless there). The residual accepted loss is Sentry-OFF +
+ * a ratio/off sampler only: an unsampled first-party HTTP hop no longer carries
+ * a flags-00 traceparent, so a downstream may re-root instead of inheriting the
+ * suppression — a volume concern in an unsampled regime, mitigated by an ops
+ * note (docs/trace-propagation-policy.md), not code. Both HTTP instrumentations
+ * set `url.full`/`http.url` on recording CLIENT spans pre-inject, and nothing
+ * in-repo calls the global propagator's inject outside them, so failing closed
+ * on the no-URL case cannot sever a recording first-party hop.
  */
 export class FirstPartyOnlyPropagator implements TextMapPropagator {
   private lastNoUrlWarnAt = 0
 
   constructor(
     private readonly inner: TextMapPropagator,
-    private readonly sentryEnabled: boolean,
     private readonly allowlist: FirstPartyAllowlist
   ) {}
 
@@ -191,15 +196,13 @@ export class FirstPartyOnlyPropagator implements TextMapPropagator {
       }
       return
     }
-    if (!span.isRecording()) {
-      if (!this.sentryEnabled) this.inner.inject(context, carrier, setter)
-      return
-    }
+    // No resolvable destination URL ⇒ fail CLOSED, unconditionally. Recording
+    // or not, an unknown destination gets nothing injected.
     const now = Date.now()
     if (now - this.lastNoUrlWarnAt >= NO_URL_WARN_INTERVAL_MS) {
       this.lastNoUrlWarnAt = now
       diag.warn(
-        "FirstPartyOnlyPropagator: recording span without a resolvable destination URL — trace headers suppressed (fail-closed)"
+        "FirstPartyOnlyPropagator: span without a resolvable destination URL — trace headers suppressed (fail-closed)"
       )
     }
   }
@@ -218,12 +221,10 @@ export class FirstPartyOnlyPropagator implements TextMapPropagator {
  * composite (`basePropagator`) with the process-env allowlist.
  */
 export function firstPartyPropagator(
-  inner: TextMapPropagator,
-  sentryEnabled: boolean
+  inner: TextMapPropagator
 ): FirstPartyOnlyPropagator {
   return new FirstPartyOnlyPropagator(
     inner,
-    sentryEnabled,
     buildFirstPartyAllowlist(process.env)
   )
 }

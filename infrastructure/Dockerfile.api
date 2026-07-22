@@ -14,6 +14,11 @@ RUN npm config set registry https://registry.npmmirror.com \
 # `npm ci` — even the ones this image does not build (the 6 platform
 # sidecar bundles + device-sdk + remote-agent-daemon + web-next).
 COPY package.json package-lock.json ./
+# Dependency patches + the applier, ABOVE the install layer so that layer's cache
+# key tracks them. `npm ci` below runs --ignore-scripts, so the root postinstall
+# never fires here: patches are applied by the explicit RUN after the install.
+COPY patches/ patches/
+COPY scripts/apply-patches.mjs scripts/apply-patches.mjs
 COPY packages/device-protocol/package.json packages/device-protocol/
 COPY packages/shared/package.json packages/shared/
 COPY packages/device-runtime/package.json packages/device-runtime/
@@ -28,15 +33,25 @@ COPY packages/api/package.json packages/api/
 COPY packages/remote-agent-daemon/package.json packages/remote-agent-daemon/
 COPY packages/web-next/package.json packages/web-next/
 
-# Install the api build chain only. --ignore-scripts is safe: sharp ships
-# prebuilt @img binaries, onnxruntime-node ships its napi binding, and
-# bcryptjs is pure JS — verified by the `require(...)` assertion below.
+# Install the api build chain only. --ignore-scripts is safe for the native
+# prebuilts this image uses: sharp ships prebuilt @img binaries and bcryptjs is
+# pure JS (proven by the `require('sharp')` assertion below). It ALSO suppresses
+# the root `postinstall` (`node scripts/apply-patches.mjs`), which is why the patch step is an
+# explicit RUN after this layer rather than a side effect of the install.
 RUN npm ci --legacy-peer-deps --ignore-scripts \
       --workspace=packages/device-protocol \
       --workspace=packages/shared \
       --workspace=packages/device-runtime \
       --workspace=packages/api \
       --include-workspace-root
+
+# --ignore-scripts skipped the root postinstall, so apply patches/ explicitly and
+# PROVE they stuck. NO --require-all: this image installs only a workspace subset,
+# so a patch whose target package is outside that subset is a legitimate skip, not
+# a failure (adjudication R5) — but any patch whose target IS present must apply
+# and verify, or the build fails. This RUN is the ONLY assertion that sees the
+# artifact; scripts/verify-boundary.sh only ever sees the host tree.
+RUN node scripts/apply-patches.mjs
 
 COPY tsconfig.base.json ./
 COPY .setup/ .setup/

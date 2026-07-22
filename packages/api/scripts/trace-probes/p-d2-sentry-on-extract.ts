@@ -24,7 +24,6 @@ propagation.setGlobalPropagator(
     new CompositePropagator({
       propagators: [new SentryPropagator(), new W3CTraceContextPropagator()],
     }),
-    true,
     { exact: new Set<string>(), suffixes: [] }
   )
 )

@@ -67,5 +67,26 @@ check(
   !payload.includes("boot-probe-child-of-health")
 )
 
+// Per-request span budget on the REAL production instrumentation set (0.20.1 +
+// instrumentHooks:false). @fastify/otel names lifecycle-hook spans
+// "${hookName} - ${chain}", so a live hook span would put "onRequest - " /
+// "onSend - " / "onResponse - " in the payload; instrumentHooks:false removes
+// them ALL. The route handler span (fastify.type "request-handler") survives —
+// asserted present so the negative below is not vacuous. (P-I1 scenario B owns
+// the exact "exactly ONE SERVER span, request INTERNAL" count with the same
+// HttpInstrumentation + plugin set and an in-memory exporter; here we pin the
+// hook-span budget end-to-end through the real module + real OTLP path.)
+check(
+  "the route handler span survives instrumentHooks:false (fastify.type request-handler present)",
+  payload.includes("request-handler")
+)
+for (const hookMarker of ["onRequest - ", "onSend - ", "onResponse - "]) {
+  check(
+    `zero lifecycle-hook spans on the real module: no "${hookMarker}" span name`,
+    !payload.includes(hookMarker),
+    hookMarker
+  )
+}
+
 await otlp.close()
 finish("P-A1")

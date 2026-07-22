@@ -17,8 +17,12 @@ import { once } from "node:events"
 import { createRequire } from "node:module"
 import {
   context,
+  createTraceState,
+  defaultTextMapSetter,
   propagation,
+  ROOT_CONTEXT,
   trace,
+  TraceFlags,
   type Context,
   type TextMapGetter,
   type TextMapPropagator,
@@ -84,7 +88,6 @@ function wrapper(env: Record<string, string | undefined>): TextMapPropagator {
   return spy(
     new FirstPartyOnlyPropagator(
       new W3CTraceContextPropagator(),
-      false,
       buildFirstPartyAllowlist(env)
     )
   )
@@ -212,6 +215,49 @@ check(
   typeof received.traceparent === "string",
   received
 )
+
+// --- 4. F12 fail-closed-unconditional: non-recording span, no resolvable URL -
+// The old carve-out delegated for non-recording spans under Sentry-off, leaking
+// a flags-00 traceparent (and any inherited tracestate) to third parties. It is
+// gone: an unresolvable-destination span injects NOTHING, recording or not, and
+// the propagator no longer takes a sentryEnabled argument.
+{
+  const fpp = new FirstPartyOnlyPropagator(
+    new W3CTraceContextPropagator(),
+    buildFirstPartyAllowlist({})
+  )
+  const nonRecordingNoUrl = trace.setSpan(
+    ROOT_CONTEXT,
+    trace.wrapSpanContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: TraceFlags.NONE,
+    })
+  )
+  const c1: Record<string, string> = {}
+  fpp.inject(nonRecordingNoUrl, c1, defaultTextMapSetter)
+  check(
+    "F12: non-recording span with no resolvable URL ⇒ ZERO headers (fail-closed)",
+    Object.keys(c1).length === 0,
+    c1
+  )
+  const nonRecordingWithTs = trace.setSpan(
+    ROOT_CONTEXT,
+    trace.wrapSpanContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: TraceFlags.NONE,
+      traceState: createTraceState("congo=congosSecret,es=s:1.0"),
+    })
+  )
+  const c2: Record<string, string> = {}
+  fpp.inject(nonRecordingWithTs, c2, defaultTextMapSetter)
+  check(
+    "F12: an inherited vendor tracestate never rides onward from a non-recording span",
+    Object.keys(c2).length === 0,
+    c2
+  )
+}
 
 await loopbackAgent.close()
 server.close()

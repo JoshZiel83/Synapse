@@ -19,7 +19,7 @@
     "packages/web-next-design"
   ],
   "scripts": {
-    "postinstall": "patch-package --error-on-fail",
+    "postinstall": "node scripts/apply-patches.mjs",
     "dev:api": "npm run dev -w packages/api",
     "dev:daemon": "npm run dev -w packages/remote-agent-daemon",
     "dev:web": "npm run dev -w packages/web-next",

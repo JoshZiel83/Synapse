@@ -43,6 +43,10 @@ interface BootResult {
   rateEnvPresent: boolean
   tracesSampleRateOption: string
   nodeHttpTraceparent?: boolean
+  spanProcessorCount: number
+  serviceName: string
+  serviceNamespace: string
+  tracesSamplerEnv: string | null
 }
 
 async function runProbe(overrides: Record<string, string>): Promise<{
@@ -61,6 +65,12 @@ async function runProbe(overrides: Record<string, string>): Promise<{
       OTEL_TRACES_SAMPLER_ARG: "",
       OTEL_SDK_DISABLED: "",
       OTEL_LOG_LEVEL: "",
+      // Neutralized to "" (NOT unset): the repo .env sets OTEL_SERVICE_NAME=
+      // synapse-api, and dotenv would set an ABSENT key — so leaving it unset
+      // leaks that value in and it beats OTEL_RESOURCE_ATTRIBUTES (matrix 7).
+      // An empty string is "present" ⇒ dotenv does not override ⇒ EnvDetector
+      // treats empty as unset ⇒ OTEL_RESOURCE_ATTRIBUTES' service.name can win.
+      OTEL_SERVICE_NAME: "",
       OTEL_RESOURCE_ATTRIBUTES: "",
       OTEL_SEMCONV_STABILITY_OPT_IN: "",
       SENTRY_DSN: "",
@@ -136,4 +146,51 @@ test("boot matrix 4 ([D4] compose default): DSN set + rate '0' — client in DSN
   assert.equal(result.health.recording, false)
   assert.equal(result.tracesSampleRateOption, "undefined")
   assert.equal(result.nodeHttpTraceparent, true)
+})
+
+test("boot matrix 5 (F13): OTEL_TRACES_EXPORTER=none + endpoint ⇒ ZERO span processors, spans still record", async () => {
+  const { result } = await runProbe({
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:9",
+    OTEL_TRACES_EXPORTER: "none",
+  })
+  // The off switch that keeps the endpoint set: no OTLP processor is pushed…
+  assert.equal(result.spanProcessorCount, 0)
+  // …but the provider still records (sampler, not processor, decides recording),
+  // so logs keep a trace_id.
+  assert.equal(result.ping.recording, true)
+  assert.equal(result.ping.status, 200)
+})
+
+test("boot matrix 6 (F13): OTEL_TRACES_EXPORTER=bogus + endpoint ⇒ treated as unset, export ON", async () => {
+  const { result } = await runProbe({
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:9",
+    OTEL_TRACES_EXPORTER: "bogus",
+  })
+  // Unknown value ⇒ diag.error (asserted in P-A8) + treat as unset ⇒ one OTLP
+  // BatchSpanProcessor still pushed.
+  assert.equal(result.spanProcessorCount, 1)
+  assert.equal(result.ping.status, 200)
+})
+
+test("boot matrix 7 (F13 precedence): OTEL_RESOURCE_ATTRIBUTES service.name wins when OTEL_SERVICE_NAME unset", async () => {
+  const { result } = await runProbe({
+    OTEL_RESOURCE_ATTRIBUTES: "service.name=from-resource-attrs",
+  })
+  // The precedence-inversion regression pin: pre-fix this reported `synapse-api`
+  // because the house literal merged LAST and silently overrode the operator.
+  assert.equal(result.serviceName, "from-resource-attrs")
+  // OTEL_SERVICE_NAME unset ⇒ house namespace fallback survives.
+  assert.equal(result.serviceNamespace, "synapse")
+})
+
+test("boot matrix 8 (F13 sampler): OTEL_TRACES_SAMPLER=' ALWAYS_OFF ' normalizes + drives AlwaysOff", async () => {
+  const { result } = await runProbe({
+    OTEL_TRACES_SAMPLER: " ALWAYS_OFF ",
+  })
+  // Written back to process.env trim+lowercased, so the SDK's parallel parse
+  // agrees (no ERROR spam)…
+  assert.equal(result.tracesSamplerEnv, "always_off")
+  // …and our parser builds AlwaysOff ⇒ the route span is non-recording.
+  assert.equal(result.ping.recording, false)
+  assert.equal(result.ping.status, 200)
 })

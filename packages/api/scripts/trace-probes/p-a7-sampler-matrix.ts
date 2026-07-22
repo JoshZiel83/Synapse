@@ -12,7 +12,8 @@ import { check, finish } from "./_shared.js"
 
 process.env.OTEL_SDK_DISABLED = "true"
 process.env.SENTRY_DSN = ""
-const { buildSamplerFromEnvVars } = await import("../../src/instrumentation.js")
+const { buildSamplerFromEnvVars, normalizeTracesSamplerEnv } =
+  await import("../../src/instrumentation.js")
 
 import {
   ROOT_CONTEXT,
@@ -180,6 +181,54 @@ for (const badArg of ["abc", "-0.2", "1.5", "NaN"]) {
   check(
     "unknown OTEL_TRACES_SAMPLER: falls back to the hardened default (flags-00 cannot erase)",
     decide(sampler, remoteParentCtx(ids[0]!, false), ids[0]!)
+  )
+}
+
+// --- F13 enum normalization: case-insensitive + whitespace-tolerant + written back ---
+{
+  // Each mixed-case/whitespace spelling normalizes to the lowercase form, is
+  // WRITTEN BACK to process.env (so the SDK's parallel loadDefaultConfig agrees),
+  // and builds the SAME sampler class as the lowercase spelling.
+  const cases: Array<[string, string]> = [
+    ["ALWAYS_OFF", "always_off"],
+    ["  always_off  ", "always_off"],
+    ["Parentbased_TraceIdRatio", "parentbased_traceidratio"],
+  ]
+  for (const [raw, normalized] of cases) {
+    process.env.OTEL_TRACES_SAMPLER = raw
+    const returned = normalizeTracesSamplerEnv()
+    check(
+      `normalize "${raw}" ⇒ "${normalized}" (returned value)`,
+      returned === normalized,
+      returned
+    )
+    check(
+      `normalize "${raw}" rewrites process.env to "${normalized}"`,
+      process.env.OTEL_TRACES_SAMPLER === normalized,
+      process.env.OTEL_TRACES_SAMPLER
+    )
+    const fromNormalizedEnv = buildSamplerFromEnvVars() // reads the written-back value
+    process.env.OTEL_TRACES_SAMPLER = normalized
+    const fromLower = buildSamplerFromEnvVars()
+    check(
+      `normalize "${raw}": sampler class matches the lowercase spelling (${fromLower.constructor.name})`,
+      fromNormalizedEnv.constructor.name === fromLower.constructor.name,
+      `${fromNormalizedEnv.constructor.name} vs ${fromLower.constructor.name}`
+    )
+  }
+  // Negative: a genuinely unknown value is only trim+lowercased (STILL unknown),
+  // never coerced into a valid spelling — so the SDK's own parse still flags it.
+  process.env.OTEL_TRACES_SAMPLER = "  BOGUS_SAMPLER  "
+  const bogus = normalizeTracesSamplerEnv()
+  check(
+    "unknown value normalized to trim+lowercase only, not coerced valid",
+    bogus === "bogus_sampler" &&
+      process.env.OTEL_TRACES_SAMPLER === "bogus_sampler"
+  )
+  delete process.env.OTEL_TRACES_SAMPLER
+  check(
+    "normalizeTracesSamplerEnv() returns undefined when the var is unset",
+    normalizeTracesSamplerEnv() === undefined
   )
 }
 

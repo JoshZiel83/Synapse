@@ -1,5 +1,5 @@
 diff --git a/node_modules/@fastify/otel/index.js b/node_modules/@fastify/otel/index.js
-index d52a40e..48ed5a9 100644
+index 97fe74b..965e9d4 100644
 --- a/node_modules/@fastify/otel/index.js
 +++ b/node_modules/@fastify/otel/index.js
 @@ -43,6 +43,7 @@ const ANONYMOUS_FUNCTION_NAME = 'anonymous'
@@ -27,7 +27,7 @@ index d52a40e..48ed5a9 100644
          if (
            this[kInstrumentation].isEnabled() === false ||
            isRouteOtelDisabled(request.routeOptions.config)
-@@ -413,6 +415,19 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
+@@ -420,6 +422,19 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
          request[kRequestContext] = trace.setSpan(ctx, span)
          request[kRequestSpan] = span
  
@@ -47,7 +47,7 @@ index d52a40e..48ed5a9 100644
          context.with(request[kRequestContext], () => {
            hookDone()
          })
-@@ -444,8 +459,21 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
+@@ -451,8 +466,21 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
          const span = request[kRequestSpan]
  
          if (span != null) {
@@ -70,7 +70,7 @@ index d52a40e..48ed5a9 100644
            }
  
            span.setAttributes({
-@@ -455,23 +483,16 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
+@@ -462,23 +490,16 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
          }
  
          request[kRequestSpan] = null
@@ -99,7 +99,7 @@ index d52a40e..48ed5a9 100644
  
          hookDone()
        }
-@@ -648,13 +669,12 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
+@@ -655,13 +676,12 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
                        return result
                      },
                      error => {
@@ -115,7 +115,7 @@ index d52a40e..48ed5a9 100644
                        span.end()
                        return Promise.reject(error)
                      }
-@@ -664,13 +684,12 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
+@@ -671,13 +691,12 @@ class FastifyOtelInstrumentation extends InstrumentationBase {
                  span.end()
                  return res
                } catch (error) {

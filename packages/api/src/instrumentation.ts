@@ -18,14 +18,25 @@
  *                                        traces POST to <endpoint>/v1/traces.
  *   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT   per-signal override, used as-is; either
  *                                        endpoint var enables export.
- *   OTEL_SERVICE_NAME                    service.name resource attribute
- *                                        (default "synapse-api").
+ *   OTEL_SERVICE_NAME                    service.name resource attribute. FALLBACK
+ *                                        "synapse-api"; OTEL_SERVICE_NAME wins over
+ *                                        OTEL_RESOURCE_ATTRIBUTES' service.name wins
+ *                                        over the fallback (EnvDetector precedence).
  *   OTEL_TRACES_SAMPLER(_ARG)            THE OTLP volume knob — the six spec values,
  *                                        mapped by buildSamplerFromEnvVars() below.
+ *                                        Matched case-INSENSITIVELY + whitespace-
+ *                                        tolerant (normalizeTracesSamplerEnv writes
+ *                                        the folded value back to process.env).
+ *   OTEL_TRACES_EXPORTER                 house three-state gate: unset/`otlp` ⇒ OTLP
+ *                                        export; `none` ⇒ no OTLP processor (off
+ *                                        switch that keeps the endpoint set);
+ *                                        anything else ⇒ diag.error + treat as unset.
  *   OTEL_SDK_DISABLED                    true = no-op tracing; the api still boots
  *                                        and serves; Sentry error capture survives.
  *   OTEL_LOG_LEVEL                       SDK self-diagnostics level (default ERROR).
- *   OTEL_RESOURCE_ATTRIBUTES             honored via envDetector.
+ *   OTEL_RESOURCE_ATTRIBUTES             honored via envDetector; its service.name
+ *                                        now actually wins over the fallback when
+ *                                        OTEL_SERVICE_NAME is unset.
  *   OTEL_SEMCONV_STABILITY_OPT_IN        code-defaulted to "http" (stable-only HTTP
  *                                        semconv names, matching undici/@fastify/otel).
  *   SENTRY_DSN                           enables Sentry error capture. Empty = off.
@@ -50,6 +61,25 @@
  * DOCUMENTED DEVIATIONS from the OTel env spec:
  *   - OTEL_PROPAGATORS is not honored (sdk-trace-node 2.x removed it; our
  *     propagator is policy, not configuration — see docs/trace-propagation-policy.md).
+ *   - OTEL_TRACES_EXPORTER is a HOUSE three-state gate (unset/`otlp` ⇒ OTLP
+ *     export; `none` ⇒ no OTLP processor; anything else ⇒ diag.error + treat as
+ *     unset). No installed @opentelemetry package reads it; `zipkin`/`console`/
+ *     `logging`/`otlp/stdout` and comma-separated exporter lists are NOT
+ *     supported (no such packages installed; OTLP→Alloy is policy, not config).
+ *   - OTEL_EXPORTER_OTLP_PROTOCOL is not honored: the proto exporter is a pinned
+ *     dependency, so the wire protocol is a package change, not an env change.
+ *   - Export gate: with NO OTEL_EXPORTER_OTLP_[TRACES_]ENDPOINT set, NOTHING is
+ *     exported (spans still created for log↔trace correlation). This replaces the
+ *     spec's default of exporting to http://localhost:4318.
+ *   - OTEL_TRACES_SAMPLER enum matching is case-INSENSITIVE + whitespace-tolerant:
+ *     normalizeTracesSamplerEnv() trim+lowercases it and writes it BACK to
+ *     process.env before provider construction, so the SDK's own parallel parse
+ *     agrees. Only this enum is folded — never OTEL_SERVICE_NAME/RESOURCE_ATTRIBUTES.
+ *   - Resource precedence: the house service.name (`synapse-api`)/service.namespace
+ *     (`synapse`) are FALLBACK-only, merged BEFORE the detectors. OTEL_SERVICE_NAME
+ *     wins over OTEL_RESOURCE_ATTRIBUTES' service.name wins over the fallback — the
+ *     installed EnvDetector already implements that precedence, so no trailing
+ *     literal merge (which would override the operator) exists.
  *   - diag default level is ERROR, not the spec's `info` (exporter failures log;
  *     healthy operation stays silent). Override via OTEL_LOG_LEVEL.
  *   - Hardened remote-parent sampler arms (§3a, adjudication 1 + amendment A2):
@@ -157,6 +187,30 @@ import { sanitizeTraceState } from "./infrastructure/observability/traceparent.j
 // compose-style `${VAR:-}` passthroughs materialize exactly that empty string.)
 process.env.OTEL_SEMCONV_STABILITY_OPT_IN ||= "http"
 
+/**
+ * Normalize OTEL_TRACES_SAMPLER in place: `trim().toLowerCase()`, written BACK
+ * to process.env, using the same load-bearing-env-mutation idiom as the
+ * OTEL_SEMCONV_STABILITY_OPT_IN line above. The OTel env spec says enum values
+ * SHOULD be case-insensitive; buildSamplerFromEnvVars() reads the normalized
+ * value AND — the load-bearing half — so does the SDK's own parallel
+ * loadDefaultConfig(), which BasicTracerProvider runs even though we pass an
+ * explicit sampler. Without the write-back our parser accepts `ALWAYS_OFF`
+ * while the SDK keeps emitting `value "ALWAYS_OFF" invalid` at ERROR every boot;
+ * with it both agree, and a genuinely unknown value still trips the SDK's error.
+ * Only THIS enum is folded — never OTEL_SERVICE_NAME/OTEL_RESOURCE_ATTRIBUTES.
+ * Exported so probe P-A7 can drive it per case. MUST run before
+ * buildSamplerFromEnvVars() and before `new NodeTracerProvider(...)`.
+ */
+export function normalizeTracesSamplerEnv(): string | undefined {
+  const raw = getStringFromEnv("OTEL_TRACES_SAMPLER")
+  if (raw === undefined) return undefined
+  const normalized = raw.trim().toLowerCase()
+  process.env.OTEL_TRACES_SAMPLER = normalized
+  return normalized
+}
+
+normalizeTracesSamplerEnv()
+
 // OTEL_SDK_DISABLED short-circuits the provider + instrumentations below (spec
 // compliance). Sentry error capture is independent of it.
 const otelDisabled = getBooleanFromEnv("OTEL_SDK_DISABLED") ?? false
@@ -170,19 +224,25 @@ diag.setLogger(new DiagConsoleLogger(), {
   })(),
 })
 
-const serviceName = getStringFromEnv("OTEL_SERVICE_NAME") ?? "synapse-api"
-
-// defaultResource + env/process/host detectors (OTEL_RESOURCE_ATTRIBUTES is now
-// honored) + explicit attributes merged last so they win.
-const resource = defaultResource()
-  .merge(
-    detectResources({ detectors: [envDetector, processDetector, hostDetector] })
-  )
+// House service.name/service.namespace are FALLBACK-only, merged BEFORE the
+// detectors: ResourceImpl.merge gives the INCOMING (later) resource precedence,
+// and the installed EnvDetector already assigns service.name from
+// OTEL_SERVICE_NAME ABOVE OTEL_RESOURCE_ATTRIBUTES' service.name (spec
+// precedence). So the detectors — not a trailing literal merge — own the final
+// service.name; OTEL_SERVICE_NAME beats OTEL_RESOURCE_ATTRIBUTES beats the
+// fallback. (Merging the literals LAST, as before, silently overrode the
+// operator's OTEL_RESOURCE_ATTRIBUTES=service.name — the F13 precedence bug.)
+// Exported as the boot-probe seam (instrumentation.boot-probe.ts reads
+// resource.attributes["service.name"] for the precedence matrices).
+export const resource = defaultResource()
   .merge(
     resourceFromAttributes({
-      [ATTR_SERVICE_NAME]: serviceName,
+      [ATTR_SERVICE_NAME]: "synapse-api",
       "service.namespace": "synapse",
     })
+  )
+  .merge(
+    detectResources({ detectors: [envDetector, processDetector, hostDetector] })
   )
 
 // Settle the detectors' async attributes (host.id lookup etc.) as early as
@@ -516,11 +576,35 @@ export function valueSafeRedisSerializer(
     : `${cmdName} ${first}`
 }
 
-const spanProcessors: SpanProcessor[] = []
+// Exported as the boot-probe seam: instrumentation.boot-probe.ts reports
+// spanProcessors.length so the OTEL_TRACES_EXPORTER matrices (5/6) can assert
+// "none ⇒ zero processors" / "bogus ⇒ export still on" without module internals.
+export const spanProcessors: SpanProcessor[] = []
 if (otlpConfigured) {
-  // OTLP export (traces → Grafana Alloy → Tempo). No-arg exporter reads the
-  // OTEL_EXPORTER_OTLP_* env per spec.
-  spanProcessors.push(new BatchSpanProcessor(new OTLPTraceExporter()))
+  // OTEL_TRACES_EXPORTER is a HOUSE three-state gate (no installed
+  // @opentelemetry package reads it — @opentelemetry/sdk-node is not a
+  // dependency): unset/empty/`otlp` ⇒ export; `none` ⇒ push NO OTLP processor
+  // (a real off switch that does not require unsetting the endpoint); anything
+  // else ⇒ diag.error + treat as unset (the spec's "MUST warn and gracefully
+  // ignore" for unknown values). Normalized trim+lowercase like the sampler enum.
+  const exporterSetting = getStringFromEnv("OTEL_TRACES_EXPORTER")
+    ?.trim()
+    .toLowerCase()
+  const exporterOff = exporterSetting === "none"
+  if (
+    !exporterOff &&
+    exporterSetting !== undefined &&
+    exporterSetting !== "otlp"
+  ) {
+    diag.error(
+      `OTEL_TRACES_EXPORTER "${exporterSetting}" is not supported (only "otlp" or "none") — treating as unset (OTLP export ON)`
+    )
+  }
+  if (!exporterOff) {
+    // OTLP export (traces → Grafana Alloy → Tempo). No-arg exporter reads the
+    // OTEL_EXPORTER_OTLP_* env per spec.
+    spanProcessors.push(new BatchSpanProcessor(new OTLPTraceExporter()))
+  }
 }
 if (sentryClient && sentryForwardRate > 0) {
   // Registered ONLY at forward rate > 0: the default (0) config path carries
@@ -538,6 +622,16 @@ const baseSampler = buildSamplerFromEnvVars()
 // health trace; it exists only as a guard if that hook is ever removed.
 const fastifyOtelInstrumentation = new FastifyOtelInstrumentation({
   ignorePaths: "/api/v1/health",
+  // No lifecycle-hook child spans (onRequest/preHandler/onSend/onResponse/…):
+  // they were 64-80% of span count and 60-81% of span bytes per request (each
+  // hook-span name embeds the api's ~340-char encapsulated plugin chain). The
+  // `request` span AND the route `handler` span (which carries http.route) both
+  // SURVIVE (0.20.1 README:229-249, lab-confirmed); hook bodies still run inside
+  // the request-span context, so requireParentSpan pg/ioredis spans created in
+  // hooks are NOT dropped, and the finalize/error hooks that carry the 4xx patch
+  // are appended AFTER the wrap loop and are never hook-wrapped. Per-route escape
+  // hatch remains via `config: { otel: { instrumentHooks: [...] } }`.
+  instrumentHooks: false,
 })
 
 const provider = otelDisabled
@@ -552,8 +646,10 @@ const provider = otelDisabled
 
 if (provider) {
   provider.register({
-    // The Ring-2 egress choke point wraps the composite (both configs).
-    propagator: firstPartyPropagator(basePropagator, Boolean(sentryClient)),
+    // The Ring-2 egress choke point wraps the composite (both configs). It now
+    // fails CLOSED unconditionally (F12) — no Sentry-gated delegate branch — so
+    // it takes no sentryEnabled argument.
+    propagator: firstPartyPropagator(basePropagator),
     // Sentry needs its context manager for per-request isolation scopes; the
     // plain AsyncLocalStorage manager is its Sentry-off equivalent.
     contextManager: sentryClient

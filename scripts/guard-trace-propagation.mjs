@@ -59,6 +59,20 @@
 //     as a bare `z.string().optional()`. Every carrier position runs the gate;
 //     the "trusted first-party producer" exemption was deleted.
 //
+// Ambient-extraction ratchet (workstream D — F8):
+//
+//   ambient_extract_base (cross-file) — a carrier extraction base must be
+//     ROOT_CONTEXT, never `context.active()`. Extracting from the ambient
+//     context inherits ambient baggage and any ambient `suppressTracing` key and
+//     re-parents onto connection/loop-lifetime state (envelope-trace.ts's codified
+//     "extract-or-ROOT, never context.active()" invariant). Bans `context.active()`
+//     as the FIRST argument of any `extract…(` call (`propagator.extract(...)` or
+//     `extractTraceCarrierContext(...)`) in packages/api/src — multi-line tolerant
+//     (the formatter breaks each argument onto its own line). Scoped to `extract`
+//     so the legitimate INJECT base (`injectTraceContext`'s `context.active()`) is
+//     never flagged. A crossFileRule, not a line rule, precisely because the
+//     regression form spans lines.
+//
 // Zero-violation (no baseline): all rules are clean today, so any new violation
 // fails CI outright.
 //
@@ -363,6 +377,41 @@ export const crossFileRules = [
           out.push({
             file,
             text: `numeric cap ${capConst} = ${num ?? "(absent)"} != canonical ${canonVals["MAX_TRACESTATE_LENGTH"]}`,
+          })
+        }
+      }
+      return out
+    },
+  },
+  {
+    // D (F8): a carrier extraction base must be ROOT_CONTEXT, never
+    // context.active(). Bans context.active() as the first argument of any
+    // `extract…(` call in packages/api/src — `propagator.extract(...)` and the
+    // `extractTraceCarrierContext(...)` helper alike. Multi-line tolerant (the
+    // \s* spans the newlines a formatter inserts between arguments), and scoped
+    // to `extract` so injectTraceContext's legitimate INJECT base is not flagged.
+    id: "ambient_extract_base",
+    hint: "extraction bases must be ROOT_CONTEXT, never context.active() — extracting a carrier from the ambient context inherits ambient baggage/suppressTracing and re-parents onto connection/loop state (envelope-trace.ts's extract-or-ROOT invariant, F8). Pass ROOT_CONTEXT and, for a carrier, re-validate before extracting.",
+    check(ctx) {
+      const out = []
+      const AMBIENT_EXTRACT_RE = /\bextract\w*\(\s*context\.active\(\)/
+      for (const abs of ctx.listTsFiles("packages/api/src")) {
+        let content
+        try {
+          content = readFileSync(abs, "utf8")
+        } catch {
+          continue
+        }
+        // Strip `//` comment lines so prose describing the pattern (this rule's
+        // own docs, or a code comment) is never a false positive.
+        const code = content
+          .split("\n")
+          .filter((l) => !l.trimStart().startsWith("//"))
+          .join("\n")
+        if (AMBIENT_EXTRACT_RE.test(code)) {
+          out.push({
+            file: relative(ctx.repoRoot, abs),
+            text: "context.active() passed as an extraction base — use ROOT_CONTEXT",
           })
         }
       }

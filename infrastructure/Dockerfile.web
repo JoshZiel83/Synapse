@@ -8,13 +8,17 @@ RUN npm config set registry https://registry.npmmirror.com \
   && npm config set fetch-retry-maxtimeout 120000
 
 COPY package.json package-lock.json ./
-# The root postinstall applies the api-only @fastify/otel patch via
-# patch-package — a root devDependency this filtered workspace install does
-# not install (and @fastify/otel is absent from this image's tree), so the
-# hook would fail with `patch-package: not found`. Drop it in-image; the
-# dependencies' own lifecycle scripts still run. Lockfile validation is
-# unaffected (npm ci validates deps, not scripts).
-RUN node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));delete p.scripts.postinstall;fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+# Dependency patches + the applier, above the install layer. This filtered
+# workspace install does not install root devDependencies, so patch-package is
+# absent here; scripts/apply-patches.mjs handles that natively — it skips patches
+# whose target package is not in this tree and FAILS if one is present and
+# unpatched. That is why the root postinstall no longer has to be deleted in-image
+# (the deletion hack is banned by scripts/guard-image-patches.mjs). The root
+# postinstall still fires during the `npm ci` below, finds every patched package
+# absent from this tree, prints a skip and exits 0; the explicit RUN afterward is
+# the real gate and does not depend on lifecycle scripts staying enabled.
+COPY patches/ patches/
+COPY scripts/apply-patches.mjs scripts/apply-patches.mjs
 COPY tsconfig.base.json ./
 # All workspace manifests must exist so `npm ci` can validate the lockfile,
 # even though this image only builds device-protocol + shared + web-next.
@@ -32,6 +36,10 @@ COPY packages/api/package.json packages/api/
 COPY packages/remote-agent-daemon/package.json packages/remote-agent-daemon/
 COPY packages/web-next/package.json packages/web-next/
 RUN npm ci --workspace=packages/device-protocol --workspace=packages/shared --workspace=packages/web-next
+# Skips every patch (no patched package is in this filtered tree today) and FAILS
+# the build the day a patched dependency enters it unpatched — no --require-all
+# (adjudication R5).
+RUN node scripts/apply-patches.mjs
 
 # @synapse/shared value-imports @synapse/device-protocol/browser-tools, so
 # device-protocol must be built before shared (which web-next consumes).

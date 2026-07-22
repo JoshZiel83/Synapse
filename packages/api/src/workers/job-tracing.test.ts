@@ -15,6 +15,7 @@ import {
   BasicTracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
+  type ReadableSpan,
 } from "@opentelemetry/sdk-trace-base"
 import {
   injectTraceContext,
@@ -687,8 +688,9 @@ test("withJobSpan: wait_time_ms = processedOn - timestamp - delay, clamped at 0,
   assert.equal(span.attributes["messaging.bullmq.job.attempts_made"], 3)
 })
 
-test("withJobSpan: no/garbage carrier ⇒ fresh root; processor throw ⇒ ERROR + exception + rethrow", async () => {
-  // no carrier ⇒ parentless root
+test("withJobSpan: no carrier ⇒ fresh root; processor throw ⇒ ERROR + exception + rethrow", async () => {
+  // no carrier ⇒ parentless root (garbage/poisoned-ambient cases live in the
+  // dedicated F8 suite below — this test's old name overstated its coverage)
   tickExporter.reset()
   await withJobSpan("q", async () => undefined)(stubJob({ data: { x: 1 } }))
   let span = tickExporter.getFinishedSpans()[0]!
@@ -710,6 +712,123 @@ test("withJobSpan: no/garbage carrier ⇒ fresh root; processor throw ⇒ ERROR 
   const exception = span.events.find((e) => e.name === "exception")
   assert.ok(exception, "recordException must attach an exception event")
   assert.equal(exception.attributes?.["exception.message"], "worker exploded")
+})
+
+// ─── withJobSpan extract-or-ROOT under a poisoned ambient (§4.H / F8) ───
+//
+// withJobSpan must NEVER inherit the ambient context: not the parent (a
+// carrier-less / invalid job is a FRESH root, never re-parented onto whatever
+// span was active when the worker callback fired), and not the ambient
+// suppressTracing/baggage keys (a valid-carrier job under a suppressed ambient
+// must still RECORD). Latent today, but goes live the moment a worker is
+// constructed inside a request or BullMQ's own telemetry is enabled — the guard
+// for the exact leak envelope-trace.ts's extract-or-ROOT invariant prevents.
+
+const F8_VALID_TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+const F8_CARRIER_TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
+
+/**
+ * Run `withJobSpan` for `data` under a real ACTIVE unrelated span (the poison).
+ * Returns the exported consumer span (or undefined if it never recorded) and the
+ * poison span's trace id. `suppress` additionally wraps the run in
+ * suppressTracing — the ambient-suppression-leak probe.
+ */
+async function runUnderPoisonedAmbient(
+  data: unknown,
+  suppress = false
+): Promise<{ consumer: ReadableSpan | undefined; poisonTraceId: string }> {
+  tickExporter.reset()
+  return trace
+    .getTracer("poison")
+    .startActiveSpan("poison-ambient", async (poison) => {
+      const poisonTraceId = poison.spanContext().traceId
+      const run = () => withJobSpan("q", async () => "done")(stubJob({ data }))
+      if (suppress) await context.with(suppressTracing(context.active()), run)
+      else await run()
+      poison.end()
+      const consumer = tickExporter
+        .getFinishedSpans()
+        .find((s) => s.name === "process q")
+      return { consumer, poisonTraceId }
+    })
+}
+
+test("withJobSpan F8: poisoned ambient × no carrier ⇒ fresh root, not the ambient span", async () => {
+  const { consumer, poisonTraceId } = await runUnderPoisonedAmbient({ x: 1 })
+  assert.ok(consumer, "consumer must export")
+  assert.equal(consumer.parentSpanContext, undefined, "no carrier ⇒ fresh root")
+  assert.notEqual(
+    consumer.spanContext().traceId,
+    poisonTraceId,
+    "must not join the ambient trace"
+  )
+})
+
+test("withJobSpan F8: poisoned ambient × garbage traceparent ⇒ fresh root", async () => {
+  const { consumer, poisonTraceId } = await runUnderPoisonedAmbient({
+    __otelctx: { traceparent: "not-a-traceparent" },
+  })
+  assert.ok(consumer)
+  assert.equal(consumer.parentSpanContext, undefined)
+  assert.notEqual(consumer.spanContext().traceId, poisonTraceId)
+})
+
+test("withJobSpan F8: poisoned ambient × all-zero trace id ⇒ fresh root", async () => {
+  const { consumer, poisonTraceId } = await runUnderPoisonedAmbient({
+    __otelctx: {
+      traceparent: "00-00000000000000000000000000000000-b7ad6b7169203331-01",
+    },
+  })
+  assert.ok(consumer)
+  assert.equal(
+    consumer.parentSpanContext,
+    undefined,
+    "all-zero id is invalid ⇒ fresh root"
+  )
+  assert.notEqual(consumer.spanContext().traceId, poisonTraceId)
+})
+
+test("withJobSpan F8: poisoned ambient × non-object carrier ⇒ fresh root", async () => {
+  const { consumer, poisonTraceId } = await runUnderPoisonedAmbient({
+    __otelctx: "a-string-not-an-object",
+  })
+  assert.ok(consumer)
+  assert.equal(consumer.parentSpanContext, undefined)
+  assert.notEqual(consumer.spanContext().traceId, poisonTraceId)
+})
+
+test("withJobSpan F8: poisoned ambient × VALID carrier ⇒ parents to the producer, not the ambient", async () => {
+  const { consumer, poisonTraceId } = await runUnderPoisonedAmbient({
+    __otelctx: { traceparent: F8_VALID_TP },
+  })
+  assert.ok(consumer)
+  assert.equal(
+    consumer.spanContext().traceId,
+    F8_CARRIER_TRACE_ID,
+    "continues the carrier's trace, not the ambient one"
+  )
+  assert.equal(
+    consumer.parentSpanContext?.spanId,
+    "b7ad6b7169203331",
+    "parents DIRECTLY to the carrier producer"
+  )
+  assert.notEqual(consumer.spanContext().traceId, poisonTraceId)
+})
+
+test("withJobSpan F8: SUPPRESSED ambient × valid carrier ⇒ consumer still RECORDING (no ambient suppressTracing leak)", async () => {
+  const { consumer } = await runUnderPoisonedAmbient(
+    { __otelctx: { traceparent: F8_VALID_TP } },
+    true
+  )
+  // The consumer exported AT ALL ⇒ it recorded. Extracting from ROOT_CONTEXT
+  // dropped the ambient suppressTracing key; extracting from context.active()
+  // would have inherited it and produced a non-recording span that never
+  // exports (find ⇒ undefined ⇒ this assertion fails).
+  assert.ok(
+    consumer,
+    "carrier-bearing job under a suppressed ambient must still record"
+  )
+  assert.equal(consumer.spanContext().traceId, F8_CARRIER_TRACE_ID)
 })
 
 // ─── injectTraceContext two-stage tracestate sanitizer (§3c / §4.H) ───

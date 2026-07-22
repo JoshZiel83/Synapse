@@ -11,7 +11,7 @@ import {
   trace,
   TraceFlags,
 } from "@opentelemetry/api"
-import type { Span } from "@opentelemetry/api"
+import type { Context, Span } from "@opentelemetry/api"
 import { suppressTracing, W3CTraceContextPropagator } from "@opentelemetry/core"
 import {
   ATTR_MESSAGING_DESTINATION_NAME,
@@ -24,9 +24,11 @@ import {
 } from "@opentelemetry/semantic-conventions/incubating"
 import {
   extractTraceCarrierContext,
+  isValidTraceparent,
   sanitizeTraceState,
   sanitizeTracestateHeader,
 } from "../infrastructure/observability/traceparent.js"
+import { createLogger } from "../infrastructure/logger/index.js"
 
 /**
  * OpenTelemetry trace propagation across the BullMQ (Redis) boundary.
@@ -45,6 +47,7 @@ import {
  * payload schema changes.
  */
 const CARRIER_KEY = "__otelctx"
+const log = createLogger("worker.job-tracing")
 const tracer = trace.getTracer("synapse-bullmq")
 // Trace-context ONLY, via a PRIVATE W3CTraceContextPropagator — deliberately
 // NOT the global propagator. The global is the FirstPartyOnlyPropagator-wrapped
@@ -292,23 +295,72 @@ type AnyJob = Job<unknown, unknown, string>
  * Worker — job-tracing.test.ts drives it with a stub Job). Production code
  * uses `tracedWorker`.
  */
+// Receiver rule (§3c, degrade-not-reject): never forward or log a raw invalid
+// value — warn once per process PER FIELD with only the field name and length,
+// so a noisy traceparent doesn't permanently silence the diagnostically
+// different oversized-tracestate warning (mirrors envelope-trace.ts).
+const warnedInvalidJobTraceField = { traceparent: false, tracestate: false }
+function warnInvalidJobTraceFieldOnce(
+  field: "traceparent" | "tracestate",
+  value: unknown
+): void {
+  if (warnedInvalidJobTraceField[field]) return
+  warnedInvalidJobTraceField[field] = true
+  log.warn(
+    {
+      field,
+      valueType: typeof value,
+      valueLength: typeof value === "string" ? value.length : undefined,
+    },
+    "invalid trace field on a BullMQ __otelctx carrier — degraded to absent (warn-once)"
+  )
+}
+
 /**
- * A shallow copy of an inbound `__otelctx` carrier with its `tracestate` run
- * through the canonical gate: a grammar-invalid / duplicate-keyed / over-512
- * value is DROPPED (the key removed) so only a gate-clean tracestate reaches
- * `extractTraceCarrierContext`. The traceparent is untouched.
+ * Parent context for a job from its `__otelctx` carrier: **extract-or-ROOT,
+ * never `context.active()`** — the repo's codified invariant (envelope-trace.ts
+ * :9-12), applied identically here. `ROOT_CONTEXT` is BOTH the extraction base
+ * AND the fallback:
+ *
+ * - As the FALLBACK (no/invalid carrier) it starts a fresh trace root — never
+ *   re-parenting onto whatever ambient span happened to be active when the
+ *   worker callback fired (BullMQ's own telemetry hook or a lazily-constructed
+ *   worker would otherwise poison it — F8).
+ * - As the extraction BASE it also drops ambient baggage and any ambient
+ *   `suppressTracing` key, so a carrier-bearing job processed under a suppressed
+ *   ambient still produces a RECORDING consumer span (the ambient-key leak F8
+ *   found on the valid-carrier path — extracting from `context.active()` would
+ *   have inherited suppression and silently made the span non-recording).
+ *
+ * The traceparent is re-validated against the canonical strict regex; the
+ * tracestate runs the canonical gate (`sanitizeTracestateHeader`) then the
+ * stage-3 salvage guard inside `extractTraceCarrierContext`, so a Level-2-only
+ * key the transport per-member-salvages drops the tracestate WHOLE, never
+ * partially. A malformed tracestate drops the FIELD, never the traceparent.
  */
-function gateInboundCarrier(
-  carrier: Record<string, string>
-): Record<string, string> {
-  const gated: Record<string, string> = { ...carrier }
-  const ts = carrier["tracestate"]
-  if (typeof ts === "string") {
-    const clean = sanitizeTracestateHeader(ts)
-    if (clean === undefined) delete gated["tracestate"]
-    else gated["tracestate"] = clean
+function jobParentContext(carrier: unknown): Context {
+  if (
+    carrier === null ||
+    typeof carrier !== "object" ||
+    Array.isArray(carrier)
+  ) {
+    return ROOT_CONTEXT
   }
-  return gated
+  const { traceparent, tracestate } = carrier as Record<string, unknown>
+  if (!isValidTraceparent(traceparent)) {
+    if (traceparent !== undefined)
+      warnInvalidJobTraceFieldOnce("traceparent", traceparent)
+    return ROOT_CONTEXT
+  }
+  const gated: Record<string, string> = { traceparent }
+  if (typeof tracestate === "string") {
+    const clean = sanitizeTracestateHeader(tracestate)
+    if (clean !== undefined) gated.tracestate = clean
+    else warnInvalidJobTraceFieldOnce("tracestate", tracestate)
+  } else if (tracestate !== undefined) {
+    warnInvalidJobTraceFieldOnce("tracestate", tracestate)
+  }
+  return extractTraceCarrierContext(ROOT_CONTEXT, gated, tracePropagator)
 }
 
 export function withJobSpan(
@@ -321,18 +373,9 @@ export function withJobSpan(
       data && typeof data === "object" && !Array.isArray(data)
         ? (data as Record<string, unknown>)[CARRIER_KEY]
         : undefined
-    // Gate the inbound `__otelctx` tracestate (previously zero validation) and
-    // route the extract through stage 3 so a Level-2-only key the transport
-    // salvages drops the tracestate whole, never partially. The traceparent —
-    // and the producer trace continuation — always survive.
-    const parent =
-      carrier && typeof carrier === "object"
-        ? extractTraceCarrierContext(
-            context.active(),
-            gateInboundCarrier(carrier as Record<string, string>),
-            tracePropagator
-          )
-        : context.active()
+    // extract-or-ROOT (jobParentContext): the carrier's producer trace continues,
+    // and a no/invalid carrier is a fresh root — never the ambient context.
+    const parent = jobParentContext(carrier)
 
     return context.with(parent, () =>
       tracer.startActiveSpan(

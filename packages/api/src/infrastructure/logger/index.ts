@@ -191,6 +191,7 @@ const SCOPE_TO_DOMAIN: Readonly<Record<string, DomainScope>> = {
   "transcription.registry": { domain: "transcription", component: "registry" },
   "transcription.sherpa": { domain: "transcription", component: "sherpa" },
   "transcription.whisper": { domain: "transcription", component: "whisper" },
+  "worker.job-tracing": { domain: "infra", component: "worker.job-tracing" },
   workspace: { domain: "workspace" },
 }
 

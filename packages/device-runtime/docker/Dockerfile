@@ -24,6 +24,11 @@ RUN npm config set registry https://registry.npmmirror.com \
   && npm config set fetch-retry-maxtimeout 120000
 # All workspace manifests so npm ci can validate the lockfile.
 COPY package.json package-lock.json tsconfig.base.json ./
+# Dependency patches + the applier, ABOVE the install layer (its cache key tracks
+# them). `npm ci` below runs --ignore-scripts, so the root postinstall does not
+# fire here; the explicit RUN after the install applies the patches.
+COPY patches/ patches/
+COPY scripts/apply-patches.mjs scripts/apply-patches.mjs
 COPY packages/device-protocol/package.json packages/device-protocol/
 COPY packages/shared/package.json packages/shared/
 COPY packages/device-runtime/package.json packages/device-runtime/
@@ -42,6 +47,15 @@ RUN npm ci --legacy-peer-deps --ignore-scripts \
       --workspace=packages/shared \
       --workspace=packages/device-runtime \
       --include-workspace-root
+
+# Apply patches/ explicitly (--ignore-scripts skipped the root postinstall). This
+# tree installs only device-protocol/shared/device-runtime + the workspace root,
+# so a patch for a package outside it (e.g. @fastify/otel, an api-only dep) is a
+# printed skip — NO --require-all (adjudication R5). The day a patched package DOES
+# enter this tree unpatched, this line fails the build. Do NOT call patch-package
+# directly here: a bare `patch-package --error-on-fail` exits non-zero on a patch
+# whose target package is absent, which would break this image today.
+RUN node scripts/apply-patches.mjs
 COPY packages/device-protocol/ packages/device-protocol/
 COPY packages/shared/ packages/shared/
 COPY packages/device-runtime/ packages/device-runtime/

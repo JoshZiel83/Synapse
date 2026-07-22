@@ -12,11 +12,13 @@
 //
 //   Case B (error path): EXACT parity here too. The §4.A [adj 7] house
 //     onError hook registers UNCONDITIONALLY (only the capture inside is
-//     gated on the Sentry client), so the "@fastify/otel onError" INTERNAL
-//     hook span appears in BOTH configs — pinned to exactly one per
-//     error-throwing request on each side (non-vacuity: the hook is present
-//     and instrumented, not merely absent from both). Any sampling loss /
-//     dropped instrumentation / extra Sentry spans breaks the multiset diff.
+//     gated on the Sentry client) — the hook TOPOLOGY is byte-identical across
+//     configs, which is the I1 invariant. Under `instrumentHooks: false` (F11)
+//     that hook produces NO span, so parity is proven by the surviving error-path
+//     spans (request + handler for /boom and /expected-400) matching exactly, and
+//     non-vacuity by BOTH runs exporting a non-empty span set with ZERO
+//     lifecycle-hook spans. Any sampling loss / dropped instrumentation / extra
+//     Sentry spans breaks the multiset diff.
 import {
   check,
   finish,
@@ -199,9 +201,15 @@ check(
 const bOff = await runCase("B off", "off", true)
 const bOn = await runCase("B on(rate1)", "rate1", true)
 
-const HOOK_SPAN = "@fastify/otel|onError - fastify -> @fastify/otel|kind=1"
-const hookCount = (s: RunSummary) =>
-  s.spans.filter((sp) => sp.key === HOOK_SPAN).length
+// A lifecycle-hook span's name embeds the hook name (onRequest/onError/onSend/…);
+// instrumentHooks:false removes them ALL. NB the surviving route-HANDLER span
+// name also contains " - " (it is "…route-handler - handler"), so match the hook
+// NAMES specifically, not any " - ". Under the old (hooks-on) build this counted
+// the onError hook span; now it must be ZERO on both sides.
+const HOOK_NAME_RE =
+  /\b(onRequest|preParsing|preValidation|preHandler|preSerialization|onSend|onResponse|onError|onTimeout|onRequestAbort)\b/
+const hookSpanCount = (s: RunSummary) =>
+  s.spans.filter((sp) => HOOK_NAME_RE.test(sp.key)).length
 const bDiff = diff(multiset(bOff.spans), multiset(bOn.spans))
 check(
   `B: EXACT span-multiset parity off vs on on the error path (I1; volume ${bOff.spans.length})`,
@@ -209,12 +217,17 @@ check(
   bDiff
 )
 check(
-  "B: house onError hook span present in BOTH configs (1 per error request — the hook registers unconditionally)",
-  hookCount(bOff) === 2 && hookCount(bOn) === 2,
-  { off: hookCount(bOff), on: hookCount(bOn) }
+  "B: error path exports a non-empty span set in BOTH configs (parity is not vacuous)",
+  bOff.spans.length > 0 && bOn.spans.length > 0,
+  { off: bOff.spans.length, on: bOn.spans.length }
 )
 check(
-  "B: distinct-trace count parity (hook spans join existing traces, no new roots)",
+  "B: ZERO @fastify/otel lifecycle-hook spans on the error path in BOTH configs (instrumentHooks:false)",
+  hookSpanCount(bOff) === 0 && hookSpanCount(bOn) === 0,
+  { off: hookSpanCount(bOff), on: hookSpanCount(bOn) }
+)
+check(
+  "B: distinct-trace count parity off vs on (error-path spans add no new roots)",
   bOff.traceCount === bOn.traceCount,
   { off: bOff.traceCount, on: bOn.traceCount }
 )

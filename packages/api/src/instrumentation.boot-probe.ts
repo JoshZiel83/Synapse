@@ -16,6 +16,13 @@
  *   tracesSampleRateOption    String(client.getOptions().tracesSampleRate) —
  *                             "undefined" at forward rate <= 0 ([D4] DSN-only
  *                             semantics), "1" at rate > 0
+ *   spanProcessorCount        spanProcessors.length (F13 OTEL_TRACES_EXPORTER
+ *                             gate: 0 under `none`, 1 under `otlp`/bogus+endpoint)
+ *   serviceName /             the RESOLVED resource attributes (F13 precedence:
+ *   serviceNamespace          OTEL_SERVICE_NAME > OTEL_RESOURCE_ATTRIBUTES >
+ *                             the `synapse-api`/`synapse` fallback)
+ *   tracesSamplerEnv          process.env.OTEL_TRACES_SAMPLER AFTER normalization
+ *                             (trim+lowercase written back)
  *
  * Env knobs (besides the observability vars instrumentation.ts itself reads):
  *   BOOT_PROBE_CAPTURE_ERROR=1  capture one test error to Sentry before exit
@@ -36,8 +43,10 @@
  */
 import {
   fastifyOtelInstrumentation,
+  resource,
   setupSentryErrorHandler,
   shutdownTelemetry,
+  spanProcessors,
 } from "./instrumentation.js"
 import { context, trace } from "@opentelemetry/api"
 import { suppressTracing } from "@opentelemetry/core"
@@ -158,6 +167,10 @@ if (process.env.BOOT_PROBE_HTTP_CHECK === "1") {
   await new Promise<void>((resolve) => echo.close(() => resolve()))
 }
 
+// Settle async resource attributes (host.id etc.) before reading service.name,
+// so the read never trips the SDK's "accessed before settled" diag line.
+await resource.waitForAsyncAttributes?.()
+
 console.log(
   `BOOT_RESULT ${JSON.stringify({
     ping,
@@ -170,6 +183,14 @@ console.log(
     tracesSampleRateOption: String(
       Sentry.getClient()?.getOptions().tracesSampleRate
     ),
+    // F13 pins (boot matrices 5-8): OTLP export gate (spanProcessorCount 0 under
+    // OTEL_TRACES_EXPORTER=none, 1 under otlp/bogus), resolved resource
+    // service.name/service.namespace (precedence), and the POST-normalization
+    // OTEL_TRACES_SAMPLER (trim+lowercased, written back to process.env).
+    spanProcessorCount: spanProcessors.length,
+    serviceName: String(resource.attributes["service.name"]),
+    serviceNamespace: String(resource.attributes["service.namespace"]),
+    tracesSamplerEnv: process.env.OTEL_TRACES_SAMPLER ?? null,
     ...(nodeHttpTraceparent === undefined ? {} : { nodeHttpTraceparent }),
   })}`
 )

@@ -76,4 +76,112 @@ import { check, finish, runBootProbe, startOtlpCatcher } from "./_shared.js"
   )
 }
 
+// --- 5 (F13): OTEL_TRACES_EXPORTER=none ⇒ endpoint set but ZERO spans exported
+{
+  const otlp = await startOtlpCatcher()
+  const run = await runBootProbe({
+    OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url,
+    OTEL_TRACES_EXPORTER: "none",
+  })
+  check("exporter=none: child exits 0", run.code === 0, run.stderr)
+  check(
+    "exporter=none: NOTHING is exported despite the endpoint (off switch)",
+    otlp.posts.length === 0,
+    `${otlp.posts.length} posts`
+  )
+  await otlp.close()
+}
+
+// --- 6 (F13): OTEL_TRACES_EXPORTER=otlp ⇒ export ON (explicit affirmative) ----
+{
+  const otlp = await startOtlpCatcher()
+  const run = await runBootProbe({
+    OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url,
+    OTEL_TRACES_EXPORTER: "otlp",
+  })
+  check("exporter=otlp: child exits 0", run.code === 0, run.stderr)
+  check(
+    "exporter=otlp: spans exported",
+    otlp.posts.length > 0 && otlp.text().includes("GET /ping")
+  )
+  await otlp.close()
+}
+
+// --- 7 (F13): OTEL_TRACES_EXPORTER=bogus ⇒ export still ON + diag ERROR -------
+{
+  const otlp = await startOtlpCatcher()
+  const run = await runBootProbe({
+    OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url,
+    OTEL_TRACES_EXPORTER: "bogus",
+  })
+  check("exporter=bogus: child exits 0", run.code === 0, run.stderr)
+  check(
+    "exporter=bogus: treated as unset ⇒ spans still exported",
+    otlp.posts.length > 0
+  )
+  check(
+    "exporter=bogus: surfaces the OTEL_TRACES_EXPORTER diag ERROR line",
+    /OTEL_TRACES_EXPORTER/i.test(run.stderr),
+    run.stderr.slice(0, 400)
+  )
+  await otlp.close()
+}
+
+// --- 8 (F13 precedence): OTEL_RESOURCE_ATTRIBUTES service.name wins alone -----
+{
+  const otlp = await startOtlpCatcher()
+  const run = await runBootProbe({
+    OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url,
+    // OTEL_SERVICE_NAME neutralized to "" by the baseline ⇒ RA's service.name
+    // must win (pre-fix the house literal merged last and forced synapse-api).
+    OTEL_RESOURCE_ATTRIBUTES:
+      "service.name=ra-service-marker,service.namespace=ns-override-marker",
+  })
+  check("precedence RA-only: child exits 0", run.code === 0, run.stderr)
+  const payload = otlp.text()
+  check(
+    "precedence: OTEL_RESOURCE_ATTRIBUTES service.name wins when OTEL_SERVICE_NAME unset",
+    payload.includes("ra-service-marker")
+  )
+  check(
+    "precedence: OTEL_RESOURCE_ATTRIBUTES service.namespace overrides the house default",
+    payload.includes("ns-override-marker")
+  )
+  await otlp.close()
+}
+
+// --- 9 (F13 precedence): OTEL_SERVICE_NAME beats OTEL_RESOURCE_ATTRIBUTES -----
+{
+  const otlp = await startOtlpCatcher()
+  const run = await runBootProbe({
+    OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url,
+    OTEL_SERVICE_NAME: "svc-name-marker",
+    OTEL_RESOURCE_ATTRIBUTES: "service.name=ra-loser-marker",
+  })
+  check("precedence SVC>RA: child exits 0", run.code === 0, run.stderr)
+  const payload = otlp.text()
+  check(
+    "precedence: OTEL_SERVICE_NAME wins over OTEL_RESOURCE_ATTRIBUTES service.name",
+    payload.includes("svc-name-marker")
+  )
+  await otlp.close()
+}
+
+// --- 10 (F13 precedence): neither set ⇒ synapse-api / synapse fallback --------
+{
+  const otlp = await startOtlpCatcher()
+  const run = await runBootProbe({ OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url })
+  check("precedence default: child exits 0", run.code === 0, run.stderr)
+  const payload = otlp.text()
+  check(
+    "precedence: neither env set ⇒ service.name=synapse-api",
+    payload.includes("synapse-api")
+  )
+  check(
+    "precedence: neither env set ⇒ service.namespace=synapse",
+    payload.includes("service.namespace") && payload.includes("synapse")
+  )
+  await otlp.close()
+}
+
 finish("P-A8")

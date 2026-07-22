@@ -46,11 +46,17 @@ node ./scripts/guard-trace-propagation.mjs
 # Self-test the carrier-contract engine so a future refactor that silently stops
 # detecting ledger drift is caught here rather than passing CI with a dead ratchet.
 node --test ./scripts/guard-trace-propagation.test.mjs
-# patches/@fastify+otel+0.19.0.patch must be applied to the installed tree
-# (postinstall runs `patch-package --error-on-fail`, but a dependency bump
-# whose stale patch still applies cleanly only warns — this pins the marker).
-[ "$(grep -c kRequestError node_modules/@fastify/otel/index.js)" -ge 5 ] ||
-  { echo "guard: @fastify/otel patch not applied (kRequestError missing)"; exit 1; }
+# Patches, two layers. (1) HOST tree: every patch in patches/ is applied to the
+# node_modules this gate runs against. --verify-only is load-bearing — a gate that
+# repairs its own subject reports nothing (CI `npm ci` already fires postinstall).
+# --require-all because the host tree is a full install. Version-agnostic: no patch
+# filename, package or marker symbol appears here.
+node ./scripts/apply-patches.mjs --verify-only --require-all
+# (2) IMAGES: this script can only ever see the HOST tree, so it can never speak
+# for an artifact — that is exactly how an unpatched api image shipped while this
+# gate was green. The artifact assertion lives in each Dockerfile
+# (`RUN node scripts/apply-patches.mjs`), and this guard is what keeps it there.
+node ./scripts/guard-image-patches.mjs
 ok "guards clean"
 
 # ── 2b. Curated ESLint rule set (no-nested-ternary et al.) ──────────────────
