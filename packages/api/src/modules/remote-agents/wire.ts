@@ -64,6 +64,10 @@ export type RemoteAgentMachineMessage =
       lastError?: string | null
       runKey?: string | null
       capabilities?: RemoteAgentRuntimeCapabilityRecord
+      // The daemon's current front (running) turn epoch for this conversation:
+      // string while a turn is open, null when fully idle, undefined from an
+      // un-upgraded daemon. Drives the api turn-carrier reconcile (§6c).
+      turnEpoch?: string | null
     } & RemoteAgentMachineMessageTraceContext)
 
 export type RemoteAgentApiToDaemonMessage =
@@ -99,6 +103,7 @@ export type RemoteAgentApiToDaemonMessage =
         deliveryId: string
         conversationId: string
         itemId: string
+        turnEpoch?: string
         traceparent?: string
         tracestate?: string
       }>
@@ -187,6 +192,7 @@ function fromWireMessage(
         capabilities: message.capabilities
           ? fromWireCapabilities(message.capabilities)
           : undefined,
+        turnEpoch: message.turn_epoch,
         traceparent: message.traceparent,
         tracestate: message.tracestate,
       }
@@ -243,6 +249,7 @@ function toWireApiMessage(
           delivery_id: delivery.deliveryId,
           conversation_id: delivery.conversationId,
           item_id: delivery.itemId,
+          turn_epoch: delivery.turnEpoch,
           traceparent: delivery.traceparent,
           tracestate: delivery.tracestate,
         })),

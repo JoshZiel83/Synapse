@@ -44,6 +44,12 @@ export type Delivery = {
   conversationId: string
   itemId: string
   /**
+   * The api-minted turn epoch for the (agent, conversation) slice this delivery
+   * wakes. Identical across all deliveries of one slice; the daemon keys its
+   * per-turn FIFO buckets on it. Absent from an un-upgraded api.
+   */
+  turnEpoch?: string
+  /**
    * Per-delivery W3C trace context (the enqueuing request's trace; traceparent
    * persisted on the delivery row, tracestate live-path only).
    */
@@ -160,6 +166,7 @@ const deliverySchema = z.strictObject({
   delivery_id: z.string().min(1),
   conversation_id: z.string().min(1),
   item_id: z.string().min(1),
+  turn_epoch: z.string().min(1).optional(),
   traceparent: traceparentField,
   tracestate: tracestateField,
 })
@@ -257,6 +264,7 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
           deliveryId: delivery.delivery_id,
           conversationId: delivery.conversation_id,
           itemId: delivery.item_id,
+          turnEpoch: delivery.turn_epoch,
           traceparent: delivery.traceparent,
           tracestate: delivery.tracestate,
         })),
