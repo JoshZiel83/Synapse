@@ -17,6 +17,7 @@ import {
   isChatServiceWorkerActive,
   requestChatServiceWorkerSync,
 } from "@/lib/chat-service-worker"
+import { withClientSpan } from "@/lib/client-trace"
 import { createUuid } from "@/lib/uuid"
 import type {
   ActorRuntimeState,
@@ -1984,17 +1985,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ) + 1
     const optimisticSequence = optimisticSequenceFloor
 
-    const entry: OutboxEntry = {
-      clientMessageId: createUuid(),
-      conversationId,
-      contentBlocks: input.contentBlocks,
-      replyToItemId: input.replyToItemId,
-      replyTo: input.replyTo,
-      createdAt: nowIsoInstant(),
-      optimisticSequence,
-      status: "sending",
-      attemptCount: 0,
-    }
+    // Capture the creation-context carrier inside a short real span so the
+    // service worker (the actual sender) can replay it as a `traceparent` header
+    // hours later. No Sentry client ⇒ carrier is undefined and no field is
+    // persisted. The span ends before flushOutbox runs, so it never wraps the
+    // batch flush (which would mis-parent older messages).
+    const entry: OutboxEntry = withClientSpan(
+      "chat.outbox.enqueue",
+      "app.chat.enqueue",
+      (carrier) => ({
+        clientMessageId: createUuid(),
+        conversationId,
+        contentBlocks: input.contentBlocks,
+        replyToItemId: input.replyToItemId,
+        replyTo: input.replyTo,
+        createdAt: nowIsoInstant(),
+        optimisticSequence,
+        status: "sending",
+        attemptCount: 0,
+        ...(carrier ? { traceparent: carrier } : {}),
+      })
+    )
 
     set((state) => {
       const currentSnapshot = state.snapshot
@@ -2301,6 +2312,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       Math.floor(lastVisibleSequence ?? normalizedReadUpToSequence)
     )
 
+    // Capture the creation-context carrier for the read-watermark POST the SW
+    // owns; undefined (no field persisted) when no Sentry client. `updatedAt`
+    // below is the capture time the SW checks against the 24h carrier cap.
+    const readCarrier = withClientSpan(
+      "chat.read.enqueue",
+      "app.chat.enqueue",
+      (carrier) => carrier
+    )
+
     const nextSnapshot: ChatWorkspaceSnapshot = {
       ...snapshot,
       pendingReads: {
@@ -2316,6 +2336,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             snapshot.pendingReads[conversationId]?.lastVisibleSequence || 0
           ),
           updatedAt: nowIsoInstant(),
+          ...(readCarrier ? { traceparent: readCarrier } : {}),
         },
       },
       conversations: snapshot.conversations.map((conversation) =>

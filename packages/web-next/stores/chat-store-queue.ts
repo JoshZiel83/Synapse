@@ -27,7 +27,7 @@ export function toStoredChatQueueState(
   }
 
   return {
-    version: 4,
+    version: 5,
     workspaceId: snapshot.workspaceId,
     workspaceMemberId: snapshot.workspaceMemberId,
     clientInstanceId: snapshot.clientInstanceId,

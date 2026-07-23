@@ -19,6 +19,7 @@ import {
 } from "@shared/constants"
 import { extractText } from "@shared/content"
 import { summarizeConversationEvent } from "@shared/conversation"
+import { sanitizeQueueEntryCarrier } from "@shared/chat-queue"
 import type {
   CanonicalContentBlock,
   ChatConversationItem,
@@ -62,7 +63,7 @@ export interface ChatConversationMeta {
 }
 
 export interface ChatWorkspaceSnapshot {
-  version: 5
+  version: 6
   workspaceId: string
   workspaceMemberId?: string
   clientInstanceId?: string
@@ -88,7 +89,7 @@ export interface ConversationTombstone {
 }
 
 export interface ChatWorkspaceQueueState {
-  version: 2
+  version: 3
   workspaceId: string
   workspaceMemberId?: string
   clientInstanceId?: string
@@ -109,7 +110,7 @@ export function createEmptyChatWorkspaceSnapshot(
   workspaceId: string
 ): ChatWorkspaceSnapshot {
   return {
-    version: 5,
+    version: 6,
     workspaceId,
     inboxCursor: 0,
     conversations: [],
@@ -125,7 +126,7 @@ export function createEmptyChatWorkspaceQueueState(
   workspaceId: string
 ): ChatWorkspaceQueueState {
   return {
-    version: 2,
+    version: 3,
     workspaceId,
     inboxCursor: 0,
     pendingReads: {},
@@ -187,7 +188,10 @@ function normalizePendingReads(
           !validConversationIds ||
           validConversationIds.has(entry.conversationId)
       )
-      .map((entry) => [entry.conversationId, entry] as const)
+      .map(
+        (entry) =>
+          [entry.conversationId, sanitizeQueueEntryCarrier(entry)] as const
+      )
   )
 }
 
@@ -222,7 +226,10 @@ function normalizeOutbox(
           !validConversationIds ||
           validConversationIds.has(entry.conversationId)
       )
-      .map((entry) => [entry.clientMessageId, entry] as const)
+      .map(
+        (entry) =>
+          [entry.clientMessageId, sanitizeQueueEntryCarrier(entry)] as const
+      )
   )
 }
 
@@ -238,14 +245,12 @@ export function normalizeChatWorkspaceSnapshot(
     version?: number
   }
 
-  // v4 (pre-member_seq) is migratable: its inboxCursor was a global sync_seq,
-  // meaningless under the member_seq cursor → RESET to 0 (forces one full
-  // bootstrap+sync). conversations/items/reads/outbox preserved; tombstones
-  // start empty. Any other version wiped.
+  // Clean break: ONLY the current version is accepted. A cached snapshot from any
+  // earlier version (including the pre-carrier v5) is wiped wholesale and the app
+  // re-bootstraps — the no-back-compat mandate forbids dual-shape reads, and the
+  // bump guarantees no outbox/read entry lacking the validated carrier is read.
   const version: number = snapshot.version ?? 0
-  const isV4 = version === 4
-  const isV5 = version === 5
-  if ((!isV4 && !isV5) || snapshot.workspaceId !== workspaceId) {
+  if (version !== 6 || snapshot.workspaceId !== workspaceId) {
     return createEmptyChatWorkspaceSnapshot(workspaceId)
   }
 
@@ -275,7 +280,7 @@ export function normalizeChatWorkspaceSnapshot(
   )
 
   return {
-    version: 5,
+    version: 6,
     workspaceId,
     workspaceMemberId:
       typeof snapshot.workspaceMemberId === "string"
@@ -287,7 +292,6 @@ export function normalizeChatWorkspaceSnapshot(
         ? snapshot.clientInstanceId
         : undefined,
     inboxCursor:
-      isV5 &&
       typeof snapshot.inboxCursor === "number" &&
       Number.isFinite(snapshot.inboxCursor)
         ? snapshot.inboxCursor
@@ -341,8 +345,7 @@ export function normalizeChatWorkspaceSnapshot(
       validConversationIds
     ),
     outbox: normalizeOutbox(snapshot.outbox, validConversationIds),
-    // tombstones only present from v5; v4 migrates to empty.
-    tombstones: isV5 ? normalizeTombstones(snapshot.tombstones) : {},
+    tombstones: normalizeTombstones(snapshot.tombstones),
   }
 }
 
@@ -357,17 +360,15 @@ export function normalizeChatWorkspaceQueueState(
   const queueState = value as Partial<ChatWorkspaceQueueState> & {
     version?: number
   }
-  // v1 (pre-member_seq) is migratable: reset cursor=0 (global sync_seq → member_seq),
-  // preserve outbox/reads, tombstones empty. Other versions wiped.
+  // Clean break: ONLY the current version is accepted; any earlier persisted
+  // queue (including the pre-carrier v2) is wiped wholesale (no-back-compat).
   const version: number = queueState.version ?? 0
-  const isV1 = version === 1
-  const isV2 = version === 2
-  if ((!isV1 && !isV2) || queueState.workspaceId !== workspaceId) {
+  if (version !== 3 || queueState.workspaceId !== workspaceId) {
     return createEmptyChatWorkspaceQueueState(workspaceId)
   }
 
   return {
-    version: 2,
+    version: 3,
     workspaceId,
     workspaceMemberId:
       typeof queueState.workspaceMemberId === "string"
@@ -379,7 +380,6 @@ export function normalizeChatWorkspaceQueueState(
         ? queueState.clientInstanceId
         : undefined,
     inboxCursor:
-      isV2 &&
       typeof queueState.inboxCursor === "number" &&
       Number.isFinite(queueState.inboxCursor)
         ? queueState.inboxCursor
@@ -387,7 +387,7 @@ export function normalizeChatWorkspaceQueueState(
     lastBootstrappedAt: readTimestamp(queueState.lastBootstrappedAt),
     pendingReads: normalizePendingReads(queueState.pendingReads),
     outbox: normalizeOutbox(queueState.outbox),
-    tombstones: isV2 ? normalizeTombstones(queueState.tombstones) : {},
+    tombstones: normalizeTombstones(queueState.tombstones),
   }
 }
 
@@ -395,7 +395,7 @@ export function toChatWorkspaceQueueState(
   snapshot: ChatWorkspaceSnapshot
 ): ChatWorkspaceQueueState {
   return {
-    version: 2,
+    version: 3,
     workspaceId: snapshot.workspaceId,
     workspaceMemberId: snapshot.workspaceMemberId,
     clientInstanceId: snapshot.clientInstanceId,

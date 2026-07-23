@@ -3,7 +3,6 @@ import process from "node:process"
 import {
   query as claudeAgentQuery,
   type CanUseTool,
-  type McpServerConfig,
   type Options as ClaudeQueryOptions,
   type PermissionResult,
   type Query as ClaudeQuery,
@@ -220,11 +219,6 @@ class ClaudeAgentSession implements AgentSession {
   async send(prompt: string, _options?: SendPromptOptions) {
     if (!prompt.trim()) return
     this.prompts.push(userMessage(prompt))
-  }
-
-  async setMcpServers(servers: Record<string, McpServerConfig>) {
-    if (!this.query?.setMcpServers) return
-    await this.query.setMcpServers(servers)
   }
 
   async respondPermission(

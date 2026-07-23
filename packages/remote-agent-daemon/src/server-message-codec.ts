@@ -71,6 +71,16 @@ export type AgentStopMessage = {
   remoteAgentId: string
 }
 
+export type DeliveriesCompletedMessage = {
+  type: "agent:deliveries:completed"
+  remoteAgentId: string
+  conversationId: string
+  deliveryIds: string[]
+  /** W3C trace context of the api request that observed completion. */
+  traceparent?: string
+  tracestate?: string
+}
+
 export type ConnectedMessage = {
   type: "connected"
   machineId: string
@@ -101,6 +111,7 @@ export type ServerMessage =
   | AgentStopMessage
   | DeliveryMessage
   | TaskResolvedMessage
+  | DeliveriesCompletedMessage
 
 const runtimeKindSchema = z.enum(RUNTIME_KINDS)
 
@@ -167,6 +178,15 @@ const taskResolvedSchema = z.strictObject({
   tracestate: tracestateField,
 })
 
+const deliveriesCompletedSchema = z.strictObject({
+  type: z.literal("agent:deliveries:completed"),
+  remote_agent_id: z.string().min(1),
+  conversation_id: z.string().min(1),
+  delivery_ids: z.array(z.string().min(1)).min(1),
+  traceparent: traceparentField,
+  tracestate: tracestateField,
+})
+
 const serverMessageWireSchema = z.discriminatedUnion("type", [
   connectedSchema,
   authErrorSchema,
@@ -176,6 +196,7 @@ const serverMessageWireSchema = z.discriminatedUnion("type", [
   agentStopSchema,
   agentDeliverSchema,
   taskResolvedSchema,
+  deliveriesCompletedSchema,
 ])
 
 export function parseServerMessage(raw: unknown): ServerMessage | null {
@@ -246,6 +267,15 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
         remoteAgentId: message.remote_agent_id,
         taskId: message.task_id,
         task: message.task,
+        traceparent: message.traceparent,
+        tracestate: message.tracestate,
+      }
+    case "agent:deliveries:completed":
+      return {
+        type: "agent:deliveries:completed",
+        remoteAgentId: message.remote_agent_id,
+        conversationId: message.conversation_id,
+        deliveryIds: message.delivery_ids,
         traceparent: message.traceparent,
         tracestate: message.tracestate,
       }

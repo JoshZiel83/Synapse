@@ -217,7 +217,6 @@ class CodexAgentSession implements AgentSession {
     readonly workingDirectory: string,
     initialPrompt: string,
     initialThreadId: string | undefined,
-    private mcpServers: Record<string, McpServerConfig> | undefined,
     private readonly writableRoots: string[]
   ) {
     this.threadId = initialThreadId
@@ -514,13 +513,6 @@ class CodexAgentSession implements AgentSession {
     this.startTurn(prompt)
   }
 
-  async setMcpServers(servers: Record<string, McpServerConfig>) {
-    // Codex app-server has no runtime setMcpServers RPC; reconfiguring requires
-    // a fresh process. Stash the desired config so a future Phase 4b restart hook
-    // can honor it without a contract change.
-    this.mcpServers = servers
-  }
-
   async respondPermission(
     requestId: string,
     decision: PermissionDecision
@@ -628,7 +620,6 @@ export class CodexDriver implements AgentDriver {
       spec.workingDirectory,
       spec.initialPrompt,
       spec.resumeSessionId,
-      spec.mcpServers,
       spec.additionalDirectories ?? []
     )
     session.attach(child)

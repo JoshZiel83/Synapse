@@ -179,6 +179,20 @@ async function main() {
         getFlag(args.flags, "fs-helper") ??
         process.env.SYNAPSE_DEVICE_FS_HELPER_PATH ??
         autoDiscoverFsHelperPath()
+      // One-time WARN when no fs-helper binary resolved: the filesystem builtin
+      // still starts but its helper-backed features (history / indexed search /
+      // extract / CAS) are disabled. npm-installed @synapse/device-runtime ships
+      // NO helper binaries by design (F9c) — a device gets them from the
+      // container image, a repo checkout, or an explicit path — so turn today's
+      // silent graceful degradation into a greppable statement.
+      if (!fsHelperPath || !existsSync(fsHelperPath)) {
+        createDeviceLogger("fs-helper").warn(
+          "fs helper-backed features (history/search/extract/CAS) DISABLED: " +
+            "no synapse-device-fs-helper binary resolved via --fs-helper, " +
+            "SYNAPSE_DEVICE_FS_HELPER_PATH, or a repo/adjacent build. npm install ships no helper " +
+            "binaries by design; provide one via the container image, a checkout, or the env var."
+        )
+      }
       const brokerDir = getFlag(args.flags, "broker-dir")
       const fsWorkDir =
         getFlag(args.flags, "fs-work-dir") ??
@@ -442,6 +456,17 @@ async function main() {
         providers.push(createCuaBuiltin({ helperPath: cuaHelperPath }))
       } else if (getFlag(args.flags, "cua") === "off") {
         // explicit opt-out — no-op
+      } else {
+        // One-time WARN: the cua provider is simply not registered when no
+        // helper resolved. npm-installed @synapse/device-runtime ships NO helper
+        // binaries by design (F9c) — a device gets them from the container
+        // image, a repo checkout, or an explicit path. Pass --cua=off to silence.
+        createDeviceLogger("cua").warn(
+          "cua provider NOT registered: no synapse-device-cua-helper binary " +
+            "resolved via --cua-helper, SYNAPSE_DEVICE_CUA_HELPER_PATH, or a repo/adjacent build. " +
+            "npm install ships no helper binaries by design; provide one via the container image, a " +
+            "checkout, or the env var, or pass --cua=off to silence this."
+        )
       }
       // ── Browser provider selection (v3.1) ────────────────────────────
       // --browser-provider=lite | chrome-devtools (default lite).

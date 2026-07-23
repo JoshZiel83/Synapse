@@ -3,6 +3,7 @@ import type {
   ConversationReplyRef,
   Timestamp,
 } from "../types/index.js"
+import { isValidTraceparent } from "../utils/traceparent.js"
 import deepEqual from "fast-deep-equal"
 
 export const CHAT_QUEUE_DB_NAME = "synapse-chat-queue"
@@ -23,6 +24,15 @@ export interface PendingConversationRead {
   readUpToSequence: number
   lastVisibleSequence: number
   updatedAt: Timestamp
+  /**
+   * Main-thread creation-context carrier, captured inside a real
+   * `chat.read.enqueue` span at mark-read time and replayed verbatim as the
+   * `traceparent` request header by the service worker that owns the
+   * read-watermark POST. Absent whenever no Sentry client is configured (the
+   * span-based capture stamps nothing without one). `updatedAt` is the capture
+   * time the SW checks against `CHAT_QUEUE_TRACE_CARRIER_MAX_AGE_MS`.
+   */
+  traceparent?: string
 }
 
 export interface PendingOutboxMessage {
@@ -38,6 +48,71 @@ export interface PendingOutboxMessage {
   lastAttemptAt?: Timestamp
   firstFailedAt?: Timestamp
   lastErrorMessage?: string
+  /**
+   * Main-thread creation-context carrier, captured once inside a real
+   * `chat.outbox.enqueue` span when the message is enqueued and replayed
+   * verbatim as the `traceparent` request header by the service worker that
+   * owns the message POST (retries reuse it — it is the message's creation
+   * context, not the attempt's). Absent whenever no Sentry client is configured.
+   * `createdAt` is the capture time the SW checks against
+   * `CHAT_QUEUE_TRACE_CARRIER_MAX_AGE_MS`.
+   */
+  traceparent?: string
+}
+
+/**
+ * Max age of a persisted client trace carrier that a service worker will still
+ * replay as a `traceparent` PARENT. Parenting to an ended span is spec-legal
+ * (OTel: "It MUST still be possible to use an ended span as parent") and Tempo
+ * assembles traces by id at query time, so a late POST merges into the original
+ * trace; 24h sits far under Tempo's `block_retention: 336h`, so that trace
+ * provably still exists, while bounding the W3C "trust and abuse" surface. Past
+ * this age the SW sends NO trace header and the api mints a fresh root, with
+ * `clientMessageId` as the fallback join key (stamped api-side as the
+ * `synapse.chat.client_message_id` span attribute).
+ */
+export const CHAT_QUEUE_TRACE_CARRIER_MAX_AGE_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Strip a malformed `traceparent` off a persisted queue entry so a normalizer
+ * never trusts an unvalidated carrier that survived IDB (the normalizers pass
+ * entry objects through their filters verbatim). Re-uses the canonical
+ * `isValidTraceparent` — no second regex. A valid carrier is preserved; an
+ * absent one is a no-op.
+ */
+export function sanitizeQueueEntryCarrier<T extends { traceparent?: string }>(
+  entry: T
+): T {
+  if (
+    entry.traceparent !== undefined &&
+    !isValidTraceparent(entry.traceparent)
+  ) {
+    const next = { ...entry }
+    delete next.traceparent
+    return next
+  }
+  return entry
+}
+
+/**
+ * The request-header map a service worker replays for a persisted carrier.
+ * Returns `{ traceparent }` ONLY when the value is a canonical traceparent
+ * (`isValidTraceparent` — no second regex) AND its capture time is a finite ISO
+ * instant younger than `CHAT_QUEUE_TRACE_CARRIER_MAX_AGE_MS`; otherwise `{}`
+ * (malformed / all-zero / absent / missing-or-unparseable timestamp / >24h),
+ * which the SW's `fetchJson` header spread merges as "no trace header".
+ */
+export function replayTraceHeaders(
+  traceparent: string | undefined,
+  capturedAtIso: Timestamp | undefined,
+  nowMs: number = Date.now()
+): Record<string, string> {
+  if (!isValidTraceparent(traceparent)) return {}
+  if (typeof capturedAtIso !== "string") return {}
+  const capturedMs = new Date(capturedAtIso).getTime()
+  if (!Number.isFinite(capturedMs)) return {}
+  if (nowMs - capturedMs >= CHAT_QUEUE_TRACE_CARRIER_MAX_AGE_MS) return {}
+  return { traceparent }
 }
 
 /**
@@ -54,7 +129,7 @@ export interface ConversationTombstone {
 }
 
 export interface StoredChatQueueState {
-  version: 4
+  version: 5
   workspaceId: string
   workspaceMemberId?: string
   clientInstanceId?: string
@@ -70,7 +145,7 @@ export function createEmptyStoredChatQueueState(
   workspaceId: string
 ): StoredChatQueueState {
   return {
-    version: 4,
+    version: 5,
     workspaceId,
     inboxCursor: 0,
     pendingReads: {},
@@ -98,22 +173,20 @@ export function normalizeStoredChatQueueState(
   if (snapshot.workspaceId !== workspaceId) {
     return createEmptyStoredChatQueueState(workspaceId)
   }
-  // v3 (pre-member_seq) is migratable: the OLD inboxCursor was a global sync_seq
-  // and is meaningless under the new member_seq cursor, so RESET it to 0 (forces
-  // one full bootstrap+sync). Outbox/pendingReads are preserved (no data loss),
-  // tombstones start empty. Any other version is wiped.
+  // Clean break: ONLY the current version is accepted. A persisted queue from any
+  // earlier version (including the pre-carrier v4) is wiped wholesale — the
+  // no-back-compat mandate forbids dual-shape reads, and the version bump is what
+  // guarantees no entry lacking the validated `traceparent` field is ever read.
   const version: number = snapshot.version ?? 0
-  const isV3 = version === 3
-  const isV4 = version === 4
-  if (!isV3 && !isV4) {
+  if (version !== 5) {
     return createEmptyStoredChatQueueState(workspaceId)
   }
 
   const pendingReads =
     snapshot.pendingReads && typeof snapshot.pendingReads === "object"
       ? Object.fromEntries(
-          Object.entries(snapshot.pendingReads).filter(
-            ([conversationId, entry]) =>
+          Object.entries(snapshot.pendingReads)
+            .filter(([conversationId, entry]) =>
               Boolean(
                 conversationId &&
                 entry &&
@@ -121,28 +194,37 @@ export function normalizeStoredChatQueueState(
                 typeof (entry as PendingConversationRead).conversationId ===
                   "string"
               )
-          )
+            )
+            .map(([conversationId, entry]) => [
+              conversationId,
+              sanitizeQueueEntryCarrier(entry as PendingConversationRead),
+            ])
         )
       : {}
 
   const outbox =
     snapshot.outbox && typeof snapshot.outbox === "object"
       ? Object.fromEntries(
-          Object.entries(snapshot.outbox).filter(([, entry]) =>
-            Boolean(
-              entry &&
-              typeof entry === "object" &&
-              typeof (entry as PendingOutboxMessage).clientMessageId ===
-                "string" &&
-              typeof (entry as PendingOutboxMessage).conversationId === "string"
+          Object.entries(snapshot.outbox)
+            .filter(([, entry]) =>
+              Boolean(
+                entry &&
+                typeof entry === "object" &&
+                typeof (entry as PendingOutboxMessage).clientMessageId ===
+                  "string" &&
+                typeof (entry as PendingOutboxMessage).conversationId ===
+                  "string"
+              )
             )
-          )
+            .map(([clientMessageId, entry]) => [
+              clientMessageId,
+              sanitizeQueueEntryCarrier(entry as PendingOutboxMessage),
+            ])
         )
       : {}
 
-  // tombstones only exist from v4 onward; v3 migrates to an empty set.
   const tombstones =
-    isV4 && snapshot.tombstones && typeof snapshot.tombstones === "object"
+    snapshot.tombstones && typeof snapshot.tombstones === "object"
       ? Object.fromEntries(
           Object.entries(snapshot.tombstones).filter(
             ([conversationId, entry]) =>
@@ -159,7 +241,7 @@ export function normalizeStoredChatQueueState(
       : {}
 
   return {
-    version: 4,
+    version: 5,
     workspaceId,
     workspaceMemberId:
       typeof snapshot.workspaceMemberId === "string"
@@ -169,7 +251,6 @@ export function normalizeStoredChatQueueState(
       ? snapshot.clientInstanceId
       : undefined,
     inboxCursor:
-      isV4 &&
       typeof snapshot.inboxCursor === "number" &&
       Number.isFinite(snapshot.inboxCursor)
         ? snapshot.inboxCursor
@@ -323,10 +404,10 @@ export function mergeStoredQueueTransition(
  * apply `processed`; otherwise we keep the newer `latest` to avoid
  * clobbering a concurrent write.
  *
- * Generic over the queue-state shape so it can serve both the v3 web
- * StoredChatQueueState and the v1 mobile ChatWorkspaceQueueState
- * without converging their version numbers (mobile would need a
- * destructive IDB migration to bump to v3).
+ * Generic over the queue-state shape so it can serve both the v5 web
+ * StoredChatQueueState and the v3 mobile ChatWorkspaceQueueState
+ * without converging their version numbers (the two IDB stores version
+ * independently).
  */
 export interface ChatQueueStateLike {
   workspaceId: string

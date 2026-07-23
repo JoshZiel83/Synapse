@@ -22,9 +22,9 @@ import {
   __buildImToolsForTest,
   __installUnifiedToolRegistryForTest,
   readMcpToolContentBlocks,
-  TurnCarrierCache,
   type RegisteredToolForSpanTest,
 } from "./mcp-endpoint.js"
+import { TurnCarrierCache } from "./turn-carriers.js"
 
 // Real provider + in-memory exporter so the tools/call spans are assertable;
 // real context manager so ambient parenting works; the global propagator is
@@ -106,31 +106,9 @@ test("reverse-MCP list_conversations keeps a strict empty input schema", () => {
   assert.equal(tool.zodSchema!.safeParse({ limit: 1 }).success, false)
 })
 
-function traceparentFor(n: number): string {
-  return `00-${n.toString(16).padStart(32, "0")}-000000000000000f-01`
-}
-
-test("TurnCarrierCache dedupes by trace id, rejects invalid values, and reports only new origins", () => {
-  const cache = new TurnCarrierCache()
-  const tpA = traceparentFor(0xa)
-  const tpASibling = `00-${(0xa).toString(16).padStart(32, "0")}-00000000000000aa-01`
-  const tpB = traceparentFor(0xb)
-
-  assert.deepEqual(cache.addAll([tpA, "garbage", null, undefined]), [tpA])
-  // Same trace id (different span) is not new; a new trace is.
-  assert.deepEqual(cache.addAll([tpASibling, tpB]), [tpB])
-  assert.deepEqual(cache.list(), [tpA, tpB])
-})
-
-test("TurnCarrierCache caps at 20 origins, evicting oldest first", () => {
-  const cache = new TurnCarrierCache()
-  const all = Array.from({ length: 25 }, (_, i) => traceparentFor(i + 1))
-  cache.addAll(all)
-  const kept = cache.list()
-  assert.equal(kept.length, 20)
-  assert.equal(kept[0], traceparentFor(6))
-  assert.equal(kept[19], traceparentFor(25))
-})
+// TurnCarrierCache's own unit tests (dedupe/cap/epoch/registry) live in
+// turn-carriers.test.ts — the class moved to its own module (C). This file
+// exercises it only through the tools/call span matrix below.
 
 // ─── tools/call span matrix (§4.C C3b — via the registry test seam) ─────────
 
@@ -269,7 +247,7 @@ test("tools/call span: creation-time delivery-origin links — self-link and fla
   exporter.reset()
   const cache = new TurnCarrierCache()
   const linkedTrace = "1af7651916cd43dd8448eb211c80319d"
-  cache.addAll([
+  cache.extend([
     // origin == the _meta parent's own trace ⇒ excluded (would be a self-link)
     `00-${META_TRACE_ID}-00000000000000aa-01`,
     // sampled foreign origin ⇒ linked
@@ -289,6 +267,36 @@ test("tools/call span: creation-time delivery-origin links — self-link and fla
     span.links[0]!.attributes?.["synapse.link.kind"],
     "delivery_origin"
   )
+})
+
+test("tools/call span: after beginTurn on a CONSUMED epoch links ONLY the new turn's origins (F3 reverse-MCP reset)", async () => {
+  exporter.reset()
+  const cache = new TurnCarrierCache()
+  const turn1Trace = "1af7651916cd43dd8448eb211c80319d"
+  const turn2Trace = "3af7651916cd43dd8448eb211c80331f"
+  // Turn 1: a dispatched wake opens the epoch, then a tools/call consumes it.
+  cache.beginTurn([`00-${turn1Trace}-00000000000000bb-01`])
+  const handler1 = captureCallToolHandler([OK_TOOL], cache)
+  await handler1({
+    method: "tools/call",
+    params: { name: "echo", arguments: { msg: "one" }, _meta: VALID_META },
+  })
+  const turn1Span = exporter.getFinishedSpans()[0]!
+  assert.equal(turn1Span.links.length, 1)
+  assert.equal(turn1Span.links[0]!.context.traceId, turn1Trace)
+
+  // Turn 2: the NEXT dispatched wake resets the consumed epoch — the prior
+  // turn's origin must NOT leak onto this turn's tools/call span.
+  exporter.reset()
+  cache.beginTurn([`00-${turn2Trace}-00000000000000cc-01`])
+  const handler2 = captureCallToolHandler([OK_TOOL], cache)
+  await handler2({
+    method: "tools/call",
+    params: { name: "echo", arguments: { msg: "two" }, _meta: VALID_META },
+  })
+  const turn2Span = exporter.getFinishedSpans()[0]!
+  assert.equal(turn2Span.links.length, 1, "only the new turn's origin links")
+  assert.equal(turn2Span.links[0]!.context.traceId, turn2Trace)
 })
 
 test("tools/call span: unknown tool / zod-reject / handler-throw / isError ⇒ ERROR status, span always ended", async () => {

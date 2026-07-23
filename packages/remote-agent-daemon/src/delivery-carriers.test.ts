@@ -173,3 +173,20 @@ test("dedupeCarriersByTraceId dedupes by trace id and caps at 20", () => {
   const many = Array.from({ length: 30 }, (_, i) => carrier(i + 1))
   assert.equal(dedupeCarriersByTraceId(many).length, 20)
 })
+
+test("dedupeCarriersByTraceId: 20 stale origins + 1 current keeps the CURRENT and drops the oldest (inverted F3)", () => {
+  // Arrival-ordered: 20 stale historical origins, then the current turn's.
+  const stale = Array.from({ length: 20 }, (_, i) => carrier(i + 1))
+  const current = carrier(0xc0ffee)
+  const deduped = dedupeCarriersByTraceId([...stale, current])
+  assert.equal(deduped.length, 20)
+  // The current turn's carrier survives; the oldest stale one (trace 1) is gone.
+  assert.ok(
+    deduped.some((c) => c.traceparent === current.traceparent),
+    "the current turn's origin is kept"
+  )
+  assert.ok(
+    !deduped.some((c) => c.traceparent === stale[0]!.traceparent),
+    "the oldest stale origin is the one evicted"
+  )
+})

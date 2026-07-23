@@ -8,7 +8,7 @@
 - **driver 抽象**：所有 runtime（CC、Codex、未来新增 SDK）实现 `drivers/types.ts` 的 `AgentDriver` / `AgentSession` 接口，集中在 `drivers/registry.ts` 注册。新增 runtime 只新增一个 driver 文件 + 注册一行；不要在 supervisor 里写 runtime-specific 分支。
 - **Claude Code** 走 `@anthropic-ai/claude-agent-sdk`（不直接 spawn `claude` CLI 解析 stream-json）。Permission / AskUserQuestion / ExitPlanMode 通过 SDK 的 `canUseTool` 回调路由。
 - **Codex** 沿用 `codex app-server` JSON-RPC v2 over stdio（v2 typed schema 由 `codex app-server generate-ts --out src/codex/generated/` 生成、提交进 git；与本地 `codex` 二进制版本绑定，升级 codex 时需要重生成）。运行时配置 `approval_policy=never` + `sandbox_mode=workspace-write`，绝大多数 approval RPC 不再到达 driver。
-- **反向 MCP**：daemon 不再托管自己的 stdio MCP server。Synapse 在 `/api/v1/internal/remote-agents/:id/mcp/:conversationId` 暴露 Streamable HTTP MCP server（IM 工具 + conversation 授权的 plugin/device 工具）；daemon 通过 driver 的 `setMcpServers` 注入 URL + Bearer。
+- **反向 MCP**：daemon 不再托管自己的 stdio MCP server。Synapse 在 `/api/v1/internal/remote-agents/:id/mcp/:conversationId` 暴露 Streamable HTTP MCP server（IM 工具 + conversation 授权的 plugin/device 工具）；MCP server 的 URL + Bearer 在 session 创建时经 `createSession({ mcpServers })` 注入（claude SDK 的 `mcpServers` 选项 / codex 的 `-c mcp_servers.*` flags），没有运行时 `setMcpServers`（driver 接口不再暴露它）。
 
 ## 提交章法（refactor 进行中）
 

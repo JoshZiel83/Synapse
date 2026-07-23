@@ -329,7 +329,17 @@ export class OneShotFsHelper {
     return this.request("fs.sidecar.restore", input)
   }
 
-  /** Flush stdin (signals EOF → graceful exit) and wait for the child. */
+  /**
+   * Flush stdin (signals EOF → graceful exit) and wait for the child.
+   *
+   * The 2000 ms EOF→SIGKILL window below MUST stay strictly greater than the
+   * fs-helper's bounded OTLP flush (1500 ms on EOF, telemetry.rs
+   * shutdown_with_timeout): the helper flushes its span batch when it observes
+   * stdin close, and if this supervisor SIGKILLed inside that 1500 ms the
+   * one-shot's spans would be lost again. This one-shot path sends NO SIGTERM
+   * (the helper handles SIGTERM too, but EOF is the clean path here) — it only
+   * hard-kills a helper that ignores EOF past the grace.
+   */
   async close(): Promise<void> {
     try {
       this.child.stdin?.end()

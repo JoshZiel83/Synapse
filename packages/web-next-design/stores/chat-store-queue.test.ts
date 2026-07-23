@@ -48,7 +48,7 @@ function outbox(
 
 function snapshot(overrides: Partial<Snapshot> = {}): Snapshot {
   return {
-    version: 4,
+    version: 5,
     workspaceId: WS,
     workspaceMemberId: "wm-1",
     clientInstanceId: "22222222-2222-4222-8222-222222222222",

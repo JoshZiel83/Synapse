@@ -204,6 +204,28 @@ test("serializeRemoteAgentApiToDaemonMessage emits snake_case deliveries", () =>
   })
 })
 
+test("serializeRemoteAgentApiToDaemonMessage emits a snake_case deliveries-completed frame", () => {
+  // The serializer re-parses through the strict gated schema, so a well-formed
+  // frame (delivery_ids non-empty, gated trace fields) round-trips.
+  const serialized = serializeRemoteAgentApiToDaemonMessage({
+    type: "agent:deliveries:completed",
+    remoteAgentId: "agent-1",
+    conversationId: "conversation-1",
+    deliveryIds: ["delivery-1", "delivery-2"],
+    traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    tracestate: "othervendor=xyz",
+  })
+
+  assert.deepEqual(JSON.parse(serialized), {
+    type: "agent:deliveries:completed",
+    remote_agent_id: "agent-1",
+    conversation_id: "conversation-1",
+    delivery_ids: ["delivery-1", "delivery-2"],
+    traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    tracestate: "othervendor=xyz",
+  })
+})
+
 test("serializeRemoteAgentApiToDaemonMessage emits snake_case resolved task frames", () => {
   const serialized = serializeRemoteAgentApiToDaemonMessage({
     type: "agent:task:resolved",

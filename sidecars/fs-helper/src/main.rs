@@ -153,33 +153,141 @@ async fn main() -> Result<()> {
         tasks: Mutex::new(std::collections::HashMap::new()),
     });
 
+    // Run the read loop in an inner fn so a `?` on an I/O error can never skip
+    // the OTLP flush below, and so a stop SIGNAL — not just stdin EOF — unwinds
+    // to that flush. The device-runtime stops helpers with an EOF grace then
+    // SIGTERM (sidecar.ts); the old binary installed NO signal handler, so a
+    // SIGTERM'd helper dropped every buffered span. Now signals flush.
+    let serve_result = serve(&state).await;
+    // Bounded flush (1500 ms) on EITHER a clean stdin close OR a signal — kept
+    // strictly inside the supervisor's SIGKILL window (sidecar.ts grants a
+    // 2000 ms EOF grace + 2000 ms after SIGTERM; one-shot grants 2000 ms). A
+    // dead collector fails fast (connection refused), so the bound is a ceiling,
+    // not a cost. shutdown_with_timeout replaces the old unbounded shutdown().
+    if let Some(provider) = otel_provider {
+        if let Err(err) = provider.shutdown_with_timeout(std::time::Duration::from_millis(1500)) {
+            tracing::warn!(error = ?err, "otel flush on shutdown incomplete");
+        }
+    }
+    // Exit deterministically once the batch is on the wire. The OTLP exporter
+    // uses reqwest's BLOCKING client (opentelemetry-otlp's default
+    // `reqwest-blocking-client` feature), whose background runtime thread — plus
+    // the #[tokio::main] multi-thread runtime teardown — otherwise keeps the
+    // process alive for SECONDS after shutdown_with_timeout has already flushed,
+    // forcing every helper stop into the supervisor's SIGKILL (and defeating the
+    // point of handling SIGTERM at all). The spans are exported by the line
+    // above, so a hard exit here loses nothing; it just skips the hang. (Distinct
+    // from Go's banned os.Exit, which would skip the flush — here we exit strictly
+    // AFTER it.)
+    match serve_result {
+        Ok(()) => std::process::exit(0),
+        Err(err) => {
+            tracing::error!(error = ?err, "fs-helper read loop error");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// The stdio JSON-RPC read loop, factored out of `main` so a `?` on a read/write
+/// error cannot bypass the OTLP flush in `main`. Returns when stdin closes
+/// (EOF), a stop signal fires, or an I/O error occurs. On unix it races
+/// SIGTERM/SIGINT against the next line so a signalled helper stops promptly and
+/// still reaches the flush; `next_line()` is cancel-safe, so a line in flight is
+/// never truncated by the select.
+#[cfg(unix)]
+async fn serve(state: &Arc<State>) -> Result<()> {
+    use tokio::signal::unix::{signal, SignalKind};
+    let stdin = tokio::io::stdin();
+    let mut reader = BufReader::new(stdin).lines();
+    let mut stdout = tokio::io::stdout();
+    // Signal streams are created ONCE (not per-iteration) so a signal delivered
+    // mid-dispatch is observed on the next select rather than lost to a
+    // freshly-constructed stream.
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
+    loop {
+        tokio::select! {
+            biased;
+            _ = sigterm.recv() => {
+                tracing::info!("fs-helper stopping (SIGTERM)");
+                break;
+            }
+            _ = sigint.recv() => {
+                tracing::info!("fs-helper stopping (SIGINT)");
+                break;
+            }
+            line = reader.next_line() => {
+                match line? {
+                    None => {
+                        tracing::info!("fs-helper stopping (stdin closed)");
+                        break;
+                    }
+                    Some(line) => process_line(state, &mut stdout, &line).await?,
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Non-unix has no POSIX signal to await, so the loop relies on stdin EOF for
+/// shutdown (Node's `kill('SIGTERM')` maps to TerminateProcess there, which no
+/// handler can intercept — the supervisor's EOF grace is what buys the flush).
+#[cfg(not(unix))]
+async fn serve(state: &Arc<State>) -> Result<()> {
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
     let mut stdout = tokio::io::stdout();
     while let Some(line) = reader.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Some(text) = handle_frame(&state, &line).await else {
-            continue;
-        };
+        process_line(state, &mut stdout, &line).await?;
+    }
+    Ok(())
+}
+
+/// Handle one input line: skip blanks, dispatch, write the response frame.
+async fn process_line(
+    state: &Arc<State>,
+    stdout: &mut tokio::io::Stdout,
+    line: &str,
+) -> Result<()> {
+    if line.trim().is_empty() {
+        return Ok(());
+    }
+    if let Some(text) = handle_frame(state, line).await {
         stdout.write_all(text.as_bytes()).await?;
         stdout.write_all(b"\n").await?;
         stdout.flush().await?;
-    }
-    // Clean shutdown (stdin closed by the supervisor): flush buffered spans.
-    // On SIGTERM/SIGKILL this won't run; the parent api/device-runtime spans
-    // still form the trace, with fs-helper leaf spans best-effort.
-    if let Some(provider) = otel_provider {
-        let _ = provider.shutdown();
     }
     Ok(())
 }
 
 async fn handle_frame(state: &Arc<State>, raw: &str) -> Option<String> {
-    let req: RpcRequest = match serde_json::from_str(raw) {
-        Ok(r) => r,
+    // Parse FIRST, but start the span BEFORE the parse-error return so a
+    // malformed frame (-32700) still produces a SERVER span — it used to return
+    // before any span existed. rpc_span builds a `"jsonrpc"` SERVER span with
+    // the JSON-RPC creation attributes, parented by the device-runtime's inbound
+    // {traceparent, tracestate?} carrier (§3c); record_rpc_outcome names it and
+    // sets rpc.method/status once the outcome is known. No-op when OTEL is
+    // disabled. Held across dispatch so its duration is the span's.
+    let parsed: Result<RpcRequest, _> = serde_json::from_str(raw);
+    let request_id = parsed
+        .as_ref()
+        .ok()
+        .and_then(|req| jsonrpc_request_id(req.id.as_ref()));
+    let mut span = match &parsed {
+        Ok(req) => telemetry::rpc_span(
+            req.traceparent.as_deref(),
+            req.tracestate.as_deref(),
+            request_id.as_deref(),
+        ),
+        // Unparsable frame: no carrier and no id to read.
+        Err(_) => telemetry::rpc_span(None, None, None),
+    };
+
+    let req = match parsed {
+        Ok(req) => req,
         Err(e) => {
+            telemetry::record_rpc_outcome(&mut span, "", Some((-32700, "parse_error")));
             return Some(
                 serde_json::to_string(&RpcResponse::err(
                     Value::Null,
@@ -190,22 +298,22 @@ async fn handle_frame(state: &Arc<State>, raw: &str) -> Option<String> {
             );
         }
     };
+
     let id = req.id.clone().unwrap_or(Value::Null);
-    // Per-RPC span, parented by the device-runtime's inbound {traceparent,
-    // tracestate?} carrier (§3c) so this helper's work joins the originating
-    // tool call's trace. No-op when OTEL is disabled. Held across dispatch so
-    // its duration is the span's.
-    let _span = telemetry::rpc_span(
-        &req.method,
-        req.traceparent.as_deref(),
-        req.tracestate.as_deref(),
-    );
-    let result = dispatch(state.clone(), req.method.as_str(), req.params.unwrap_or(Value::Null)).await;
-    if req.id.is_none() {
-        return None;
-    }
+    let is_notification = req.id.is_none();
+    let method = req.method.clone();
+    let result =
+        dispatch(state.clone(), method.as_str(), req.params.unwrap_or(Value::Null)).await;
     match result {
-        Ok(v) => Some(serde_json::to_string(&RpcResponse::ok(id, v)).ok()?),
+        Ok(v) => {
+            // Record the span outcome BEFORE the notification early-return so a
+            // notification still gets a complete span.
+            telemetry::record_rpc_outcome(&mut span, &method, None);
+            if is_notification {
+                return None;
+            }
+            Some(serde_json::to_string(&RpcResponse::ok(id, v)).ok()?)
+        }
         Err(e) => {
             let (code, msg) = match e {
                 RpcError::InvalidParams(m) => (-32602, m),
@@ -215,8 +323,25 @@ async fn handle_frame(state: &Arc<State>, raw: &str) -> Option<String> {
                 RpcError::Internal(m) => (-32603, m),
                 RpcError::MethodNotFound(m) => (-32601, m),
             };
+            telemetry::record_rpc_outcome(&mut span, &method, Some((code, msg.as_str())));
+            if is_notification {
+                return None;
+            }
             Some(serde_json::to_string(&RpcResponse::err(id, code, msg)).ok()?)
         }
+    }
+}
+
+/// Render a JSON-RPC id (string or number) for the `jsonrpc.request.id`
+/// attribute, returning None for a notification (no id) or a null id so the
+/// attribute is OMITTED rather than set to a placeholder. Mirrors the Go cua
+/// helper's `jsonrpcRequestID`.
+fn jsonrpc_request_id(id: Option<&Value>) -> Option<String> {
+    match id {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        Some(other) => Some(other.to_string()),
     }
 }
 

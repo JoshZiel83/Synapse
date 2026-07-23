@@ -1,10 +1,12 @@
 /**
- * Chat multi-client broadcast: lock in the new shared chat-queue contracts
- * introduced for reliable reconnect + removal correctness.
+ * Chat multi-client broadcast: lock in the shared chat-queue contracts for
+ * reliable reconnect + removal correctness.
  *
- *  - v3 -> v4 migration is NON-destructive: outbox/pendingReads preserved,
- *    inboxCursor RESET to 0 (the old global sync_seq is meaningless under the
- *    new per-member member_seq cursor), tombstones added empty.
+ *  - NO back-compat: normalize accepts ONLY the current version (v5) and WIPES
+ *    any earlier or unknown version wholesale (decisions ruling 9). The version
+ *    bump is what guarantees no persisted entry predating the validated
+ *    `traceparent` carrier field is ever read; the wipe of offline-queued
+ *    messages is the documented consequence (R10 changelog).
  *  - tombstones survive the queue merge functions (so the service-worker
  *    round-trip can't strip them), and "clear" is honored as a real change.
  */
@@ -20,18 +22,19 @@ import {
 
 const WS = "11111111-1111-1111-1111-111111111111"
 
-function v4(
+// The current-version (v5) empty state with optional overrides.
+function v5(
   overrides: Partial<StoredChatQueueState> = {}
 ): StoredChatQueueState {
   return { ...createEmptyStoredChatQueueState(WS), ...overrides }
 }
 
-test("normalize migrates a v3 payload non-destructively, resetting cursor", () => {
+test("normalize WIPES a pre-v5 (legacy) payload wholesale — no back-compat migration", () => {
   const legacyV3 = {
     version: 3,
     workspaceId: WS,
     workspaceMemberId: "m-1",
-    inboxCursor: 9876, // old global sync_seq — must be discarded
+    inboxCursor: 9876,
     pendingReads: {
       c1: {
         conversationId: "c1",
@@ -53,26 +56,34 @@ test("normalize migrates a v3 payload non-destructively, resetting cursor", () =
     },
   }
 
-  const migrated = normalizeStoredChatQueueState(WS, legacyV3)
+  const wiped = normalizeStoredChatQueueState(WS, legacyV3)
 
-  assert.equal(migrated.version, 4, "bumped to v4")
-  assert.equal(migrated.inboxCursor, 0, "cursor reset (member_seq semantics)")
-  assert.deepEqual(Object.keys(migrated.outbox), ["m1"], "outbox preserved")
+  // A persisted queue from any earlier version is discarded wholesale: an entry
+  // predating the version bump may lack the validated `traceparent` field, and
+  // the no-back-compat mandate forbids dual-shape reads.
   assert.deepEqual(
-    Object.keys(migrated.pendingReads),
-    ["c1"],
-    "pendingReads preserved"
+    wiped,
+    createEmptyStoredChatQueueState(WS),
+    "legacy payload is reset to a fresh v5 state"
   )
-  assert.deepEqual(migrated.tombstones, {}, "tombstones initialized empty")
+  assert.equal(wiped.version, 5)
+  assert.equal(wiped.inboxCursor, 0)
+  assert.deepEqual(wiped.outbox, {}, "legacy outbox is NOT preserved")
+  assert.deepEqual(
+    wiped.pendingReads,
+    {},
+    "legacy pendingReads is NOT preserved"
+  )
+  assert.deepEqual(wiped.tombstones, {})
 })
 
-test("normalize accepts a v4 payload incl. tombstones and keeps cursor", () => {
-  const stored = v4({
+test("normalize accepts a current (v5) payload incl. tombstones and keeps cursor", () => {
+  const stored = v5({
     inboxCursor: 42,
     tombstones: { c9: { conversationId: "c9", removedSeq: 17 } },
   })
   const normalized = normalizeStoredChatQueueState(WS, stored)
-  assert.equal(normalized.inboxCursor, 42, "v4 cursor preserved")
+  assert.equal(normalized.inboxCursor, 42, "v5 cursor preserved")
   assert.deepEqual(normalized.tombstones, {
     c9: { conversationId: "c9", removedSeq: 17 },
   })
@@ -87,13 +98,13 @@ test("normalize wipes an unknown version", () => {
     outbox: {},
   })
   assert.equal(normalized.inboxCursor, 0)
-  assert.equal(normalized.version, 4)
+  assert.equal(normalized.version, 5)
 })
 
 test("merge preserves tombstones added in next (service-worker round-trip safe)", () => {
-  const previous = v4()
-  const current = v4()
-  const next = v4({
+  const previous = v5()
+  const current = v5()
+  const next = v5({
     tombstones: { c1: { conversationId: "c1", removedSeq: 10 } },
   })
   const merged = mergeStoredQueueTransition(current, previous, next)
@@ -105,11 +116,11 @@ test("merge preserves tombstones added in next (service-worker round-trip safe)"
 })
 
 test("merge takes the higher removedSeq when both sides tombstone", () => {
-  const previous = v4()
-  const current = v4({
+  const previous = v5()
+  const current = v5({
     tombstones: { c1: { conversationId: "c1", removedSeq: 5 } },
   })
-  const next = v4({
+  const next = v5({
     tombstones: { c1: { conversationId: "c1", removedSeq: 12 } },
   })
   const merged = mergeStoredQueueTransition(current, previous, next)
@@ -118,13 +129,13 @@ test("merge takes the higher removedSeq when both sides tombstone", () => {
 
 test("merge honors tombstone CLEAR as a real change (re-add not resurrected)", () => {
   // previous had the tombstone; next dropped it (legitimate re-add cleared it).
-  const previous = v4({
+  const previous = v5({
     tombstones: { c1: { conversationId: "c1", removedSeq: 8 } },
   })
-  const current = v4({
+  const current = v5({
     tombstones: { c1: { conversationId: "c1", removedSeq: 8 } },
   })
-  const next = v4({ tombstones: {} })
+  const next = v5({ tombstones: {} })
   const merged = mergeStoredQueueTransition(current, previous, next)
   assert.deepEqual(
     merged.tombstones,
@@ -137,13 +148,13 @@ test("a stale CLEAR does not delete a newer removal in current", () => {
   // current already holds a NEWER removal (seq 12, e.g. from another tab) than
   // the one this transition cleared (it cleared the seq-8 tombstone). The stale
   // clear must NOT delete the newer removal.
-  const previous = v4({
+  const previous = v5({
     tombstones: { c1: { conversationId: "c1", removedSeq: 8 } },
   })
-  const current = v4({
+  const current = v5({
     tombstones: { c1: { conversationId: "c1", removedSeq: 12 } },
   })
-  const next = v4({ tombstones: {} })
+  const next = v5({ tombstones: {} })
   const merged = mergeStoredQueueTransition(current, previous, next)
   assert.deepEqual(
     merged.tombstones,

@@ -29,6 +29,7 @@ import { CodexDriver } from "./drivers/codex-driver.js"
 import { registerDriver, tryGetDriver } from "./drivers/registry.js"
 import {
   activeWireTraceFields,
+  detach,
   getTraceparent,
   runWithCarrier,
   runWithoutCarrier,
@@ -37,9 +38,8 @@ import {
 import {
   buildFailDeliveriesReport,
   DeliveryCarrierMap,
-  dedupeCarriersByTraceId,
-  singleTraceScope,
 } from "./delivery-carriers.js"
+import { ConversationTurns } from "./conversation-turns.js"
 import type {
   AgentSessionEvent,
   PermissionDecision,
@@ -66,6 +66,7 @@ import {
 import {
   parseServerMessage,
   type AgentStartMessage,
+  type DeliveriesCompletedMessage,
   type Delivery,
   type TaskResolvedMessage,
 } from "./server-message-codec.js"
@@ -495,6 +496,10 @@ class DaemonSupervisor {
             const agent = this.getOrCreateAgent(start.remoteAgentId)
             await agent.configure(start)
             if (start.conversationId) {
+              // The turn this start drives is scoped to the start frame's
+              // carrier (a non-delivery driver), so the agent's lifecycle
+              // callbacks re-enter this trace via ConversationTurns.scoped.
+              agent.noteTurnDriver(start.conversationId, frameCarrier(start))
               // Server only sends agent:start for pairs with pending work, so
               // bootstrapping the runtime here is enough — its initial prompt
               // tells the agent to call check_messages immediately, and the
@@ -537,6 +542,21 @@ class DaemonSupervisor {
               agent.resolveTask(message)
             )
           }
+          return
+        }
+
+        if (message?.type === "agent:deliveries:completed") {
+          const completed = message
+          const agent = this.agents.get(completed.remoteAgentId)
+          if (agent) {
+            // The api owns completion (observed reverse-MCP side); this frame
+            // reclaims ONLY the daemon's functional pending-delivery set. It must
+            // NOT touch the per-turn observability snapshot — completion fires
+            // MID-TURN and the running turn's links must survive (ruling R2).
+            runWithCarrier(frameCarrier(completed), () =>
+              agent.reclaimCompletedDeliveries(completed)
+            )
+          }
         }
       })
 
@@ -544,7 +564,9 @@ class DaemonSupervisor {
         log("warn", "daemon", "WebSocket closed")
         cleanup()
         for (const agent of this.agents.values()) {
-          void agent.stopAll("daemon disconnected")
+          // Context-free: ws-close is not a turn scope, and stopAll's onClosed
+          // callbacks re-enter each conversation's own turn carrier.
+          detach(() => agent.stopAll("daemon disconnected"))
         }
         resolve()
       })
@@ -574,24 +596,29 @@ class ManagedRemoteAgent {
   private readonly runtimes = new Map<string, ConversationRuntime>()
   private readonly pendingTasks = new Map<string, PendingTaskRecord>()
   private readonly latestPlanByConversation = new Map<string, LatestPlanDraft>()
-  // Deliveries we've routed into a conversation runtime but haven't yet been
-  // observed completing (via the reverse-MCP complete-deliveries tool) or
-  // failing. On runtime crash / stop, we POST these back to the server's
-  // fail-deliveries endpoint so the backoff worker can reschedule. Capped per
-  // conversation (oldest-evicted) — completions are only observed api-side, so
-  // this would otherwise grow unbounded on a long-lived conversation.
+  // FUNCTIONAL crash-retry state: deliveries we've routed into a conversation
+  // runtime but haven't yet reclaimed. Reclaimed by the api's
+  // `agent:deliveries:completed` frame on success (forgetDeliveries) and drained
+  // to the server's fail-deliveries endpoint on runtime crash / stop so the
+  // backoff worker can reschedule. Capped per conversation (oldest-evicted).
+  // This is SEPARATE from the observability turn snapshot below (ruling R2): a
+  // completed delivery leaves this set but its carrier stays linkable until the
+  // turn's epoch closes.
   private readonly pendingDeliveryIds = new Map<string, Set<string>>()
   // Per-DELIVERY W3C trace carriers (from the api's agent:deliver items). One
-  // batch fans in deliveries from MANY requests, each with its own trace, and
-  // the async callbacks (subprocess crash → fail-deliveries, drainEvents →
-  // task creation) run OUTSIDE the WS handler's ALS scope — so every traced
-  // delivery keeps its own carrier here until it is reported failed (deleted)
-  // or evicted (bounded FIFO, observability-only). Scopes are resolved per
-  // callback from exactly the delivery ids it concerns: one distinct origin
-  // trace ⇒ that carrier; mixed origins ⇒ no ambient carrier (the per-delivery
-  // carriers still ride the fail-deliveries body / origin_carriers field).
-  // stopAll clears it so nothing leaks across reconnects.
+  // batch fans in deliveries from MANY requests, each with its own trace. Every
+  // traced delivery keeps its own carrier here; the turn snapshot (`turns`)
+  // references these by id. Reclaimed ONLY by the FIFO cap (a pure backstop) —
+  // neither completion nor fail-back deletes carriers, so a mid-turn completion
+  // cannot strip the running turn's origin links. stopAll clears it so nothing
+  // leaks across reconnects.
   private readonly deliveryCarriers = new DeliveryCarrierMap()
+  // OBSERVABILITY turn state: the deliveries + driver frame that raised the
+  // current turn, per conversation. `originCarriers`/`scope` describe THIS turn
+  // (not the whole conversation's history — the F3 collapse), and every
+  // lifecycle callback re-enters the turn's carrier via `turns.scoped`. A turn
+  // ends on turn_completed/close (`turns.end`), NOT on delivery completion.
+  private readonly turns = new ConversationTurns(this.deliveryCarriers)
 
   constructor(
     private readonly params: {
@@ -633,21 +660,41 @@ class ManagedRemoteAgent {
   }
 
   /**
-   * Origin carriers of a conversation's pending deliveries: the deduped-by-
-   * trace-id list (≤20) for the `origin_carriers` wire field, plus the
-   * single-origin carrier scope for the POST (undefined on mixed origins —
-   * header present iff exactly one distinct origin trace).
+   * Record the driver frame that raised a non-delivery turn (agent:start with a
+   * conversation / agent:task:resolved), so the turn's lifecycle callbacks link
+   * that trace. Public because the driver frames are handled in the supervisor.
    */
-  private pendingOriginCarriers(conversationId: string): {
-    originCarriers: TraceCarrier[]
-    scope: TraceCarrier | undefined
-  } {
-    const pendingIds = this.pendingDeliveryIds.get(conversationId)
-    const carriers = this.deliveryCarriers.collect(pendingIds ?? [])
-    return {
-      originCarriers: dedupeCarriersByTraceId(carriers),
-      scope: singleTraceScope(carriers),
-    }
+  noteTurnDriver(conversationId: string, carrier: TraceCarrier | undefined) {
+    this.turns.noteDriver(conversationId, carrier)
+  }
+
+  /**
+   * Drop delivery ids from the FUNCTIONAL pending set ONLY. The single
+   * ownership-exit point for the crash-retry set — used by the completion frame
+   * and by fail-back. It deliberately does NOT touch the per-delivery carriers
+   * or the turn snapshot (ruling R2): the carrier map is a FIFO backstop and the
+   * turn snapshot lives until its epoch closes, so a completion/failure mid-turn
+   * cannot strip the running turn's origin links.
+   */
+  private forgetDeliveries(conversationId: string, deliveryIds: string[]) {
+    const set = this.pendingDeliveryIds.get(conversationId)
+    if (!set) return
+    for (const id of deliveryIds) set.delete(id)
+    if (set.size === 0) this.pendingDeliveryIds.delete(conversationId)
+  }
+
+  /** Reclaim deliveries the api observed completing (pending set only). */
+  reclaimCompletedDeliveries(message: DeliveriesCompletedMessage) {
+    this.forgetDeliveries(message.conversationId, message.deliveryIds)
+    log(
+      "debug",
+      `remote-agent:${this.params.remoteAgentId}`,
+      "Reclaimed completed deliveries",
+      {
+        conversationId: message.conversationId,
+        count: message.deliveryIds.length,
+      }
+    )
   }
 
   private async reportDeliveryFailure(
@@ -656,34 +703,26 @@ class ManagedRemoteAgent {
     conversationId?: string
   ) {
     if (deliveryIds.length === 0) return
-    if (conversationId) {
-      const set = this.pendingDeliveryIds.get(conversationId)
-      if (set) {
-        for (const id of deliveryIds) set.delete(id)
-        if (set.size === 0) this.pendingDeliveryIds.delete(conversationId)
-      }
-    }
-    // This runs from async subprocess-crash / stopAll callbacks that are
-    // outside the WS-handler ALS scope. Every failed delivery carries ITS OWN
-    // originating carrier in the body (the api LINKs each one), and the POST
-    // itself re-enters a carrier only when ALL of them share one distinct
-    // trace (single-origin ⇒ parented; mixed ⇒ fresh api-side root with
-    // per-delivery links) — `buildFailDeliveriesReport` is the pure,
-    // unit-tested assembly (delivery-carriers.test.ts drives the C3a repro).
-    // Map entries are deleted BEFORE the first await so a concurrent stopAll
-    // cannot double-report them with stale carriers.
+    // Reclaim the FUNCTIONAL pending set ONLY (ruling R2). The turn snapshot and
+    // the per-delivery carriers are untouched — the failed delivery's own
+    // carrier still rides the fail-deliveries body below, and the running turn's
+    // origin links survive until the turn's epoch closes.
+    if (conversationId) this.forgetDeliveries(conversationId, deliveryIds)
+    // Every failed delivery carries ITS OWN originating carrier in the body (the
+    // api LINKs each one), and the POST itself re-enters a carrier only when ALL
+    // of them share one distinct trace (single-origin ⇒ parented; mixed ⇒ fresh
+    // api-side root with per-delivery links) — `buildFailDeliveriesReport` is
+    // the pure, unit-tested assembly (delivery-carriers.test.ts drives the C3a
+    // repro). Double-report is prevented by the pending-set removal above (the
+    // id is gone before the first await), not by deleting carriers.
     const { deliveries, scope } = buildFailDeliveriesReport(
       this.deliveryCarriers,
       deliveryIds
     )
-    for (const id of deliveryIds) this.deliveryCarriers.delete(id)
     // Single-origin scope ⇒ the POST is parented under that one trace. An
-    // undefined scope (mixed origins / untraced) must MASK any ambient ALS
-    // carrier — this path can run inside enqueueDeliveries' per-conversation
-    // scope, whose carrier would otherwise leak onto the POST and parent the
-    // report under one origin. runWithoutCarrier makes the POST carry NO
-    // traceparent header, so the api creates a fresh root with per-delivery
-    // links to ALL origins.
+    // undefined scope (mixed origins / untraced) MASKS any ambient carrier so
+    // the POST carries NO traceparent header and the api creates a fresh root
+    // with per-delivery links to ALL origins.
     const post = () =>
       requestJson(
         this.params.config.serverUrl,
@@ -819,6 +858,10 @@ class ManagedRemoteAgent {
         this.deliveryCarriers.set(item.deliveryId, frameCarrier(item))
       }
       const deliveryIds = items.map((item) => item.deliveryId)
+      // The deliveries routed into this conversation ARE the current turn's
+      // origins — the callbacks below read them via `turns` (not the whole
+      // conversation's pending set, the F3 collapse).
+      this.turns.noteDeliveries(conversationId, deliveryIds)
       const scope = this.deliveryCarriers.scopeFor(deliveryIds)
       await runWithCarrier(scope, async () => {
         this.trackPendingDeliveries(conversationId, deliveryIds)
@@ -856,6 +899,12 @@ class ManagedRemoteAgent {
   async resolveTask(message: TaskResolvedMessage) {
     const task = parseResolvedTaskPayload(message.task)
     const pending = this.pendingTasks.get(message.taskId)
+    // The task-resolver frame drives this turn (a non-delivery driver), so its
+    // carrier scopes the conversation's continuation callbacks.
+    const drivenConversationId = pending?.conversationId ?? task.conversationId
+    if (drivenConversationId) {
+      this.turns.noteDriver(drivenConversationId, frameCarrier(message))
+    }
     if (!pending) {
       log(
         "warn",
@@ -943,18 +992,14 @@ class ManagedRemoteAgent {
   }
 
   async stopAll(reason: string) {
-    for (const [conversationId, runtime] of this.runtimes) {
+    // Snapshot the runtime keys — runtime.close() fires onClosed, which drains
+    // + fail-reports the conversation's pending deliveries, ends the turn, and
+    // deletes the runtime from the map (so deleting during iteration is avoided).
+    for (const [conversationId, runtime] of [...this.runtimes]) {
       try {
         await runtime.close(reason)
       } catch {}
       this.runtimes.delete(conversationId)
-      const ids = this.drainPendingDeliveries(conversationId)
-      if (ids.length > 0) {
-        // reportDeliveryFailure snapshots (and deletes) each delivery's
-        // carrier synchronously before its first await, so the post-loop
-        // clear() below is safe.
-        void this.reportDeliveryFailure(ids, reason, conversationId)
-      }
     }
     // All runtimes are gone → drop every stashed carrier so the map cannot
     // grow across reconnects or leak a stale trace into a future turn.
@@ -967,49 +1012,64 @@ class ManagedRemoteAgent {
   }
 
   private buildRuntimeCallbacks(): ConversationRuntimeCallbacks {
+    // Every callback fires from the CONTEXT-FREE detached drainEvents loop (F4),
+    // so `this.turns.scoped` re-enters THIS callback's own per-turn carrier over
+    // its WHOLE body (send/publishStatus/POST/log) — single-origin turn ⇒ that
+    // trace, mixed/absent ⇒ masked (never inherited). Wrapping the whole body
+    // (not just the POST) is what fixes publishStatus + activeWireTraceFields +
+    // log together; a HOF cannot be half-applied inside a long body.
     return {
-      onSessionStarted: (conversationId, sessionId) => {
-        this.params.daemon.send({
-          type: "agent:session",
-          remote_agent_id: this.params.remoteAgentId,
-          conversation_id: conversationId,
-          session_id: sessionId,
-          ...activeWireTraceFields(),
-        } satisfies RemoteAgentSessionMessage)
-        // A fresh session means we're starting clean — any error from the
-        // previous lifecycle is stale by definition. Use the empty-string
-        // sentinel so the server clears last_error instead of preserving
-        // (the COALESCE path) or leaving it alone.
-        this.publishStatus({
-          conversationId,
-          state: "running",
-          statusText: "Session connected",
-          sessionId,
-          lastError: "",
-        })
-      },
-      onAssistantMessage: (_conversationId, _text) => {
-        // Assistant output is delivered to Synapse via the reverse-MCP
-        // send_message tool (registered on the per-conversation McpServer).
-        // We don't republish it through WS to keep the control plane focused
-        // on lifecycle.
-      },
-      onTurnCompleted: (conversationId, info) => {
-        // Turn ended cleanly: clear last_error so the UI doesn't show a
-        // stale alarm. Turn ended with an error: leave it alone (the
-        // corresponding onError already wrote the message; we don't want
-        // turn_completed to clobber it). The wire convention is:
-        //   lastError: ""     -> server clears
-        //   lastError: null   -> server preserves (COALESCE)
-        //   lastError: "msg"  -> server sets
-        this.publishStatus({
-          conversationId,
-          state: "idle",
-          statusText: "Idle",
-          lastError: info.hadError ? null : "",
-        })
-      },
-      onError: (conversationId, message) => {
+      onSessionStarted: this.turns.scoped(
+        (conversationId: string, sessionId: string) => {
+          this.params.daemon.send({
+            type: "agent:session",
+            remote_agent_id: this.params.remoteAgentId,
+            conversation_id: conversationId,
+            session_id: sessionId,
+            ...activeWireTraceFields(),
+          } satisfies RemoteAgentSessionMessage)
+          // A fresh session means we're starting clean — any error from the
+          // previous lifecycle is stale by definition. Use the empty-string
+          // sentinel so the server clears last_error instead of preserving
+          // (the COALESCE path) or leaving it alone.
+          this.publishStatus({
+            conversationId,
+            state: "running",
+            statusText: "Session connected",
+            sessionId,
+            lastError: "",
+          })
+        }
+      ),
+      onAssistantMessage: this.turns.scoped(
+        (_conversationId: string, _text: string) => {
+          // Assistant output is delivered to Synapse via the reverse-MCP
+          // send_message tool (registered on the per-conversation McpServer).
+          // We don't republish it through WS to keep the control plane focused
+          // on lifecycle.
+        }
+      ),
+      onTurnCompleted: this.turns.scoped(
+        (conversationId: string, info: { hadError: boolean }) => {
+          // Turn ended cleanly: clear last_error so the UI doesn't show a
+          // stale alarm. Turn ended with an error: leave it alone (the
+          // corresponding onError already wrote the message; we don't want
+          // turn_completed to clobber it). The wire convention is:
+          //   lastError: ""     -> server clears
+          //   lastError: null   -> server preserves (COALESCE)
+          //   lastError: "msg"  -> server sets
+          this.publishStatus({
+            conversationId,
+            state: "idle",
+            statusText: "Idle",
+            lastError: info.hadError ? null : "",
+          })
+          // The turn's epoch closes here — its observability snapshot is dropped
+          // (NOT on delivery completion; ruling R2). A later turn re-notes fresh.
+          this.turns.end(conversationId)
+        }
+      ),
+      onError: this.turns.scoped((conversationId: string, message: string) => {
         this.publishStatus({
           conversationId,
           state: "error",
@@ -1018,22 +1078,24 @@ class ManagedRemoteAgent {
         })
         const ids = this.drainPendingDeliveries(conversationId)
         if (ids.length > 0) {
-          void this.reportDeliveryFailure(ids, message, conversationId)
+          // Context-free fire-and-forget; reportDeliveryFailure re-establishes
+          // its own single-origin/masked scope for the POST.
+          detach(() => this.reportDeliveryFailure(ids, message, conversationId))
         }
-      },
-      onUserInputRequested: async (conversationId, event) => {
-        try {
-          const runKey = `remote-agent:${this.params.remoteAgentId}:user-input:${randomUUID()}`
-          // This callback fires from the detached drainEvents loop, OUTSIDE
-          // the enqueueDeliveries ALS scope. Attach every pending delivery's
-          // origin carrier (deduped by trace id, ≤20) so the api can LINK the
-          // task to each originating trace, and re-enter a carrier on the
-          // POST itself only when the pending set has exactly ONE distinct
-          // origin trace.
-          const { originCarriers, scope } =
-            this.pendingOriginCarriers(conversationId)
-          const result = await runWithCarrier(scope, () =>
-            requestJson(
+      }),
+      onUserInputRequested: this.turns.scoped(
+        async (
+          conversationId: string,
+          event: Extract<AgentSessionEvent, { kind: "user_input_requested" }>
+        ): Promise<void> => {
+          try {
+            const runKey = `remote-agent:${this.params.remoteAgentId}:user-input:${randomUUID()}`
+            // The turn's origin carriers (deduped by trace id, ≤20) so the api can
+            // LINK the task to each originating trace; the POST itself rides the
+            // turn scope this callback already runs in (single-origin ⇒ parented;
+            // mixed/absent ⇒ untraced fresh root with per-origin links).
+            const originCarriers = this.turns.originCarriers(conversationId)
+            const result = await requestJson(
               this.params.config.serverUrl,
               this.params.config.apiKey,
               `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/user-input`,
@@ -1051,41 +1113,43 @@ class ManagedRemoteAgent {
               },
               RemoteAgentTaskCreateResponseSchema
             )
-          )
-          this.pendingTasks.set(result.task.id, {
-            taskId: result.task.id,
-            kind: "user_input",
-            remoteAgentId: this.params.remoteAgentId,
-            conversationId,
-            requestId: event.requestId,
-            toolName: event.toolName,
-            originalInput: event.originalInput,
-          })
-          this.publishStatus({
-            conversationId,
-            state: "waiting_user_input",
-            statusText: "Waiting for user input",
-            taskId: result.task.id,
-            runKey,
-          })
-        } catch (error) {
-          this.publishStatus({
-            conversationId,
-            state: "error",
-            statusText: error instanceof Error ? error.message : String(error),
-            lastError: error instanceof Error ? error.message : String(error),
-          })
+            this.pendingTasks.set(result.task.id, {
+              taskId: result.task.id,
+              kind: "user_input",
+              remoteAgentId: this.params.remoteAgentId,
+              conversationId,
+              requestId: event.requestId,
+              toolName: event.toolName,
+              originalInput: event.originalInput,
+            })
+            this.publishStatus({
+              conversationId,
+              state: "waiting_user_input",
+              statusText: "Waiting for user input",
+              taskId: result.task.id,
+              runKey,
+            })
+          } catch (error) {
+            this.publishStatus({
+              conversationId,
+              state: "error",
+              statusText:
+                error instanceof Error ? error.message : String(error),
+              lastError: error instanceof Error ? error.message : String(error),
+            })
+          }
         }
-      },
-      onPlanApprovalRequested: async (conversationId, event) => {
-        try {
-          const runKey = `remote-agent:${this.params.remoteAgentId}:plan:${randomUUID()}`
-          // Detached drainEvents callback (see onUserInputRequested) →
-          // origin_carriers from the pending deliveries + single-origin scope.
-          const { originCarriers, scope } =
-            this.pendingOriginCarriers(conversationId)
-          const result = await runWithCarrier(scope, () =>
-            requestJson(
+      ),
+      onPlanApprovalRequested: this.turns.scoped(
+        async (
+          conversationId: string,
+          event: Extract<AgentSessionEvent, { kind: "plan_approval_requested" }>
+        ): Promise<void> => {
+          try {
+            const runKey = `remote-agent:${this.params.remoteAgentId}:plan:${randomUUID()}`
+            // Turn origin carriers + turn scope (see onUserInputRequested).
+            const originCarriers = this.turns.originCarriers(conversationId)
+            const result = await requestJson(
               this.params.config.serverUrl,
               this.params.config.apiKey,
               `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/tasks/plan-approval`,
@@ -1105,57 +1169,71 @@ class ManagedRemoteAgent {
               },
               RemoteAgentTaskCreateResponseSchema
             )
-          )
-          this.pendingTasks.set(result.task.id, {
-            taskId: result.task.id,
-            kind: "plan_approval",
-            remoteAgentId: this.params.remoteAgentId,
-            conversationId,
-            requestId: event.requestId,
-            toolName: event.toolName,
-            originalInput: event.originalInput,
+            this.pendingTasks.set(result.task.id, {
+              taskId: result.task.id,
+              kind: "plan_approval",
+              remoteAgentId: this.params.remoteAgentId,
+              conversationId,
+              requestId: event.requestId,
+              toolName: event.toolName,
+              originalInput: event.originalInput,
+            })
+            this.publishStatus({
+              conversationId,
+              state: "waiting_plan_approval",
+              statusText: "Waiting for plan approval",
+              taskId: result.task.id,
+              runKey,
+            })
+          } catch (error) {
+            this.publishStatus({
+              conversationId,
+              state: "error",
+              statusText:
+                error instanceof Error ? error.message : String(error),
+              lastError: error instanceof Error ? error.message : String(error),
+            })
+          }
+        }
+      ),
+      onPlanUpdated: this.turns.scoped(
+        (
+          conversationId: string,
+          event: Extract<AgentSessionEvent, { kind: "plan_updated" }>
+        ) => {
+          this.latestPlanByConversation.set(conversationId, {
+            title: "Plan",
+            summary: event.explanation,
+            planMarkdown: event.plan
+              .map(
+                (step) =>
+                  `- [${step.status === "completed" ? "x" : " "}] ${step.step}`
+              )
+              .join("\n"),
+            checklist: event.plan.map((step, index) => ({
+              id: `plan-${index + 1}`,
+              text: step.step,
+              done: step.status === "completed",
+            })),
           })
           this.publishStatus({
             conversationId,
-            state: "waiting_plan_approval",
-            statusText: "Waiting for plan approval",
-            taskId: result.task.id,
-            runKey,
-          })
-        } catch (error) {
-          this.publishStatus({
-            conversationId,
-            state: "error",
-            statusText: error instanceof Error ? error.message : String(error),
-            lastError: error instanceof Error ? error.message : String(error),
+            state: "plan_drafting",
+            statusText: "Drafting a plan",
           })
         }
-      },
-      onPlanUpdated: (conversationId, event) => {
-        this.latestPlanByConversation.set(conversationId, {
-          title: "Plan",
-          summary: event.explanation,
-          planMarkdown: event.plan
-            .map(
-              (step) =>
-                `- [${step.status === "completed" ? "x" : " "}] ${step.step}`
-            )
-            .join("\n"),
-          checklist: event.plan.map((step, index) => ({
-            id: `plan-${index + 1}`,
-            text: step.step,
-            done: step.status === "completed",
-          })),
-        })
-        this.publishStatus({
-          conversationId,
-          state: "plan_drafting",
-          statusText: "Drafting a plan",
-        })
-      },
-      onClosed: (conversationId) => {
+      ),
+      onClosed: this.turns.scoped((conversationId: string, reason: string) => {
         this.runtimes.delete(conversationId)
-      },
+        // Fix F3 extra-finding (a): a runtime close must drain + fail-report the
+        // conversation's still-pending deliveries so the retry worker reschedules
+        // (they were never leaked), then close the turn's epoch.
+        const ids = this.drainPendingDeliveries(conversationId)
+        if (ids.length > 0) {
+          detach(() => this.reportDeliveryFailure(ids, reason, conversationId))
+        }
+        this.turns.end(conversationId)
+      }),
     }
   }
 

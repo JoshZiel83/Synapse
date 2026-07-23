@@ -48,7 +48,7 @@ function outbox(
 
 function snapshot(overrides: Partial<Snapshot> = {}): Snapshot {
   return {
-    version: 4,
+    version: 5,
     workspaceId: WS,
     workspaceMemberId: "wm-1",
     clientInstanceId: "22222222-2222-4222-8222-222222222222",
@@ -71,6 +71,18 @@ function upsert(conversations: Conversation[], incoming: Conversation) {
 }
 
 describe("chat store queue race guards", () => {
+  it("round-trips an outbox entry's persisted trace carrier through a rebase", () => {
+    const carrier = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    const withCarrier = { ...outbox("m1"), traceparent: carrier }
+    const base = snapshot({ outbox: { m1: withCarrier } })
+    const latest = snapshot({ outbox: { m1: withCarrier } })
+    const processed = snapshot({ outbox: { m1: withCarrier } })
+
+    const merged = rebaseQueueFieldsOntoLatest(base, latest, processed)
+
+    expect(merged.outbox.m1?.traceparent).toBe(carrier)
+  })
+
   it("preserves outbox messages queued while a flush result is in flight", () => {
     const base = snapshot({
       outbox: {

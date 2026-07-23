@@ -12,6 +12,14 @@
 // This is the logger implementation itself (allowlisted in guard-logging.mjs);
 // app code calls createLogger(...) instead of console.*. Redaction is out of
 // scope (D3) — do not log secrets/tokens. The server stamps authoritative time.
+//
+// Trace ids are captured at EMIT time, never at flush: by the 5s flush the
+// Sentry scope/span has moved on, and flush() prefers navigator.sendBeacon which
+// no SDK instruments (the upload would correlate to nothing). `trace_id` is the
+// field the ingest RecordSchema already accepts and re-emits as `clientTraceId`;
+// absent when no Sentry client is configured.
+
+import { currentClientTraceId } from "@/lib/client-trace"
 
 type Level = "debug" | "info" | "warn" | "error"
 
@@ -21,6 +29,7 @@ interface ClientLogRecord {
   component?: string
   msg: string
   fields?: Record<string, unknown>
+  trace_id?: string
 }
 
 const ENDPOINT = `${process.env.NEXT_PUBLIC_API_URL || "/api/v1"}/logs`
@@ -123,7 +132,15 @@ function emit(
     console[DEV_CONSOLE[level]](`[${tag}]`, ...args)
   }
 
-  buffer.push({ level, domain, component, msg, fields })
+  const traceId = currentClientTraceId()
+  buffer.push({
+    level,
+    domain,
+    component,
+    msg,
+    fields,
+    ...(traceId ? { trace_id: traceId } : {}),
+  })
   if (buffer.length >= MAX_BUFFER) flush()
   else scheduleFlush()
 }

@@ -2745,3 +2745,193 @@ fn cas_gc_grace_window_protects_young_unreachable_blobs() {
     );
     helper.stop();
 }
+
+// ─── OTLP span export: process-level wire assertions (F9a/b) ─────────────────
+//
+// Spawns the REAL binary with OTEL_EXPORTER_OTLP_ENDPOINT pointed at an in-test
+// TcpListener OTLP sink, feeds an unknown-method frame carrying a fixed
+// traceparent, and asserts the exported OTLP body contains the JSON-RPC semconv
+// key bytes + the injected trace id's raw bytes — once after a clean stdin
+// close, once after SIGTERM. The SIGTERM case is the regression test for the
+// span-loss class the review missed: the old binary installed no signal handler
+// and dropped every buffered span, and even the fixed flush hangs on teardown
+// without main.rs's post-flush std::process::exit (reqwest-blocking client +
+// tokio runtime teardown). Revert either the signal handling or the exit and
+// this test fails. Unix-only (uses `kill -TERM`); the in-cargo gate mirrors
+// packages/api/scripts/trace-probes/p-g3-helper-rpc-semconv.py.
+#[cfg(unix)]
+mod otlp_span_export {
+    use super::build_binary;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    // trace_id = 0x11 * 16, span_id = 0x22 * 8 — both non-zero so the helper's
+    // valid_traceparent accepts the carrier and parents the span remotely.
+    const CARRIER_TP: &str = "00-11111111111111111111111111111111-2222222222222222-01";
+    const TRACE_ID_BYTES: [u8; 16] = [0x11u8; 16];
+
+    fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+        hay.windows(needle.len()).position(|w| w == needle)
+    }
+    fn contains(hay: &[u8], needle: &[u8]) -> bool {
+        find(hay, needle).is_some()
+    }
+
+    /// Accept ONE OTLP/HTTP POST, read headers + Content-Length body, reply 200,
+    /// and hand the raw protobuf body back over a channel.
+    fn capture_one_otlp_body(listener: TcpListener) -> mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+                let mut buf: Vec<u8> = Vec::new();
+                let mut tmp = [0u8; 8192];
+                let mut header_end: Option<usize> = None;
+                let mut content_length: Option<usize> = None;
+                loop {
+                    if header_end.is_none() {
+                        if let Some(pos) = find(&buf, b"\r\n\r\n") {
+                            header_end = Some(pos + 4);
+                            let headers =
+                                String::from_utf8_lossy(&buf[..pos]).to_lowercase();
+                            for line in headers.split("\r\n") {
+                                if let Some(v) = line.strip_prefix("content-length:") {
+                                    content_length = v.trim().parse().ok();
+                                }
+                            }
+                        }
+                    }
+                    if let (Some(he), Some(cl)) = (header_end, content_length) {
+                        if buf.len() >= he + cl {
+                            break;
+                        }
+                    }
+                    match stream.read(&mut tmp) {
+                        Ok(0) => break,
+                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                        Err(_) => break,
+                    }
+                }
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+                let body = match (header_end, content_length) {
+                    (Some(he), Some(cl)) if buf.len() >= he + cl => buf[he..he + cl].to_vec(),
+                    (Some(he), _) => buf[he..].to_vec(),
+                    _ => buf.clone(),
+                };
+                let _ = tx.send(body);
+            }
+        });
+        rx
+    }
+
+    fn spawn_helper(port: u16) -> std::process::Child {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        // Leak the tempdir guard for the child's lifetime (test process is
+        // short-lived; the OS reaps /tmp).
+        std::mem::forget(tmp);
+        Command::new(build_binary())
+            .arg("--root")
+            .arg(&root)
+            .arg("--work-dir")
+            .arg(&work)
+            .env("OTEL_EXPORTER_OTLP_ENDPOINT", format!("http://127.0.0.1:{port}"))
+            .env("OTEL_SERVICE_NAME", "fs-helper-test")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn assert_semconv_payload(body: &[u8]) {
+        assert!(contains(body, b"rpc.system.name"), "missing rpc.system.name key");
+        assert!(contains(body, b"rpc.method_original"), "missing rpc.method_original");
+        assert!(contains(body, b"_OTHER"), "missing _OTHER classification");
+        assert!(contains(body, b"-32601"), "missing -32601 status code");
+        assert!(
+            contains(body, &TRACE_ID_BYTES),
+            "missing the injected trace id's raw bytes (span not parented on the carrier)"
+        );
+    }
+
+    fn wait_for_exit(child: &mut std::process::Child, secs: u64) -> Option<i32> {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline {
+            if let Ok(Some(status)) = child.try_wait() {
+                return Some(status.code().unwrap_or(-1));
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        None
+    }
+
+    const UNKNOWN_FRAME: &str = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"fs.bogus\",",
+        "\"traceparent\":\"00-11111111111111111111111111111111-2222222222222222-01\"}\n"
+    );
+
+    #[test]
+    fn otlp_export_semconv_on_stdin_close() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let rx = capture_one_otlp_body(listener);
+        let _ = CARRIER_TP; // documents the frame's carrier
+
+        let mut child = spawn_helper(port);
+        {
+            let mut stdin = child.stdin.take().unwrap();
+            stdin.write_all(UNKNOWN_FRAME.as_bytes()).unwrap();
+            stdin.flush().unwrap();
+            // Drop stdin → EOF → clean flush path.
+        }
+        let body = rx
+            .recv_timeout(Duration::from_secs(6))
+            .expect("no OTLP export received after stdin close");
+        assert_semconv_payload(&body);
+        assert!(
+            wait_for_exit(&mut child, 4).is_some(),
+            "helper did not exit promptly after stdin close"
+        );
+    }
+
+    #[test]
+    fn otlp_export_flushes_on_sigterm() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let rx = capture_one_otlp_body(listener);
+
+        let mut child = spawn_helper(port);
+        let pid = child.id();
+        {
+            // Keep stdin OPEN so the ONLY route to a flush is the signal handler.
+            let stdin = child.stdin.as_mut().unwrap();
+            stdin.write_all(UNKNOWN_FRAME.as_bytes()).unwrap();
+            stdin.flush().unwrap();
+        }
+        // Let the helper answer, then SIGTERM (dependency-free via `kill`).
+        thread::sleep(Duration::from_millis(400));
+        let killed = Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status()
+            .unwrap();
+        assert!(killed.success(), "kill -TERM failed");
+
+        let body = rx
+            .recv_timeout(Duration::from_secs(6))
+            .expect("SIGTERM'd helper exported NO span (flush path broken)");
+        assert_semconv_payload(&body);
+        assert!(
+            wait_for_exit(&mut child, 4).is_some(),
+            "SIGTERM'd helper did not exit within 4s (teardown hang — post-flush exit missing)"
+        );
+    }
+}

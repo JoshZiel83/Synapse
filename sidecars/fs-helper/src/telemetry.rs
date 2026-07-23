@@ -16,10 +16,12 @@ use std::sync::OnceLock;
 
 use opentelemetry::global;
 use opentelemetry::propagation::{Extractor, TextMapPropagator};
-use opentelemetry::trace::Tracer;
+use opentelemetry::trace::{Span, SpanKind, Status, Tracer};
+use opentelemetry::{Context, KeyValue};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
+use opentelemetry_semantic_conventions as semconv;
 
 const TRACER_NAME: &str = "synapse-device-fs-helper";
 
@@ -131,18 +133,57 @@ impl Extractor for FrameCarrier<'_> {
     }
 }
 
-/// Start a span for one RPC method, parented by the inbound `{traceparent,
-/// tracestate?}` carrier when present + valid (garbage degrades to a root
-/// span). The caller drops the returned span at the end of the frame to record
-/// its duration. When telemetry is disabled the global provider is a no-op, so
-/// this is cheap and always safe to call on the hot path.
+/// Start a SERVER-kind span for one JSON-RPC frame, parented by the inbound
+/// `{traceparent, tracestate?}` carrier when present + valid (garbage degrades
+/// to a TRUE root — `&Context::new()`, never the ambient context). The span is
+/// named `"jsonrpc"` at creation and carries the JSON-RPC creation attributes
+/// (`rpc.system.name`, `jsonrpc.protocol.version`, `network.transport`, and
+/// `jsonrpc.request.id` only when the frame has an id); `record_rpc_outcome`
+/// renames it to `{method}` and sets `rpc.method`/status AFTER dispatch has
+/// classified the method (so a buggy/hostile parent cannot inflate span-name or
+/// `rpc.method` cardinality). The caller drops the returned span at the end of
+/// the frame to record its duration; when OTEL is disabled the global provider
+/// is a no-op, so this is cheap and always safe on the hot path.
 pub fn rpc_span(
-    method: &str,
     traceparent: Option<&str>,
     tracestate: Option<&str>,
+    request_id: Option<&str>,
 ) -> global::BoxedSpan {
-    let tracer = global::tracer(TRACER_NAME);
-    let name = format!("fs-helper {method}");
+    build_rpc_span(
+        &global::tracer(TRACER_NAME),
+        traceparent,
+        tracestate,
+        request_id,
+    )
+}
+
+/// The tracer-generic body of `rpc_span`, so unit tests can drive it against an
+/// SDK tracer backed by an in-memory exporter instead of mutating global state.
+/// The carrier-handling half is the §3c contract above, unchanged.
+fn build_rpc_span<T: Tracer>(
+    tracer: &T,
+    traceparent: Option<&str>,
+    tracestate: Option<&str>,
+    request_id: Option<&str>,
+) -> T::Span {
+    let mut attrs = vec![
+        KeyValue::new(semconv::attribute::RPC_SYSTEM_NAME, "jsonrpc"),
+        KeyValue::new(semconv::attribute::JSONRPC_PROTOCOL_VERSION, "2.0"),
+        KeyValue::new(semconv::attribute::NETWORK_TRANSPORT, "pipe"),
+    ];
+    // jsonrpc.request.id rides ONLY when the frame carried an id — a
+    // notification (or an unparsable frame) omits it rather than emitting a
+    // placeholder.
+    if let Some(id) = request_id {
+        attrs.push(KeyValue::new(
+            semconv::attribute::JSONRPC_REQUEST_ID,
+            id.to_string(),
+        ));
+    }
+    let builder = tracer
+        .span_builder("jsonrpc")
+        .with_kind(SpanKind::Server)
+        .with_attributes(attrs);
     match traceparent {
         Some(tp) if valid_traceparent(tp) => {
             let cx = PROPAGATOR
@@ -151,10 +192,74 @@ pub fn rpc_span(
                     traceparent: tp,
                     tracestate: accepted_tracestate(tracestate),
                 });
-            tracer.start_with_context(name, &cx)
+            builder.start_with_context(tracer, &cx)
         }
-        _ => tracer.start(name),
+        // No/invalid carrier ⇒ a TRUE root (`&Context::new()`), never the
+        // ambient context — the frame is never rejected for a trace field.
+        _ => builder.start_with_context(tracer, &Context::new()),
     }
+}
+
+/// Finish a JSON-RPC span's semantic picture after dispatch, mirroring the Go
+/// cua helper's `recordRPCOutcome` in behaviour:
+///   * RECOGNIZED method (parsed, and not the dispatcher's `-32601` arm) ⇒
+///     rename the span to `{method}` and set `rpc.method={method}`.
+///   * UNRECOGNIZED / unparsable ⇒ leave the name `"jsonrpc"`, set
+///     `rpc.method=_OTHER`, and (when a raw method exists) `rpc.method_original`
+///     truncated to 128 bytes — bounding attacker/bug-controlled cardinality.
+///   * ANY JSON-RPC error object ⇒ `rpc.response.status_code` + `error.type`
+///     (the decimal code as a string) and an Error status with the JSON-RPC
+///     message. Every code counts (-32601/-32602/-32700 and the custom
+///     -32004/-32005/-32006) — JSON-RPC has no 4xx-stays-Unset leniency.
+/// Recognition is STRUCTURAL: `-32601` is produced by exactly one dispatch arm
+/// (`other => MethodNotFound`), and an unparsable frame has an empty method, so
+/// `recognized = !method.is_empty() && code != -32601`.
+pub fn record_rpc_outcome<S: Span>(span: &mut S, method: &str, err: Option<(i32, &str)>) {
+    let recognized = !method.is_empty()
+        && match err {
+            Some((code, _)) => code != -32601,
+            None => true,
+        };
+    if recognized {
+        span.update_name(method.to_string());
+        span.set_attribute(KeyValue::new(
+            semconv::attribute::RPC_METHOD,
+            method.to_string(),
+        ));
+    } else {
+        span.set_attribute(KeyValue::new(semconv::attribute::RPC_METHOD, "_OTHER"));
+        if !method.is_empty() {
+            span.set_attribute(KeyValue::new(
+                semconv::attribute::RPC_METHOD_ORIGINAL,
+                truncate_method(method),
+            ));
+        }
+    }
+    if let Some((code, message)) = err {
+        let code_str = code.to_string();
+        span.set_attribute(KeyValue::new(
+            semconv::attribute::RPC_RESPONSE_STATUS_CODE,
+            code_str.clone(),
+        ));
+        span.set_attribute(KeyValue::new(semconv::attribute::ERROR_TYPE, code_str));
+        span.set_status(Status::error(message.to_string()));
+    }
+}
+
+/// Bound an unrecognized method captured as `rpc.method_original` so an
+/// unbounded inbound method string can never bloat the attribute (mirrors the
+/// Go helper's `truncateMethod`; slices on a char boundary so a multi-byte
+/// method never panics).
+fn truncate_method(s: &str) -> String {
+    const MAX_METHOD_ORIGINAL: usize = 128;
+    if s.len() <= MAX_METHOD_ORIGINAL {
+        return s.to_string();
+    }
+    let mut end = MAX_METHOD_ORIGINAL;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
 }
 
 /// The §3c tracestate acceptance filter: honored only non-empty and within
@@ -301,5 +406,117 @@ mod tests {
                 v["note"].as_str().unwrap_or("")
             );
         }
+    }
+}
+
+// ─── span semantics (F9a) ───────────────────────────────────────────────────
+//
+// Drives build_rpc_span + record_rpc_outcome against an SDK tracer backed by an
+// InMemorySpanExporter (dev-feature `testing`), asserting the full JSON-RPC
+// semconv picture per frame — SERVER kind, span name, status, remote parent
+// from the §3c carrier, and the exact attribute set — WITHOUT mutating the
+// global tracer (so these run in parallel with the rest of the suite). Mirrors
+// the Go cua helper's TestHandleSpanMatrix.
+#[cfg(test)]
+mod span_semantics {
+    use super::{build_rpc_span, record_rpc_outcome, truncate_method};
+    use opentelemetry::trace::{Span, SpanKind, Status, TracerProvider};
+    use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
+
+    fn attr(span: &SpanData, key: &str) -> Option<String> {
+        span.attributes
+            .iter()
+            .find(|kv| kv.key.as_str() == key)
+            .map(|kv| kv.value.as_str().into_owned())
+    }
+
+    fn creation_attrs_present(span: &SpanData) {
+        assert_eq!(attr(span, "rpc.system.name").as_deref(), Some("jsonrpc"));
+        assert_eq!(
+            attr(span, "jsonrpc.protocol.version").as_deref(),
+            Some("2.0")
+        );
+        assert_eq!(attr(span, "network.transport").as_deref(), Some("pipe"));
+    }
+
+    #[test]
+    fn span_matrix_server_kind_names_status_and_attributes() {
+        const CARRIER_TRACE_ID: &str = "11111111111111111111111111111111";
+        const CARRIER_SPAN_ID: &str = "2222222222222222";
+        let carrier_tp =
+            format!("00-{CARRIER_TRACE_ID}-{CARRIER_SPAN_ID}-01");
+
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let tracer = provider.tracer("test");
+
+        // frame 0: unknown method WITH a carrier and a numeric id → _OTHER, ERROR -32601.
+        let mut s0 = build_rpc_span(&tracer, Some(&carrier_tp), None, Some("1"));
+        record_rpc_outcome(&mut s0, "nope", Some((-32601, "Method not found: nope")));
+        s0.end();
+        // frame 1: recognized method WITHOUT a carrier and WITHOUT an id → named, UNSET.
+        let mut s1 = build_rpc_span(&tracer, None, None, None);
+        record_rpc_outcome(&mut s1, "fs.hello", None);
+        s1.end();
+        // frame 2: unparsable (empty method) → _OTHER, ERROR -32700, no id.
+        let mut s2 = build_rpc_span(&tracer, None, None, None);
+        record_rpc_outcome(&mut s2, "", Some((-32700, "parse_error")));
+        s2.end();
+
+        provider.force_flush().unwrap();
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 3, "want 3 spans, got {}", spans.len());
+        for s in &spans {
+            assert_eq!(s.span_kind, SpanKind::Server, "span {} not SERVER", s.name);
+            creation_attrs_present(s);
+        }
+
+        // span 0
+        let s0 = &spans[0];
+        assert_eq!(s0.name, "jsonrpc");
+        assert!(matches!(s0.status, Status::Error { .. }), "{:?}", s0.status);
+        assert_eq!(attr(s0, "rpc.method").as_deref(), Some("_OTHER"));
+        assert_eq!(attr(s0, "rpc.method_original").as_deref(), Some("nope"));
+        assert_eq!(attr(s0, "jsonrpc.request.id").as_deref(), Some("1"));
+        assert_eq!(attr(s0, "rpc.response.status_code").as_deref(), Some("-32601"));
+        assert_eq!(attr(s0, "error.type").as_deref(), Some("-32601"));
+        assert_eq!(s0.span_context.trace_id().to_string(), CARRIER_TRACE_ID);
+        assert!(s0.parent_span_is_remote, "span0 parent must be remote");
+        assert_eq!(s0.parent_span_id.to_string(), CARRIER_SPAN_ID);
+
+        // span 1
+        let s1 = &spans[1];
+        assert_eq!(s1.name, "fs.hello");
+        assert!(matches!(s1.status, Status::Unset), "{:?}", s1.status);
+        assert_eq!(attr(s1, "rpc.method").as_deref(), Some("fs.hello"));
+        assert!(attr(s1, "jsonrpc.request.id").is_none(), "no id on a notification");
+        assert!(attr(s1, "rpc.method_original").is_none());
+        // A true root: the invalid (all-zero) parent span id, non-remote.
+        assert_eq!(s1.parent_span_id.to_string(), "0000000000000000");
+        assert!(!s1.parent_span_is_remote, "span1 must be a root");
+
+        // span 2
+        let s2 = &spans[2];
+        assert_eq!(s2.name, "jsonrpc");
+        assert!(matches!(s2.status, Status::Error { .. }), "{:?}", s2.status);
+        assert_eq!(attr(s2, "rpc.method").as_deref(), Some("_OTHER"));
+        assert!(attr(s2, "rpc.method_original").is_none(), "empty method → no original");
+        assert_eq!(attr(s2, "rpc.response.status_code").as_deref(), Some("-32700"));
+        assert!(attr(s2, "jsonrpc.request.id").is_none());
+    }
+
+    #[test]
+    fn truncate_method_bounds_to_128_bytes_on_a_char_boundary() {
+        let short = "fs.history.snapshot";
+        assert_eq!(truncate_method(short), short);
+        let long = "x".repeat(300);
+        assert_eq!(truncate_method(&long).len(), 128);
+        // Multi-byte method must not panic and must stay on a char boundary.
+        let multibyte = "宽".repeat(100); // 3 bytes each → 300 bytes
+        let truncated = truncate_method(&multibyte);
+        assert!(truncated.len() <= 128);
+        assert!(multibyte.starts_with(&truncated));
     }
 }

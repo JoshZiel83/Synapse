@@ -13,7 +13,7 @@ path = "src/main.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "fs", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "fs", "sync", "time", "signal"] }
 anyhow = "1"
 thiserror = "2"
 sha2 = "0.10"
@@ -34,6 +34,15 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 opentelemetry = "0.32.0"
 opentelemetry_sdk = "0.32.1"
 opentelemetry-otlp = "0.32.0"
+# Named JSON-RPC/RPC/network semconv attribute keys (rpc.system.name,
+# jsonrpc.protocol.version, jsonrpc.request.id, rpc.method[_original],
+# rpc.response.status_code, error.type, network.transport). The jsonrpc/rpc
+# keys are experimental in the registry, so the feature is required.
+opentelemetry-semantic-conventions = { version = "0.32.1", features = ["semconv_experimental"] }
 
 [dev-dependencies]
 tempfile = "3"
+# `testing` exposes InMemorySpanExporter for the telemetry.rs span-semantics
+# unit tests (SERVER kind / names / status / attributes) — dev-only, so
+# `cargo build` and the Docker image are unaffected.
+opentelemetry_sdk = { version = "0.32.1", features = ["testing"] }

@@ -380,6 +380,17 @@ an isolated runtime. Two backends, selected by `SANDBOX_PROVIDER` (local|docker|
 > **rebuild the api image** (`docker compose --profile production build api`); an
 > un-baked image fails the first provision with
 > `synapse-device-fs-helper binary not found`.
+>
+> **Helper distribution (device side).** The Go `synapse-device-cua-helper` and
+> Rust `synapse-device-fs-helper` reach a device by exactly one of: the container
+> image (above), a repo checkout, or an explicit
+> `SYNAPSE_DEVICE_CUA_HELPER_PATH` / `SYNAPSE_DEVICE_FS_HELPER_PATH` — **never via
+> `npm i @synapse/device-runtime`**, which ships no helper binaries by design
+> (npm cannot pack them above the package root). A device-runtime with no helper
+> degrades gracefully — no cua provider, and fs helper-backed features
+> (history / indexed search / extract / CAS) disabled — and now **warns at
+> startup** naming the env var. This is pinned by check (5) of
+> `npm run audit:device-runtime-sidecars`.
 
 In both cases provisioning waits for the device to register its tunnel endpoint
 (`device.tunnel.up`) before activating the sandbox or granting tools — a sandbox

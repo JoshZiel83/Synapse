@@ -79,14 +79,18 @@ export interface ChatSocketDeps {
   /** Current desired subscription set (aggregated, for the multiplex case). */
   getSubscriptions: () => ChatSocketSubscription[]
   /**
-   * Current W3C trace context for the sender, read at frame-send time. When it
-   * returns a carrier with a `traceparent`, outgoing `auth` and `subscribe`
-   * frames carry `{traceparent, tracestate}` on the envelope so the server
-   * parents its per-message spans to the client's active trace (web sources it
-   * from Sentry `getTraceData`; mobile builds it from the active span). Absent /
-   * undefined ⇒ frames go out unstamped and the server starts a fresh root.
+   * W3C trace context for the sender, resolved PER FRAME at send time. Both
+   * platforms open a SHORT real client span named for the frame
+   * (`ws.send auth` / `ws.send subscribe`, op `ws.client`) and hand back ITS
+   * `spanContext()` as the carrier, so each frame parents the server's
+   * per-message span to a span the SDK actually created and exported (never a
+   * fabricated span id). When no Sentry client is configured the helper stamps
+   * NOTHING — returns undefined — and the frame goes out unstamped so the server
+   * starts a fresh root. The `frame` argument only names the span.
    */
-  getTraceContext?: () => ChatSocketTraceContext | undefined
+  getTraceContext?: (
+    frame: "auth" | "subscribe"
+  ) => ChatSocketTraceContext | undefined
   /** Called for every non-protocol frame (already parsed). */
   onEvent: (event: Record<string, unknown>) => void
   /** Called once per successful auth handshake (auth.ok). */
@@ -201,19 +205,23 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
   }
 
   /**
-   * Envelope trace fields for a work-starting frame (auth/subscribe), read at
-   * send time so each frame carries the trace that was active when it was sent.
-   * Empty when no context is available — the field simply stays off the frame
-   * (the server-side envelope schema treats absent as "fresh root").
+   * Envelope trace fields for a work-starting frame (auth/subscribe). Opens a
+   * short per-frame client span (via `deps.getTraceContext(frame)`) and stamps
+   * ITS span context, so each frame names its own `ws.send <frame>` span. Empty
+   * when no context is available (no Sentry client) — the field simply stays off
+   * the frame and the server-side envelope schema treats absent as "fresh root".
    *
    * This is a MINT point, and every mint point runs the canonical tracestate
    * gate: `tracestate` is stamped only when it passes `sanitizeTracestateHeader`
    * (Level-2 ABNF, no duplicate keys, ≤32 members, ≤512 chars). Web/mobile mint
-   * no tracestate today, so this is defence-in-depth — but it keeps the
-   * "every mint gates" invariant true without exception.
+   * no tracestate today (the browser SDK carries vendor state on
+   * sentry-trace/baggage, never W3C tracestate), so this is defence-in-depth —
+   * but it keeps the "every mint gates" invariant true without exception.
    */
-  function traceContextFields(): Partial<ChatSocketTraceContext> {
-    const carrier = deps.getTraceContext?.()
+  function traceContextFields(
+    frame: "auth" | "subscribe"
+  ): Partial<ChatSocketTraceContext> {
+    const carrier = deps.getTraceContext?.(frame)
     if (!carrier?.traceparent) return {}
     const fields: Partial<ChatSocketTraceContext> = {
       traceparent: carrier.traceparent,
@@ -326,7 +334,7 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
         serialize({
           type: "subscribe",
           ...subscription,
-          ...traceContextFields(),
+          ...traceContextFields("subscribe"),
         })
       )
       sentSubscriptions.set(key, serialized)
@@ -345,7 +353,7 @@ export function createChatSocket(deps: ChatSocketDeps): ChatSocketHandle {
       reconnectAttempts = 0
       const frame: Record<string, unknown> = {
         type: "auth",
-        ...traceContextFields(),
+        ...traceContextFields("auth"),
       }
       if (auth.token) frame.token = auth.token
       if (auth.workspaceId) frame.workspaceId = auth.workspaceId

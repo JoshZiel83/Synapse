@@ -10,10 +10,13 @@ import { traceIdOf, type TraceCarrier } from "./trace-context.js"
  * reports it failed, and the async callbacks resolve a scope from exactly the
  * delivery ids they concern.
  *
- * Bounded FIFO (default cap 1024): completions are only observed api-side, so
- * entries for successfully processed deliveries linger until evicted — the
- * eviction is observability-only (a callback for an evicted delivery simply
- * loses its trace attribution; nothing functional depends on the map).
+ * Bounded FIFO (default cap 1024) — a pure leak backstop. The two carrier
+ * lifetimes are separated: the FUNCTIONAL pending-delivery set is reclaimed by
+ * the api's `agent:deliveries:completed` frame (index.ts forgetDeliveries), and
+ * the OBSERVABILITY turn snapshot is reclaimed when the turn epoch closes
+ * (ConversationTurns.end on turn_completed/close). This map itself is neither —
+ * its entries age out only via the FIFO cap, so a callback for an evicted
+ * delivery simply loses its trace attribution; nothing functional depends on it.
  */
 export class DeliveryCarrierMap {
   private readonly carriers = new Map<string, TraceCarrier>()
@@ -141,6 +144,13 @@ export function buildFailDeliveriesReport(
  * Dedupe carriers by trace-id (first carrier per trace wins), capped — the
  * `origin_carriers` wire field the api LINKs task creation back to every
  * originating trace (cap 20 matches the wire schema's max).
+ *
+ * When over the cap the OLDEST distinct trace is evicted, NOT the newest: the
+ * source list is arrival-ordered (oldest deliveries first, the current turn's
+ * origin last), so dropping the newest would drop exactly the current turn (the
+ * F3 counter-example — 20 stale origins + 1 current kept the 20 stale). Insert
+ * then evict-oldest keeps the current origin and matches the api's
+ * `TurnCarrierCache.extend` eviction policy (mcp-endpoint/turn-carriers.ts).
  */
 export function dedupeCarriersByTraceId(
   carriers: readonly TraceCarrier[],
@@ -148,10 +158,15 @@ export function dedupeCarriersByTraceId(
 ): TraceCarrier[] {
   const byTraceId = new Map<string, TraceCarrier>()
   for (const carrier of carriers) {
-    if (byTraceId.size >= cap) break
     const traceId = traceIdOf(carrier.traceparent)
     if (!traceId || byTraceId.has(traceId)) continue
     byTraceId.set(traceId, carrier)
+    // Evict the OLDEST distinct trace so the newest (current turn) survives.
+    while (byTraceId.size > cap) {
+      const oldest = byTraceId.keys().next().value
+      if (oldest === undefined) break
+      byTraceId.delete(oldest)
+    }
   }
   return [...byTraceId.values()]
 }

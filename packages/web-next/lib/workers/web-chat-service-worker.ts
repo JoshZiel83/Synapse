@@ -1,6 +1,9 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb"
 
-import { flushOutboxQueue } from "@synapse/shared/chat-queue"
+import {
+  flushOutboxQueue,
+  replayTraceHeaders,
+} from "@synapse/shared/chat-queue"
 import { nowIsoInstant } from "@synapse/shared/datetime"
 import type { Timestamp } from "@synapse/shared"
 import {
@@ -275,6 +278,10 @@ async function flushPendingReads(
         `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/read-watermark`,
         {
           method: "POST",
+          // Replay the persisted creation-context carrier (captured on the main
+          // thread inside a chat.read.enqueue span) as a raw traceparent header,
+          // dropped past the 24h cap. No Sentry SDK / minted id in the worker.
+          headers: replayTraceHeaders(entry.traceparent, entry.updatedAt),
           body: JSON.stringify({
             clientInstanceId: snapshot.clientInstanceId,
             readUpToSequence: entry.readUpToSequence,
@@ -304,6 +311,10 @@ async function flushOutbox(
         `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/messages`,
         {
           method: "POST",
+          // Replay the persisted creation-context carrier (captured on the main
+          // thread inside a chat.outbox.enqueue span) as a raw traceparent
+          // header, dropped past the 24h cap. No Sentry SDK / minted id here.
+          headers: replayTraceHeaders(entry.traceparent, entry.createdAt),
           body: JSON.stringify({
             clientInstanceId: snapshot.clientInstanceId,
             clientMessageId: entry.clientMessageId,

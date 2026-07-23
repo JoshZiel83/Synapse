@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import * as Sentry from "@sentry/nextjs"
 import type { ChatSocketEvent } from "@synapse/shared"
 import {
   createChatSocket,
@@ -9,6 +8,7 @@ import {
   type ChatSocketSubscription,
   type ChatSocketTraceContext,
 } from "@synapse/shared/chat-socket"
+import { withClientSpan } from "@/lib/client-trace"
 
 export type WebSocketSubscription = ChatSocketSubscription
 
@@ -45,16 +45,21 @@ function resolveWebSocketUrl(configuredUrl?: string) {
 }
 
 /**
- * W3C trace context for outgoing work-starting WS frames (auth/subscribe),
- * read from the active Sentry span/propagation context at frame-send time.
- * `getTraceData` returns `{}` when Sentry is not enabled (no DSN), so frames
- * simply go out unstamped and the server starts a fresh root. tracestate is
- * deliberately not sent: the browser SDK carries its vendor state in
+ * Per-frame W3C trace context for outgoing work-starting WS frames. Opens a
+ * SHORT real client span (`ws.send auth` / `ws.send subscribe`, op `ws.client`)
+ * and stamps ITS span context, so the server parents its per-message span to a
+ * span the SDK actually created and exported — never a fabricated span id (the
+ * old `Sentry.getTraceData` path minted a fresh random parent id per call). No
+ * Sentry client (no DSN) ⇒ nothing is stamped and the server starts a fresh
+ * root. tracestate is never sent: the browser SDK carries vendor state on
  * sentry-trace/baggage, never as W3C tracestate.
  */
-function getWsTraceContext(): ChatSocketTraceContext | undefined {
-  const { traceparent } = Sentry.getTraceData({ propagateTraceparent: true })
-  return traceparent ? { traceparent } : undefined
+function getWsTraceContext(
+  frame: "auth" | "subscribe"
+): ChatSocketTraceContext | undefined {
+  return withClientSpan(`ws.send ${frame}`, "ws.client", (carrier) =>
+    carrier ? { traceparent: carrier } : undefined
+  )
 }
 
 /**

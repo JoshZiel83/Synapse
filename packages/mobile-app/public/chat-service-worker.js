@@ -1506,82 +1506,10 @@
     // 60 minutes
   };
 
-  // src/lib/chat-data.ts
-  function createEmptyChatWorkspaceQueueState(workspaceId) {
-    return {
-      version: 2,
-      workspaceId,
-      inboxCursor: 0,
-      pendingReads: {},
-      outbox: {},
-      tombstones: {}
-    };
-  }
-  function readTimestamp(value) {
-    return typeof value === "string" && isIsoInstant(value) ? value : void 0;
-  }
-  function normalizeTombstones(value) {
-    if (!value || typeof value !== "object") {
-      return {};
-    }
-    return Object.fromEntries(
-      Object.values(value).filter(
-        (entry) => Boolean(
-          entry && typeof entry === "object" && typeof entry.conversationId === "string" && typeof entry.removedSeq === "number"
-        )
-      ).map((entry) => [entry.conversationId, entry])
-    );
-  }
-  function normalizePendingReads(value, validConversationIds) {
-    if (!value || typeof value !== "object") {
-      return {};
-    }
-    return Object.fromEntries(
-      Object.values(value).filter(
-        (entry) => Boolean(
-          entry && typeof entry === "object" && typeof entry.conversationId === "string" && typeof entry.readUpToSequence === "number" && typeof entry.lastVisibleSequence === "number" && typeof entry.updatedAt === "string"
-        )
-      ).filter(
-        (entry) => !validConversationIds || validConversationIds.has(entry.conversationId)
-      ).map((entry) => [entry.conversationId, entry])
-    );
-  }
-  function normalizeOutbox(value, validConversationIds) {
-    if (!value || typeof value !== "object") {
-      return {};
-    }
-    return Object.fromEntries(
-      Object.values(value).filter(
-        (entry) => Boolean(
-          entry && typeof entry === "object" && typeof entry.clientMessageId === "string" && typeof entry.conversationId === "string" && Array.isArray(entry.contentBlocks) && typeof entry.createdAt === "string" && typeof entry.optimisticSequence === "number" && typeof entry.status === "string" && typeof entry.attemptCount === "number"
-        )
-      ).filter(
-        (entry) => !validConversationIds || validConversationIds.has(entry.conversationId)
-      ).map((entry) => [entry.clientMessageId, entry])
-    );
-  }
-  function normalizeChatWorkspaceQueueState(workspaceId, value) {
-    if (!value || typeof value !== "object") {
-      return createEmptyChatWorkspaceQueueState(workspaceId);
-    }
-    const queueState = value;
-    const version = queueState.version ?? 0;
-    const isV1 = version === 1;
-    const isV2 = version === 2;
-    if (!isV1 && !isV2 || queueState.workspaceId !== workspaceId) {
-      return createEmptyChatWorkspaceQueueState(workspaceId);
-    }
-    return {
-      version: 2,
-      workspaceId,
-      workspaceMemberId: typeof queueState.workspaceMemberId === "string" ? queueState.workspaceMemberId : void 0,
-      clientInstanceId: typeof queueState.clientInstanceId === "string" && isUuid(queueState.clientInstanceId) ? queueState.clientInstanceId : void 0,
-      inboxCursor: isV2 && typeof queueState.inboxCursor === "number" && Number.isFinite(queueState.inboxCursor) ? queueState.inboxCursor : 0,
-      lastBootstrappedAt: readTimestamp(queueState.lastBootstrappedAt),
-      pendingReads: normalizePendingReads(queueState.pendingReads),
-      outbox: normalizeOutbox(queueState.outbox),
-      tombstones: isV2 ? normalizeTombstones(queueState.tombstones) : {}
-    };
+  // ../shared/dist/utils/traceparent.js
+  var TRACEPARENT_RE = /^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$/;
+  function isValidTraceparent(value) {
+    return typeof value === "string" && TRACEPARENT_RE.test(value);
   }
 
   // ../shared/dist/chat-queue/index.js
@@ -1592,6 +1520,27 @@
   var CHAT_QUEUE_BROADCAST_CHANNEL = "synapse-chat-queue";
   var CHAT_SERVICE_WORKER_SYNC_TAG = "synapse-chat-sync";
   var CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG = "synapse-chat-periodic-sync";
+  var CHAT_QUEUE_TRACE_CARRIER_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+  function sanitizeQueueEntryCarrier(entry) {
+    if (entry.traceparent !== void 0 && !isValidTraceparent(entry.traceparent)) {
+      const next = { ...entry };
+      delete next.traceparent;
+      return next;
+    }
+    return entry;
+  }
+  function replayTraceHeaders(traceparent, capturedAtIso, nowMs = Date.now()) {
+    if (!isValidTraceparent(traceparent))
+      return {};
+    if (typeof capturedAtIso !== "string")
+      return {};
+    const capturedMs = new Date(capturedAtIso).getTime();
+    if (!Number.isFinite(capturedMs))
+      return {};
+    if (nowMs - capturedMs >= CHAT_QUEUE_TRACE_CARRIER_MAX_AGE_MS)
+      return {};
+    return { traceparent };
+  }
   function sameEntry(left, right) {
     return (0, import_fast_deep_equal.default)(left ?? null, right ?? null);
   }
@@ -1693,6 +1642,86 @@
       }
     }
     return next;
+  }
+
+  // src/lib/chat-data.ts
+  function createEmptyChatWorkspaceQueueState(workspaceId) {
+    return {
+      version: 3,
+      workspaceId,
+      inboxCursor: 0,
+      pendingReads: {},
+      outbox: {},
+      tombstones: {}
+    };
+  }
+  function readTimestamp(value) {
+    return typeof value === "string" && isIsoInstant(value) ? value : void 0;
+  }
+  function normalizeTombstones(value) {
+    if (!value || typeof value !== "object") {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.values(value).filter(
+        (entry) => Boolean(
+          entry && typeof entry === "object" && typeof entry.conversationId === "string" && typeof entry.removedSeq === "number"
+        )
+      ).map((entry) => [entry.conversationId, entry])
+    );
+  }
+  function normalizePendingReads(value, validConversationIds) {
+    if (!value || typeof value !== "object") {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.values(value).filter(
+        (entry) => Boolean(
+          entry && typeof entry === "object" && typeof entry.conversationId === "string" && typeof entry.readUpToSequence === "number" && typeof entry.lastVisibleSequence === "number" && typeof entry.updatedAt === "string"
+        )
+      ).filter(
+        (entry) => !validConversationIds || validConversationIds.has(entry.conversationId)
+      ).map(
+        (entry) => [entry.conversationId, sanitizeQueueEntryCarrier(entry)]
+      )
+    );
+  }
+  function normalizeOutbox(value, validConversationIds) {
+    if (!value || typeof value !== "object") {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.values(value).filter(
+        (entry) => Boolean(
+          entry && typeof entry === "object" && typeof entry.clientMessageId === "string" && typeof entry.conversationId === "string" && Array.isArray(entry.contentBlocks) && typeof entry.createdAt === "string" && typeof entry.optimisticSequence === "number" && typeof entry.status === "string" && typeof entry.attemptCount === "number"
+        )
+      ).filter(
+        (entry) => !validConversationIds || validConversationIds.has(entry.conversationId)
+      ).map(
+        (entry) => [entry.clientMessageId, sanitizeQueueEntryCarrier(entry)]
+      )
+    );
+  }
+  function normalizeChatWorkspaceQueueState(workspaceId, value) {
+    if (!value || typeof value !== "object") {
+      return createEmptyChatWorkspaceQueueState(workspaceId);
+    }
+    const queueState = value;
+    const version = queueState.version ?? 0;
+    if (version !== 3 || queueState.workspaceId !== workspaceId) {
+      return createEmptyChatWorkspaceQueueState(workspaceId);
+    }
+    return {
+      version: 3,
+      workspaceId,
+      workspaceMemberId: typeof queueState.workspaceMemberId === "string" ? queueState.workspaceMemberId : void 0,
+      clientInstanceId: typeof queueState.clientInstanceId === "string" && isUuid(queueState.clientInstanceId) ? queueState.clientInstanceId : void 0,
+      inboxCursor: typeof queueState.inboxCursor === "number" && Number.isFinite(queueState.inboxCursor) ? queueState.inboxCursor : 0,
+      lastBootstrappedAt: readTimestamp(queueState.lastBootstrappedAt),
+      pendingReads: normalizePendingReads(queueState.pendingReads),
+      outbox: normalizeOutbox(queueState.outbox),
+      tombstones: normalizeTombstones(queueState.tombstones)
+    };
   }
 
   // src/lib/chat-web-queue-storage.ts
@@ -1865,6 +1894,9 @@
           `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/read-watermark`,
           {
             method: "POST",
+            // Replay the persisted creation-context carrier as a raw traceparent
+            // header (dropped past the 24h cap). No Sentry SDK / minted id here.
+            headers: replayTraceHeaders(entry.traceparent, entry.updatedAt),
             body: JSON.stringify({
               clientInstanceId: queueState.clientInstanceId,
               readUpToSequence: entry.readUpToSequence,
@@ -1897,6 +1929,9 @@
           `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/messages`,
           {
             method: "POST",
+            // Replay the persisted creation-context carrier as a raw traceparent
+            // header (dropped past the 24h cap). No Sentry SDK / minted id here.
+            headers: replayTraceHeaders(entry.traceparent, entry.createdAt),
             body: JSON.stringify({
               clientInstanceId: queueState.clientInstanceId,
               clientMessageId: entry.clientMessageId,

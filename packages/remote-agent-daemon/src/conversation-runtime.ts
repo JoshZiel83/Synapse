@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs"
 import path from "node:path"
 import { getDriver } from "./drivers/registry.js"
 import { buildAgentChildEnv } from "./drivers/proxy-env.js"
+import { detach } from "./trace-context.js"
 import type {
   AgentSession,
   AgentSessionEvent,
@@ -144,7 +145,14 @@ export class ConversationRuntime {
       childEnvOverlay,
     })
     this.session = session
-    void this.drainEvents(session)
+    // The event loop is SESSION-lifetime (claude keeps one streaming query
+    // alive across turns; codex feeds later prompts through the same process),
+    // so it must carry NO ambient trace carrier — otherwise every later
+    // lifecycle callback would inherit whichever turn's carrier created it
+    // (F4). `detach` launches it under runWithoutCarrier so it is context-free
+    // by construction; each callback re-enters its OWN per-turn carrier via
+    // ConversationTurns.scoped.
+    detach(() => this.drainEvents(session))
   }
 
   private buildStdioBridgeMcpServers() {
@@ -248,11 +256,6 @@ export class ConversationRuntime {
       throw new Error("Cannot respond to permission: session not active")
     }
     await this.session.respondPermission(requestId, decision)
-  }
-
-  async setMcpServers(servers: Parameters<AgentSession["setMcpServers"]>[0]) {
-    if (!this.session) return
-    await this.session.setMcpServers(servers)
   }
 
   async close(reason: string) {

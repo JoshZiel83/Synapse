@@ -9,8 +9,14 @@
 // Console-compatible (variadic) signatures so call sites migrate as a near
 // drop-in rename of console.* -> clientLog.*. Allowlisted in guard-logging.mjs.
 // Redaction out of scope (D3); never log secrets/tokens.
+//
+// Trace ids are captured at EMIT time, never at flush (by the 5s flush the
+// Sentry scope/span has moved on). `trace_id` is the field the ingest
+// RecordSchema already accepts and re-emits as `clientTraceId`; absent when no
+// Sentry client is configured.
 import { getApiAuthToken } from "@/lib/api"
 import { getApiBase } from "@/lib/config"
+import { currentClientTraceId } from "@/lib/client-trace"
 
 type Level = "debug" | "info" | "warn" | "error"
 
@@ -20,6 +26,7 @@ interface ClientLogRecord {
   component?: string
   msg: string
   fields?: Record<string, unknown>
+  trace_id?: string
 }
 
 const MAX_BUFFER = 100
@@ -119,7 +126,15 @@ function emit(
     console[DEV_CONSOLE[level]](`[${tag}]`, ...args)
   }
 
-  buffer.push({ level, domain, component, msg, fields })
+  const traceId = currentClientTraceId()
+  buffer.push({
+    level,
+    domain,
+    component,
+    msg,
+    fields,
+    ...(traceId ? { trace_id: traceId } : {}),
+  })
   if (buffer.length >= MAX_BUFFER) flush()
   else scheduleFlush()
 }

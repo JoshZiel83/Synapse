@@ -835,6 +835,21 @@ export type RemoteAgentApiTaskResolvedMessage = z.infer<
   typeof RemoteAgentApiTaskResolvedMessageSchema
 >
 
+export const RemoteAgentApiDeliveriesCompletedMessageSchema = z.strictObject({
+  type: z.literal("agent:deliveries:completed"),
+  remote_agent_id: z.string().min(1),
+  conversation_id: z.string().min(1),
+  delivery_ids: z.array(z.string().min(1)).min(1),
+  // W3C trace context of the reverse-MCP request that observed completion
+  // (check_messages / read_history → completeRemoteAgentDeliveries), so a
+  // daemon debug log of the reclamation joins that trace. Gated (no bare-string
+  // first-party exemption) — a malformed value degrades to absent.
+  ...wireTraceContextFields,
+})
+export type RemoteAgentApiDeliveriesCompletedMessage = z.infer<
+  typeof RemoteAgentApiDeliveriesCompletedMessageSchema
+>
+
 export const RemoteAgentApiToDaemonWsMessageSchema = z.discriminatedUnion(
   "type",
   [
@@ -846,6 +861,10 @@ export const RemoteAgentApiToDaemonWsMessageSchema = z.discriminatedUnion(
     RemoteAgentApiStopMessageSchema,
     RemoteAgentApiDeliverMessageSchema,
     RemoteAgentApiTaskResolvedMessageSchema,
+    // The completion signal that reclaims the daemon's pending-delivery set (the
+    // functional crash-retry state). NOT an observability signal: it must not
+    // clear the daemon's per-turn carrier snapshot (completion fires mid-turn).
+    RemoteAgentApiDeliveriesCompletedMessageSchema,
   ]
 )
 export type RemoteAgentApiToDaemonWsMessage = z.infer<

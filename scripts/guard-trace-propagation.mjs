@@ -59,6 +59,22 @@
 //     as a bare `z.string().optional()`. Every carrier position runs the gate;
 //     the "trusted first-party producer" exemption was deleted.
 //
+// Client-carrier ratchets (workstream B — client correlation):
+//
+//   client_carrier_fabrication (cross-file) — `getTraceData(` is banned in
+//     first-party client source (packages/web-next, packages/mobile-app/src,
+//     packages/web-next-design). A client carrier's span id MUST come from a
+//     Span the SDK created (withClientSpan / currentClientTraceId in
+//     lib/client-trace); `Sentry.getTraceData()` fabricates a fresh random span
+//     id per call that disagrees with its own sibling sentry-trace (the F10
+//     defect). Comment/JSDoc lines are skipped, so prose mentioning the retired
+//     call is not a violation.
+//
+//   sw_carrier_replay_missing (cross-file) — each service-worker entry file must
+//     call `replayTraceHeaders(...)` at least twice (the outbox POST and the
+//     read-watermark POST), so a future fetch site cannot silently drop the
+//     persisted browser→api parent carrier.
+//
 // Ambient-extraction ratchet (workstream D — F8):
 //
 //   ambient_extract_base (cross-file) — a carrier extraction base must be
@@ -221,6 +237,34 @@ export const rules = [
     pattern: /(?:traceparent|tracestate):\s*z\.string\(\)\.optional\(\)/,
     allow: [],
     hint: "use `...wireTraceContextFields` (device-protocol/shared) or the gated traceparentField/tracestateField (daemon codec) — a bare z.string().optional() trace field is the ungated hop the carrier contract forbids",
+  },
+  {
+    // C (F4): a session-lifetime loop/task must be launched through `detach()`
+    // (trace-context.ts), which runs it under runWithoutCarrier so it is
+    // context-free by construction. A bare `void asyncCall()` detaches under
+    // whatever turn's ALS carrier is active at the launch site, permanently
+    // pinning the loop — and every lifecycle callback it later invokes — to that
+    // first turn's trace (the drainEvents defect). Only trace-context.ts, which
+    // DEFINES detach as `void fn()`, is exempt.
+    id: "daemon_bare_detach",
+    root: "packages/remote-agent-daemon/src",
+    pattern: /\bvoid\s+[\w$.]+\s*\(/,
+    allow: ["packages/remote-agent-daemon/src/trace-context.ts"],
+    hint: "launch it through detach() (trace-context.ts) so a task outliving its turn runs context-free — a bare `void asyncCall()` inherits the launch site's ambient carrier and pins every later callback to it (F4)",
+  },
+  {
+    // C (F4): every ConversationRuntimeCallbacks handler wired in index.ts fires
+    // from the CONTEXT-FREE detached drainEvents loop, so each must re-enter its
+    // OWN per-turn carrier over its whole body — declared `onX: this.turns.scoped(
+    // …)`. A bare handler emits publishStatus / activeWireTraceFields / log / POST
+    // with no per-turn scope (F4). `unlessNextLine` tolerates a formatter break
+    // that pushes `this.turns.scoped(` onto the following line.
+    id: "daemon_callback_turn_scope",
+    only: ["packages/remote-agent-daemon/src/index.ts"],
+    pattern: /^\s*on[A-Z]\w*:\s*/,
+    unless: /this\.turns\.scoped\(/,
+    unlessNextLine: /this\.turns\.scoped\(/,
+    hint: "declare the handler `onX: this.turns.scoped(...)` so its whole body re-enters the turn's carrier (publishStatus + activeWireTraceFields + log + POST) instead of inheriting the drainEvents loop's context (F4)",
   },
 ]
 
@@ -418,6 +462,145 @@ export const crossFileRules = [
       return out
     },
   },
+  {
+    // B: a client trace carrier's span id must come from a Span the SDK created.
+    // Ban the `getTraceData(` call form anywhere in first-party client source —
+    // it fabricates a fresh random span id per call that disagrees with its own
+    // sentry-trace (F10). Comment (`//`) and JSDoc (`*`) lines are skipped so
+    // prose describing the retired call is not flagged.
+    id: "client_carrier_fabrication",
+    hint: "carriers must come from a Span object (withClientSpan/currentClientTraceId in lib/client-trace), never Sentry.getTraceData() whose scope fallback mints a fresh random span id per call (F10). Do not reintroduce the call in first-party client source.",
+    check(ctx) {
+      const out = []
+      const CALL_RE = /\bgetTraceData\s*\(/
+      const ROOTS = [
+        "packages/web-next",
+        "packages/mobile-app/src",
+        "packages/web-next-design",
+      ]
+      for (const root of ROOTS) {
+        for (const abs of ctx.listTsFiles(root)) {
+          let content
+          try {
+            content = readFileSync(abs, "utf8")
+          } catch {
+            continue
+          }
+          content.split("\n").forEach((line, i) => {
+            const trimmed = line.trimStart()
+            if (trimmed.startsWith("//") || trimmed.startsWith("*")) return
+            if (CALL_RE.test(line)) {
+              out.push({
+                file: relative(ctx.repoRoot, abs),
+                line: i + 1,
+                text: line.trim(),
+              })
+            }
+          })
+        }
+      }
+      return out
+    },
+  },
+  {
+    // B: each service-worker entry file replays the persisted creation-context
+    // carrier on BOTH the outbox POST and the read-watermark POST. Require the
+    // call form `replayTraceHeaders(` at least twice per SW so a future fetch
+    // site that forgets it (silently dropping the browser→api parent) fails CI.
+    id: "sw_carrier_replay_missing",
+    hint: "replay the persisted carrier via replayTraceHeaders(entry.traceparent, entry.createdAt|updatedAt) on BOTH the outbox POST and the read-watermark POST of every service-worker entry file (@synapse/shared/chat-queue) — a missing call silently drops the browser→api parent edge.",
+    check(ctx) {
+      const out = []
+      const SW_ENTRIES = [
+        "packages/web-next/lib/workers/web-chat-service-worker.ts",
+        "packages/mobile-app/src/workers/chat-service-worker.ts",
+      ]
+      for (const file of SW_ENTRIES) {
+        const content = ctx.readFile(file)
+        if (content == null) {
+          out.push({ file, text: "service-worker entry file is missing" })
+          continue
+        }
+        const calls = (content.match(/replayTraceHeaders\s*\(/g) ?? []).length
+        if (calls < 2) {
+          out.push({
+            file,
+            text: `replayTraceHeaders called ${calls}× (expected ≥2: outbox + read-watermark)`,
+          })
+        }
+      }
+      return out
+    },
+  },
+  {
+    // C: the api→daemon WS union is declared in TWO places that cannot share a
+    // type — device-protocol's `RemoteAgentApiToDaemonWsMessageSchema` (the api's
+    // serializer target) and the daemon's own strict `server-message-codec.ts`
+    // (the receiver). A frame added to the union but not the codec is DROPPED
+    // silently by the daemon's discriminatedUnion (parse returns null, no error).
+    // Assert every union member's `type` literal has a matching `z.literal(...)`
+    // in the codec. Fails loud if it cannot parse either side.
+    id: "remote_agent_frame_parity",
+    hint: 'add the frame\'s `type: z.literal("…")` case (schema + ServerMessage union + snake→camel mapping) to packages/remote-agent-daemon/src/server-message-codec.ts — an api→daemon frame the daemon codec does not decode is dropped without error (F3/F4 completion-frame class)',
+    check(ctx) {
+      const out = []
+      const SCHEMAS = "packages/device-protocol/src/schemas.ts"
+      const CODEC = "packages/remote-agent-daemon/src/server-message-codec.ts"
+      const schemas = ctx.readFile(SCHEMAS)
+      const codec = ctx.readFile(CODEC)
+      if (schemas == null)
+        return [
+          { file: SCHEMAS, text: "device-protocol schemas file is missing" },
+        ]
+      if (codec == null)
+        return [
+          { file: CODEC, text: "daemon server-message-codec file is missing" },
+        ]
+      // 1. Extract the union's member schema const names (the block between
+      //    `z.discriminatedUnion("type", [` and its closing `]`).
+      const unionMatch = schemas.match(
+        /RemoteAgentApiToDaemonWsMessageSchema\s*=\s*z\.discriminatedUnion\(\s*"type",\s*\[([\s\S]*?)\]\s*\)/
+      )
+      if (!unionMatch)
+        return [
+          {
+            file: SCHEMAS,
+            text: "cannot locate RemoteAgentApiToDaemonWsMessageSchema discriminatedUnion member list",
+          },
+        ]
+      const memberNames = [
+        ...unionMatch[1].matchAll(/^\s*(RemoteAgentApi\w+Schema)\s*,?\s*$/gm),
+      ].map((m) => m[1])
+      if (memberNames.length === 0)
+        return [{ file: SCHEMAS, text: "union member list parsed as empty" }]
+      // 2. Every `z.literal("…")` the daemon codec decodes.
+      const codecLiterals = new Set(
+        [...codec.matchAll(/z\.literal\("([^"]+)"\)/g)].map((m) => m[1])
+      )
+      // 3. Each union member's `type` literal must appear in the codec.
+      for (const name of memberNames) {
+        const dm = schemas.match(
+          new RegExp(
+            `export const ${escapeReg(name)}\\s*=\\s*z\\.(?:strict)?[oO]bject\\(\\{[\\s\\S]*?type:\\s*z\\.literal\\("([^"]+)"\\)`
+          )
+        )
+        if (!dm) {
+          out.push({
+            file: SCHEMAS,
+            text: `cannot extract type literal for union member ${name}`,
+          })
+          continue
+        }
+        if (!codecLiterals.has(dm[1])) {
+          out.push({
+            file: CODEC,
+            text: `api→daemon frame "${dm[1]}" (${name}) has no matching z.literal in the daemon codec — it would be dropped silently`,
+          })
+        }
+      }
+      return out
+    },
+  },
 ]
 
 // ── (c) file assertions ───────────────────────────────────────────────────────
@@ -458,6 +641,37 @@ export const fileAssertions = [
     file: "sidecars/fs-helper/src/telemetry.rs",
     mustContain: /traceparent-vectors\.json/,
     hint: VECTORS_HINT,
+  },
+  // G (Go/Rust helper JSON-RPC span semantics — F9): pin the SERVER-kind shape
+  // and the no-dead-exit / staged-stop invariants structurally, so a later
+  // refactor cannot silently regress the helpers back to the kind-less INTERNAL
+  // spans, the os.Exit span-drop, or the same-tick SIGTERM that this program
+  // removed. Whole-file regexes (any extension — the .ts walker is not involved).
+  {
+    id: "cua_span_server_no_exit",
+    file: "sidecars/cua/cmd/synapse-device-cua-helper/main.go",
+    mustContain: /SpanKindServer/,
+    mustNotContain: /\bos\.Exit\s*\(/,
+    hint: "the cua JSON-RPC span MUST be SERVER kind (oteltrace.SpanKindServer) and the helper must NOT call os.Exit — os.Exit skips the deferred bounded OTLP flush and drops every buffered span (F9a/b)",
+  },
+  {
+    id: "fs_helper_span_server_kind",
+    file: "sidecars/fs-helper/src/telemetry.rs",
+    mustContain: /with_kind\(SpanKind::Server\)/,
+    mustNotContain: /\btracer\.start(?:_with_context)?\s*\(/,
+    hint: "the fs-helper JSON-RPC span MUST be built via span_builder(...).with_kind(SpanKind::Server); the kind-less tracer.start()/tracer.start_with_context() forms produce INTERNAL spans with no way to set kind (F9a)",
+  },
+  {
+    id: "sidecar_stop_staged_flush",
+    file: "packages/device-runtime/src/sidecar.ts",
+    // No `waitForExit` (EOF grace) may sit between stdin?.end() and
+    // kill("SIGTERM"): the tempered quantifier fails the match the moment the
+    // required grace appears, so the staged stop passes and only a same-tick
+    // regression trips. Comment prose mentioning kill("SIGTERM") is not anchored
+    // on stdin?.end(), so it is not flagged.
+    mustNotContain:
+      /stdin\?\.end\(\)(?:(?!waitForExit)[\s\S])*?kill\(\s*["']SIGTERM["']\)/,
+    hint: 'stop() must grant an EOF grace (await waitForExit) BETWEEN stdin?.end() and kill("SIGTERM"): the old same-tick pair meant the helper never observed EOF and the unhandled signal destroyed every buffered span (F9b)',
   },
 ]
 

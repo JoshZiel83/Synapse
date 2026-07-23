@@ -15,7 +15,6 @@
 //     capture_display    -> { png_base64, width, height }
 //     click              -> { ok: true }       (focus-aware in v3)
 //     type_text          -> { ok: true, ... }  (focus-aware in v3)
-//     shutdown           -> { ok: true }; helper exits 0
 //
 //   Focus-aware (new):
 //     list_windows       -> { windows: [...] }
@@ -44,10 +43,13 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	deskact "github.com/PekingSpades/DeskAct"
 	"github.com/PekingSpades/DeskAct/display"
@@ -55,10 +57,12 @@ import (
 	"github.com/PekingSpades/DeskAct/mouse"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
@@ -153,10 +157,16 @@ func writeResponse(w io.Writer, id interface{}, result interface{}, err *rpcErro
 }
 
 // JSON-RPC error code constants. -32602 is "Invalid params" (well-formed but
-// semantically wrong); -32000 is implementation-defined "server error".
+// semantically wrong); -32000 is implementation-defined "server error";
+// -32601 "Method not found" is produced by exactly one site (the dispatcher's
+// default arm) and is the STRUCTURAL signal recordRPCOutcome uses to classify a
+// method as unrecognized (`_OTHER`); -32700 "Parse error" is the malformed-frame
+// response.
 const (
-	codeInvalidParams = -32602
-	codeServerError   = -32000
+	codeInvalidParams  = -32602
+	codeServerError    = -32000
+	codeMethodNotFound = -32601
+	codeParseError     = -32700
 )
 
 // makeError builds an rpcError with a structured `data` block. cuaError is
@@ -938,70 +948,164 @@ func handleCaptureView(raw json.RawMessage) (interface{}, *rpcError) {
 var advertisedMethods = []string{
 	"list_displays", "capture_display", "click", "type_text",
 	"list_windows", "set_focus", "get_focus", "capture_view",
-	"shutdown",
 }
 
-func handle(line []byte, w io.Writer) {
-	var req rpcRequest
-	if err := json.Unmarshal(line, &req); err != nil {
-		writeResponse(w, nil, nil, &rpcError{Code: -32700, Message: "Parse error"})
-		return
-	}
-	// Per-request span continuing the device-injected {traceparent,
-	// tracestate?} carrier (§3c). Validation per the pinned contract below;
-	// a malformed carrier degrades to a root span (the frame is never
-	// rejected for a trace field), and the propagator re-validates as W3C
-	// defense-in-depth.
-	if tracer != nil {
-		ctx := context.Background()
-		if carrier := frameCarrier(req.Traceparent, req.Tracestate); carrier != nil {
-			ctx = propagator.Extract(ctx, carrier)
-		}
-		_, span := tracer.Start(ctx, "cua "+req.Method)
-		defer span.End()
-	}
+// dispatchRPC routes one parsed frame to its handler and RETURNS the outcome
+// (result, *rpcError) instead of writing it — so handle() owns the single
+// writeResponse + single recordRPCOutcome, and a new method physically cannot
+// forget to record its span outcome. The `default` arm is the ONLY producer of
+// codeMethodNotFound in this helper (grep-verified), which is what lets
+// recordRPCOutcome classify `_OTHER` structurally.
+func dispatchRPC(req rpcRequest) (interface{}, *rpcError) {
 	switch req.Method {
 	case "hello":
-		writeResponse(w, req.ID, map[string]interface{}{
+		return map[string]interface{}{
 			"version":            version,
 			"capability":         "cua",
 			"displays_supported": true,
 			"focus_supported":    true,
 			"methods":            advertisedMethods,
-		}, nil)
+		}, nil
 	case "list_displays":
-		result, err := handleListDisplays(req.Params)
-		writeResponse(w, req.ID, result, err)
+		return handleListDisplays(req.Params)
 	case "capture_display":
-		result, err := handleCaptureDisplay(req.Params)
-		writeResponse(w, req.ID, result, err)
+		return handleCaptureDisplay(req.Params)
 	case "click":
-		result, err := handleClick(req.Params)
-		writeResponse(w, req.ID, result, err)
+		return handleClick(req.Params)
 	case "type_text":
-		result, err := handleTypeText(req.Params)
-		writeResponse(w, req.ID, result, err)
+		return handleTypeText(req.Params)
 	case "list_windows":
-		result, err := handleListWindows(req.Params)
-		writeResponse(w, req.ID, result, err)
+		return handleListWindows(req.Params)
 	case "set_focus":
-		result, err := handleSetFocus(req.Params)
-		writeResponse(w, req.ID, result, err)
+		return handleSetFocus(req.Params)
 	case "get_focus":
-		result, err := handleGetFocus(req.Params)
-		writeResponse(w, req.ID, result, err)
+		return handleGetFocus(req.Params)
 	case "capture_view":
-		result, err := handleCaptureView(req.Params)
-		writeResponse(w, req.ID, result, err)
-	case "shutdown":
-		writeResponse(w, req.ID, map[string]interface{}{"ok": true}, nil)
-		os.Exit(0)
+		return handleCaptureView(req.Params)
 	default:
-		writeResponse(w, req.ID, nil, &rpcError{
-			Code:    -32601,
+		return nil, &rpcError{
+			Code:    codeMethodNotFound,
 			Message: "Method not found: " + req.Method,
-		})
+		}
 	}
+}
+
+func handle(line []byte, w io.Writer) {
+	// Parse FIRST, but do NOT return before the span is started — a malformed
+	// frame must still produce a span (previously the -32700 path returned
+	// before any span existed). Carrier extraction runs only on a parsed frame.
+	var req rpcRequest
+	parseErr := json.Unmarshal(line, &req)
+
+	// Per-request SERVER span continuing the device-injected {traceparent,
+	// tracestate?} carrier (§3c). A malformed carrier degrades to a root span
+	// (the frame is never rejected for a trace field); the propagator
+	// re-validates as W3C defense-in-depth. `tracer` is the package-level
+	// delegating otel.Tracer — a no-op provider until setupTracing installs a
+	// real one, so this is always safe to call.
+	ctx := context.Background()
+	if parseErr == nil {
+		if carrier := frameCarrier(req.Traceparent, req.Tracestate); carrier != nil {
+			ctx = propagator.Extract(ctx, carrier)
+		}
+	}
+	_, span := tracer.Start(ctx, "jsonrpc",
+		oteltrace.WithSpanKind(oteltrace.SpanKindServer),
+		oteltrace.WithAttributes(rpcCreateAttrs(req, parseErr)...),
+	)
+	defer span.End()
+
+	if parseErr != nil {
+		perr := &rpcError{Code: codeParseError, Message: "Parse error"}
+		writeResponse(w, nil, nil, perr)
+		recordRPCOutcome(span, "", parseErr, perr)
+		return
+	}
+
+	result, rpcErr := dispatchRPC(req)
+	writeResponse(w, req.ID, result, rpcErr)
+	recordRPCOutcome(span, req.Method, nil, rpcErr)
+}
+
+// rpcCreateAttrs are the JSON-RPC span-creation attributes per the semconv
+// (Go semconv v1.41.0): rpc.system.name=jsonrpc, jsonrpc.protocol.version=2.0,
+// network.transport=pipe, and jsonrpc.request.id ONLY when the parsed frame
+// carries an id (notifications and unparsable frames omit it — a null/absent id
+// is not captured). rpc.method / rpc.method_original are set later by
+// recordRPCOutcome, once the dispatcher has classified the method.
+func rpcCreateAttrs(req rpcRequest, parseErr error) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		semconv.RPCSystemNameJSONRPC,
+		semconv.JSONRPCProtocolVersion("2.0"),
+		semconv.NetworkTransportPipe,
+	}
+	if parseErr == nil {
+		if id, ok := jsonrpcRequestID(req.ID); ok {
+			attrs = append(attrs, semconv.JSONRPCRequestID(id))
+		}
+	}
+	return attrs
+}
+
+// jsonrpcRequestID renders a JSON-RPC id (string or number) for the
+// jsonrpc.request.id attribute, returning ok=false for a notification (no id)
+// so the attribute is OMITTED rather than set to a placeholder. JSON numbers
+// decode to float64 without UseNumber; render integer ids without a trailing
+// ".0" so id 1 shows as "1".
+func jsonrpcRequestID(id interface{}) (string, bool) {
+	switch v := id.(type) {
+	case nil:
+		return "", false
+	case string:
+		return v, true
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64), true
+	case json.Number:
+		return v.String(), true
+	default:
+		return fmt.Sprint(v), true
+	}
+}
+
+// recordRPCOutcome finishes the RPC span's semantic picture after dispatch: it
+// names the span and sets rpc.method for a RECOGNIZED method, or leaves the name
+// as "jsonrpc" and sets rpc.method=_OTHER + rpc.method_original (truncated) for
+// an unrecognized/unparsable one — so a buggy or hostile parent cannot blow up
+// span-name / rpc.method cardinality. On ANY JSON-RPC error object it records
+// rpc.response.status_code + error.type (the decimal code as a string) and an
+// Error status with the JSON-RPC message; every code counts (-32601/-32602/
+// -32700 and the fs-helper family alike — JSON-RPC has no 4xx-stays-Unset
+// leniency). Recognition is STRUCTURAL: the dispatcher's default arm is the sole
+// -32601 producer, so recognized == parsed && not-Method-not-found.
+func recordRPCOutcome(span oteltrace.Span, method string, parseErr error, rpcErr *rpcError) {
+	recognized := parseErr == nil && !(rpcErr != nil && rpcErr.Code == codeMethodNotFound)
+	if recognized {
+		span.SetName(method)
+		span.SetAttributes(semconv.RPCMethod(method))
+	} else {
+		span.SetAttributes(semconv.RPCMethod("_OTHER"))
+		if method != "" {
+			span.SetAttributes(semconv.RPCMethodOriginal(truncateMethod(method)))
+		}
+	}
+	if rpcErr != nil {
+		code := strconv.Itoa(rpcErr.Code)
+		span.SetAttributes(
+			semconv.RPCResponseStatusCode(code),
+			semconv.ErrorTypeKey.String(code),
+		)
+		span.SetStatus(codes.Error, rpcErr.Message)
+	}
+}
+
+// truncateMethod bounds an unrecognized method captured as rpc.method_original,
+// so an unbounded inbound method string can never bloat the attribute.
+func truncateMethod(s string) string {
+	const maxMethodOriginal = 128
+	if len(s) > maxMethodOriginal {
+		return s[:maxMethodOriginal]
+	}
+	return s
 }
 
 // setupLogging configures structured slog output to STDERR only. stdout is the
@@ -1028,7 +1132,11 @@ func setupLogging() {
 	slog.SetDefault(logger)
 }
 
-var tracer oteltrace.Tracer
+// tracer is the package-level delegating tracer: otel.Tracer resolves the
+// global provider dynamically, so it is a no-op until setupTracing installs a
+// real TracerProvider (and picks one up even if it is set later, e.g. by a
+// test) — which is why handle() no longer needs a `tracer != nil` guard.
+var tracer = otel.Tracer("synapse-cua")
 
 var propagator = propagation.TraceContext{}
 
@@ -1065,23 +1173,53 @@ func setupTracing(ctx context.Context) func(context.Context) error {
 	)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagator)
-	tracer = tp.Tracer("synapse-cua")
+	// `tracer` is the delegating otel.Tracer above; setting the global provider
+	// is all it takes for it to start producing real spans.
 	return tp.Shutdown
 }
 
 func main() {
 	setupLogging()
 	shutdownTracing := setupTracing(context.Background())
-	defer func() { _ = shutdownTracing(context.Background()) }()
 	slog.Info("cua sidecar starting", "pid", os.Getpid())
-	scanner := bufio.NewScanner(os.Stdin)
-	// Allow large frames (screenshot payloads etc.).
-	scanner.Buffer(make([]byte, 1024*1024), 32*1024*1024)
-	for scanner.Scan() {
-		handle(scanner.Bytes(), os.Stdout)
+
+	// Stop on stdin EOF (supervisor closed our stdin) OR SIGTERM/SIGINT (the
+	// device-runtime's stop() signals after an EOF grace). Either way control
+	// falls through to a BOUNDED flush of buffered OTLP spans. The old binary
+	// installed NO signal handler, so a SIGTERM'd helper — the path
+	// packages/device-runtime/src/sidecar.ts actually uses — dropped every
+	// buffered span; now signals flush.
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scanner := bufio.NewScanner(os.Stdin)
+		// Allow large frames (screenshot payloads etc.).
+		scanner.Buffer(make([]byte, 1024*1024), 32*1024*1024)
+		for scanner.Scan() {
+			handle(scanner.Bytes(), os.Stdout)
+		}
+		if err := scanner.Err(); err != nil {
+			slog.Error("stdin scanner error", "err", err.Error())
+		}
+	}()
+
+	select {
+	case <-done:
+		slog.Info("cua sidecar stopping (stdin closed)")
+	case <-sigCtx.Done():
+		slog.Info("cua sidecar stopping (signal)")
 	}
-	if err := scanner.Err(); err != nil {
-		slog.Error("stdin scanner error", "err", err.Error())
+
+	// Bounded flush: the 1500 ms ceiling stays strictly inside the supervisor's
+	// SIGKILL window (sidecar.ts stopTermGraceMs=2000 after a 2000 ms EOF grace).
+	// A dead collector fails fast (connection refused), so this is a ceiling,
+	// not a cost.
+	flushCtx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if err := shutdownTracing(flushCtx); err != nil {
+		slog.Warn("otel flush on shutdown incomplete", "err", err.Error())
 	}
-	slog.Info("cua sidecar stopping")
 }

@@ -455,9 +455,42 @@ if (!existsSync(PUBLISH_SCRIPT)) {
   }
 }
 
+// (5) helper binaries are NOT an npm artifact (F9c). The Go cua helper and the
+// Rust fs-helper reach a device via the container image (infrastructure/
+// Dockerfile.api), a repo checkout, or an explicit
+// SYNAPSE_DEVICE_{CUA,FS}_HELPER_PATH — NEVER via `npm i @synapse/device-runtime`.
+// npm cannot pack `../../sidecars/**` above the package root, and both consumers
+// degrade gracefully (cua provider not registered; fs helper-backed features
+// disabled — each now WARNs at startup, see bin.ts). This is a deliberate
+// distribution decision, not a bug: the tracing program (F9) neither created nor
+// worsened it. This check pins that decision so it can't be half-reversed and
+// re-discovered later as a defect — it fails if a helper binary is smuggled into
+// `files[]` (a SILENT no-op, since npm can't pack above the root) or if a
+// `cua`/`fs-helper` key is added to bundles/manifest.json `programs` without the
+// full per-platform archive channel. A deliberate reversal (option ii — per-
+// platform sha256 archives staged into the six device-runtime-bundles-* packages
+// and published via scripts/publish-device-runtime-sidecars.sh) must land that
+// whole channel AND relax this check in the same commit, so the choice is re-made
+// on purpose.
+const HELPER_BINARY_RE = /synapse-device-(cua|fs)-helper/
+for (const f of (main.files ?? []) as string[]) {
+  if (HELPER_BINARY_RE.test(f)) {
+    errors.push(
+      `packages/device-runtime/package.json files[] includes "${f}" (matches a helper binary). npm cannot pack sidecar binaries above the package root, so this is a silent no-op that misrepresents the F9c distribution contract. Helpers ship via the container image, a checkout, or SYNAPSE_DEVICE_{CUA,FS}_HELPER_PATH. To ship them over npm, build the bundles/manifest.json programs channel (per-platform sha256 archives in the six device-runtime-bundles-* packages) and update this check.`
+    )
+  }
+}
+for (const program of Object.keys(manifest.programs ?? {})) {
+  if (program === "cua" || program === "fs-helper") {
+    errors.push(
+      `bundles/manifest.json programs has a "${program}" entry — the Go/Rust helper binaries are NOT a bundles-channel program today (F9c: programs are node/python/git). A manifest row without per-platform sha256 archives staged into every device-runtime-bundles-* package (published via scripts/publish-device-runtime-sidecars.sh) leaves the API proposing a toolchain the device can't resolve. If you intend option (ii), land the full channel and relax this check.`
+    )
+  }
+}
+
 if (errors.length === 0) {
   console.log(
-    `device-runtime sidecar audit passed: ${SIDECAR_PLATFORM_KEYS.length} sidecars pinned to ${expectedVersion}; shared ↔ manifest ↔ archive parity intact (filename + sha256).`
+    `device-runtime sidecar audit passed: ${SIDECAR_PLATFORM_KEYS.length} sidecars pinned to ${expectedVersion}; shared ↔ manifest ↔ archive parity intact (filename + sha256); helper binaries confirmed out of the npm channel (F9c).`
   )
   process.exit(0)
 }

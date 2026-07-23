@@ -10,14 +10,27 @@ datasources:
     access: proxy
     url: http://loki:3100
     jsonData:
-      # Turn the pino `trace_id` field in each log line into a clickable link to
-      # the Tempo trace. Grafana interpolates `$` in provisioning files, so the
-      # value macro MUST be escaped as `$$` (a single `$` would be read as an
-      # empty env var and the link would be dead).
+      # Turn each log line's trace id into a clickable link to the Tempo trace.
+      # Grafana interpolates `$` in provisioning files, so the value macro MUST be
+      # escaped as `$$` (a single `$` would be read as an empty env var and the
+      # link would be dead). Both regexes pin the capture to a canonical 32-hex
+      # trace id so a non-canonical value never yields a dead Tempo link (the two
+      # field names — trace_id vs clientTraceId — are already distinct keys).
       derivedFields:
+        # The server pino mixin's own `trace_id` (the api's authoritative trace).
         - name: trace_id
           matcherType: regex
-          matcherRegex: '"trace_id":"(\w+)"'
+          matcherRegex: '"trace_id":"([0-9a-f]{32})"'
+          url: "$${__value.raw}"
+          datasourceUid: tempo
+        # The client/device-runtime-ASSERTED id, re-emitted by /api/v1/logs under
+        # the namespaced `clientTraceId` (deliberately distinct from the server's
+        # `trace_id` — anti-forgery: a client must not attach to a victim's server
+        # trace). Without this entry the shipped browser + device-runtime
+        # clientTraceId values have no clickable Loki→Tempo link.
+        - name: clientTraceId
+          matcherType: regex
+          matcherRegex: '"clientTraceId":"([0-9a-f]{32})"'
           url: "$${__value.raw}"
           datasourceUid: tempo
 

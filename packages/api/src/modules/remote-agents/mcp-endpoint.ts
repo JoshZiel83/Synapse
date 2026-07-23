@@ -81,6 +81,7 @@ import {
   sanitizeTracestateHeader,
 } from "../../infrastructure/observability/traceparent.js"
 import { linkUpstreamTraces } from "../../workers/job-tracing.js"
+import { registerTurnCarrierCache, TurnCarrierCache } from "./turn-carriers.js"
 import type { TraceCarrier } from "@synapse/shared"
 
 const log = createLogger("remote-agent.mcp")
@@ -89,43 +90,6 @@ const tracer = trace.getTracer("synapse-remote-agent-mcp")
 // PRIVATE propagator instance per the §3c carrier contract (never the global
 // FirstPartyOnlyPropagator composite for manual carriers).
 const carrierPropagator = new W3CTraceContextPropagator()
-
-/**
- * Session-scoped cache of the turn's delivery-origin traceparents (deduped by
- * trace id, FIFO cap 20 — matches the origin_carriers wire cap). Every
- * tools/call span is created with LINKS to the cached origins;
- * check_messages / read_history refresh the cache from the delivery rows they
- * fetch and post-`addLink` the origins discovered mid-handler.
- */
-const TURN_CARRIER_CAP = 20
-export class TurnCarrierCache {
-  private readonly byTraceId = new Map<string, string>()
-
-  /**
-   * Remember valid, previously unseen origin traceparents; returns the NEWLY
-   * added ones (the post-fetch `addLink` set).
-   */
-  addAll(traceparents: Array<string | null | undefined>): string[] {
-    const added: string[] = []
-    for (const traceparent of traceparents) {
-      if (!isValidTraceparent(traceparent)) continue
-      const traceId = traceparent.slice(3, 35)
-      if (this.byTraceId.has(traceId)) continue
-      while (this.byTraceId.size >= TURN_CARRIER_CAP) {
-        const oldest = this.byTraceId.keys().next().value
-        if (oldest === undefined) break
-        this.byTraceId.delete(oldest)
-      }
-      this.byTraceId.set(traceId, traceparent)
-      added.push(traceparent)
-    }
-    return added
-  }
-
-  list(): string[] {
-    return [...this.byTraceId.values()]
-  }
-}
 
 /**
  * Creation-time span links for the turn's delivery-origin traces. Unsampled
@@ -166,7 +130,7 @@ function linkNewDeliveryOrigins(
   turnCarriers: TurnCarrierCache,
   originTraceparents: Array<string | null | undefined>
 ): void {
-  const added = turnCarriers.addAll(originTraceparents)
+  const added = turnCarriers.extend(originTraceparents)
   if (added.length > 0) {
     linkUpstreamTraces(added, "delivery_origin")
   }
@@ -179,6 +143,12 @@ type ActiveTransport = {
   conversationId: string
   /** The session's delivery-origin trace cache (tools/call span links). */
   turnCarriers: TurnCarrierCache
+  /**
+   * Removes turnCarriers from the process-local registry the api's agent:deliver
+   * dispatch uses to `beginTurn`. Called on close/reap so a later dispatch never
+   * opens a turn epoch on a dead session.
+   */
+  unregisterTurnCarrier: () => void
   shutdown: () => Promise<void>
   lastActivityAt: number
 }
@@ -589,9 +559,11 @@ function installUnifiedToolRegistry(
         attributes,
         // Creation-time links to the turn's delivery-origin traces —
         // send_message (and every other tool) joins the traces whose
-        // deliveries fed this turn.
+        // deliveries fed this turn. `originsForToolCall()` marks the epoch
+        // CONSUMED, so the next dispatched wake (`beginTurn`) opens a fresh turn
+        // instead of merging prior turns' origins (F3 reverse-MCP half).
         links: deliveryOriginLinks(
-          spanScope.turnCarriers.list(),
+          spanScope.turnCarriers.originsForToolCall(),
           parentSpanContext?.traceId
         ),
       },
@@ -750,11 +722,21 @@ async function createSessionTransport(params: {
     remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
     turnCarriers,
+    // Register this session's cache so the api's agent:deliver dispatch
+    // (beginTurnForConversation) can open the reverse-MCP turn epoch on it.
+    unregisterTurnCarrier: registerTurnCarrierCache(
+      params.remoteAgentId,
+      params.conversationId,
+      turnCarriers
+    ),
     shutdown: pluginShutdown,
     lastActivityAt: Date.now(),
   }
   transport.onclose = () => {
     if (storedSessionId) transportsBySessionId.delete(storedSessionId)
+    // The single close funnel: reapIdleTransports also flows through here via
+    // transport.close(). Idempotent, so a double-close cannot double-unregister.
+    active.unregisterTurnCarrier()
   }
   await server.connect(transport)
   return active

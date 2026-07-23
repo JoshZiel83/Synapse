@@ -100,8 +100,6 @@ export interface AgentSession {
   readonly sessionId: string | undefined
   /** Send a user-role text prompt into the live session. */
   send(prompt: string, options?: SendPromptOptions): Promise<void>
-  /** Update the MCP server map for the live session. No-op if unsupported. */
-  setMcpServers(servers: Record<string, McpServerConfig>): Promise<void>
   /** Resolve a pending permission / user-input / plan-approval request. */
   respondPermission(
     requestId: string,

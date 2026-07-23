@@ -8,7 +8,11 @@ import {
   saveStoredChatWorkspaceQueueState,
   type MobileChatWorkerAuthContext,
 } from "../lib/chat-web-queue-storage"
-import { flushOutboxQueue, mergeQueueStateForSave } from "@shared/chat-queue"
+import {
+  flushOutboxQueue,
+  mergeQueueStateForSave,
+  replayTraceHeaders,
+} from "@shared/chat-queue"
 import { nowIsoInstant } from "@shared/datetime"
 import {
   CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL,
@@ -168,6 +172,9 @@ async function flushPendingReads(
         `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/read-watermark`,
         {
           method: "POST",
+          // Replay the persisted creation-context carrier as a raw traceparent
+          // header (dropped past the 24h cap). No Sentry SDK / minted id here.
+          headers: replayTraceHeaders(entry.traceparent, entry.updatedAt),
           body: JSON.stringify({
             clientInstanceId: queueState.clientInstanceId,
             readUpToSequence: entry.readUpToSequence,
@@ -207,6 +214,9 @@ async function flushOutbox(
         `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/messages`,
         {
           method: "POST",
+          // Replay the persisted creation-context carrier as a raw traceparent
+          // header (dropped past the 24h cap). No Sentry SDK / minted id here.
+          headers: replayTraceHeaders(entry.traceparent, entry.createdAt),
           body: JSON.stringify({
             clientInstanceId: queueState.clientInstanceId,
             clientMessageId: entry.clientMessageId,

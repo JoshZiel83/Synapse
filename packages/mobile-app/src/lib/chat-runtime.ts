@@ -24,6 +24,7 @@ import {
 } from "@/lib/chat-data"
 import { createChatPersistence } from "@/lib/chat-persistence"
 import { isChatServiceWorkerActive } from "@/lib/chat-web-service-worker"
+import { withClientSpan } from "@/lib/client-trace"
 import {
   clearDeliveredOutbox,
   shouldIncrementUnreadCount,
@@ -597,6 +598,15 @@ export class ChatRuntime {
       )
     )
 
+    // Capture the creation-context carrier for the read-watermark POST the web
+    // SW owns; undefined (no field persisted) when no Sentry client. `updatedAt`
+    // below is the capture time the SW checks against the 24h carrier cap.
+    const readCarrier = withClientSpan(
+      "chat.read.enqueue",
+      "app.chat.enqueue",
+      (carrier) => carrier
+    )
+
     this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) =>
       updateConversationInSnapshot(
         {
@@ -616,6 +626,7 @@ export class ChatRuntime {
                   ?.lastVisibleSequence ?? 0
               ),
               updatedAt: nowIsoInstant(),
+              ...(readCarrier ? { traceparent: readCarrier } : {}),
             },
           },
           metaByConversationId: {
@@ -702,17 +713,27 @@ export class ChatRuntime {
     const optimisticSequence = optimisticSequenceFloor
 
     const clientMessageId = createId("message")
-    const outboxEntry: PendingChatOutboxMessage = {
-      clientMessageId,
-      conversationId,
-      contentBlocks: input.contentBlocks,
-      replyToItemId: input.replyToItemId,
-      replyTo: input.replyTo,
-      createdAt: nowIsoInstant(),
-      optimisticSequence,
-      status: "sending",
-      attemptCount: 0,
-    }
+    // Capture the creation-context carrier inside a short real span so the web
+    // service worker (the sender on Expo web) replays it as a `traceparent`
+    // header. No Sentry client ⇒ carrier undefined, no field persisted.
+    // retryMessage deliberately reuses this (the carrier is the message's
+    // creation context, not the attempt's).
+    const outboxEntry: PendingChatOutboxMessage = withClientSpan(
+      "chat.outbox.enqueue",
+      "app.chat.enqueue",
+      (carrier) => ({
+        clientMessageId,
+        conversationId,
+        contentBlocks: input.contentBlocks,
+        replyToItemId: input.replyToItemId,
+        replyTo: input.replyTo,
+        createdAt: nowIsoInstant(),
+        optimisticSequence,
+        status: "sending",
+        attemptCount: 0,
+        ...(carrier ? { traceparent: carrier } : {}),
+      })
+    )
 
     this.updateSnapshot((snapshotValue) => ({
       ...snapshotValue,

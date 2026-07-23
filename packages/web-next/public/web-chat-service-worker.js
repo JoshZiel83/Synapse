@@ -297,6 +297,12 @@
     }
   }));
 
+  // ../shared/dist/utils/traceparent.js
+  var TRACEPARENT_RE = /^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$/;
+  function isValidTraceparent(value) {
+    return typeof value === "string" && TRACEPARENT_RE.test(value);
+  }
+
   // ../shared/dist/chat-queue/index.js
   var import_fast_deep_equal = __toESM(require_fast_deep_equal(), 1);
   var CHAT_QUEUE_DB_NAME = "synapse-chat-queue";
@@ -305,9 +311,30 @@
   var CHAT_QUEUE_BROADCAST_CHANNEL = "synapse-chat-queue";
   var CHAT_SERVICE_WORKER_SYNC_TAG = "synapse-chat-sync";
   var CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG = "synapse-chat-periodic-sync";
+  var CHAT_QUEUE_TRACE_CARRIER_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+  function sanitizeQueueEntryCarrier(entry) {
+    if (entry.traceparent !== void 0 && !isValidTraceparent(entry.traceparent)) {
+      const next = { ...entry };
+      delete next.traceparent;
+      return next;
+    }
+    return entry;
+  }
+  function replayTraceHeaders(traceparent, capturedAtIso, nowMs = Date.now()) {
+    if (!isValidTraceparent(traceparent))
+      return {};
+    if (typeof capturedAtIso !== "string")
+      return {};
+    const capturedMs = new Date(capturedAtIso).getTime();
+    if (!Number.isFinite(capturedMs))
+      return {};
+    if (nowMs - capturedMs >= CHAT_QUEUE_TRACE_CARRIER_MAX_AGE_MS)
+      return {};
+    return { traceparent };
+  }
   function createEmptyStoredChatQueueState(workspaceId) {
     return {
-      version: 4,
+      version: 5,
       workspaceId,
       inboxCursor: 0,
       pendingReads: {},
@@ -329,20 +356,24 @@
       return createEmptyStoredChatQueueState(workspaceId);
     }
     const version = snapshot.version ?? 0;
-    const isV3 = version === 3;
-    const isV4 = version === 4;
-    if (!isV3 && !isV4) {
+    if (version !== 5) {
       return createEmptyStoredChatQueueState(workspaceId);
     }
-    const pendingReads = snapshot.pendingReads && typeof snapshot.pendingReads === "object" ? Object.fromEntries(Object.entries(snapshot.pendingReads).filter(([conversationId, entry]) => Boolean(conversationId && entry && typeof entry === "object" && typeof entry.conversationId === "string"))) : {};
-    const outbox = snapshot.outbox && typeof snapshot.outbox === "object" ? Object.fromEntries(Object.entries(snapshot.outbox).filter(([, entry]) => Boolean(entry && typeof entry === "object" && typeof entry.clientMessageId === "string" && typeof entry.conversationId === "string"))) : {};
-    const tombstones = isV4 && snapshot.tombstones && typeof snapshot.tombstones === "object" ? Object.fromEntries(Object.entries(snapshot.tombstones).filter(([conversationId, entry]) => Boolean(conversationId && entry && typeof entry === "object" && typeof entry.conversationId === "string" && typeof entry.removedSeq === "number"))) : {};
+    const pendingReads = snapshot.pendingReads && typeof snapshot.pendingReads === "object" ? Object.fromEntries(Object.entries(snapshot.pendingReads).filter(([conversationId, entry]) => Boolean(conversationId && entry && typeof entry === "object" && typeof entry.conversationId === "string")).map(([conversationId, entry]) => [
+      conversationId,
+      sanitizeQueueEntryCarrier(entry)
+    ])) : {};
+    const outbox = snapshot.outbox && typeof snapshot.outbox === "object" ? Object.fromEntries(Object.entries(snapshot.outbox).filter(([, entry]) => Boolean(entry && typeof entry === "object" && typeof entry.clientMessageId === "string" && typeof entry.conversationId === "string")).map(([clientMessageId, entry]) => [
+      clientMessageId,
+      sanitizeQueueEntryCarrier(entry)
+    ])) : {};
+    const tombstones = snapshot.tombstones && typeof snapshot.tombstones === "object" ? Object.fromEntries(Object.entries(snapshot.tombstones).filter(([conversationId, entry]) => Boolean(conversationId && entry && typeof entry === "object" && typeof entry.conversationId === "string" && typeof entry.removedSeq === "number"))) : {};
     return {
-      version: 4,
+      version: 5,
       workspaceId,
       workspaceMemberId: typeof snapshot.workspaceMemberId === "string" ? snapshot.workspaceMemberId : void 0,
       clientInstanceId: isUuidLike(snapshot.clientInstanceId) ? snapshot.clientInstanceId : void 0,
-      inboxCursor: isV4 && typeof snapshot.inboxCursor === "number" && Number.isFinite(snapshot.inboxCursor) ? snapshot.inboxCursor : 0,
+      inboxCursor: typeof snapshot.inboxCursor === "number" && Number.isFinite(snapshot.inboxCursor) ? snapshot.inboxCursor : 0,
       lastBootstrappedAt: typeof snapshot.lastBootstrappedAt === "string" ? snapshot.lastBootstrappedAt : void 0,
       pendingReads,
       outbox,
@@ -677,6 +708,10 @@
           `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/read-watermark`,
           {
             method: "POST",
+            // Replay the persisted creation-context carrier (captured on the main
+            // thread inside a chat.read.enqueue span) as a raw traceparent header,
+            // dropped past the 24h cap. No Sentry SDK / minted id in the worker.
+            headers: replayTraceHeaders(entry.traceparent, entry.updatedAt),
             body: JSON.stringify({
               clientInstanceId: snapshot.clientInstanceId,
               readUpToSequence: entry.readUpToSequence,
@@ -701,6 +736,10 @@
           `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/messages`,
           {
             method: "POST",
+            // Replay the persisted creation-context carrier (captured on the main
+            // thread inside a chat.outbox.enqueue span) as a raw traceparent
+            // header, dropped past the 24h cap. No Sentry SDK / minted id here.
+            headers: replayTraceHeaders(entry.traceparent, entry.createdAt),
             body: JSON.stringify({
               clientInstanceId: snapshot.clientInstanceId,
               clientMessageId: entry.clientMessageId,

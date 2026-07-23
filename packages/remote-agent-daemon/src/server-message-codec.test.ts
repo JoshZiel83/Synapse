@@ -296,3 +296,79 @@ test("parseServerMessage rejects malformed, camelCase, and drifted frames", () =
     null
   )
 })
+
+test("parseServerMessage maps agent:deliveries:completed frames to camelCase", () => {
+  const TP = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+  const completed = parseServerMessage(
+    JSON.stringify({
+      type: "agent:deliveries:completed",
+      remote_agent_id: "agent-1",
+      conversation_id: "conv-1",
+      delivery_ids: ["d1", "d2"],
+      traceparent: TP,
+    })
+  )
+  assert.deepEqual(completed, {
+    type: "agent:deliveries:completed",
+    remoteAgentId: "agent-1",
+    conversationId: "conv-1",
+    deliveryIds: ["d1", "d2"],
+    traceparent: TP,
+    tracestate: undefined,
+  })
+})
+
+test("parseServerMessage rejects malformed agent:deliveries:completed frames but degrades a bad carrier", () => {
+  // Empty delivery_ids ⇒ frame dropped.
+  assert.equal(
+    parseServerMessage(
+      JSON.stringify({
+        type: "agent:deliveries:completed",
+        remote_agent_id: "agent-1",
+        conversation_id: "conv-1",
+        delivery_ids: [],
+      })
+    ),
+    null
+  )
+  // Missing conversation_id ⇒ frame dropped.
+  assert.equal(
+    parseServerMessage(
+      JSON.stringify({
+        type: "agent:deliveries:completed",
+        remote_agent_id: "agent-1",
+        delivery_ids: ["d1"],
+      })
+    ),
+    null
+  )
+  // Unknown extra key ⇒ frame dropped (strictObject).
+  assert.equal(
+    parseServerMessage(
+      JSON.stringify({
+        type: "agent:deliveries:completed",
+        remote_agent_id: "agent-1",
+        conversation_id: "conv-1",
+        delivery_ids: ["d1"],
+        extra: true,
+      })
+    ),
+    null
+  )
+  // A malformed traceparent degrades the FIELD, not the frame.
+  const completed = parseServerMessage(
+    JSON.stringify({
+      type: "agent:deliveries:completed",
+      remote_agent_id: "agent-1",
+      conversation_id: "conv-1",
+      delivery_ids: ["d1"],
+      traceparent: "not-a-traceparent",
+    })
+  )
+  assert.equal(
+    completed?.type === "agent:deliveries:completed"
+      ? completed.traceparent
+      : "unset",
+    undefined
+  )
+})

@@ -53,6 +53,7 @@ import {
   replayResolvedRemoteAgentTasksUseCase,
 } from "./task-resolution-notifier.js"
 import * as repo from "./repo.js"
+import { beginTurnForConversation } from "./turn-carriers.js"
 import {
   parseRemoteAgentMachineMessage,
   serializeRemoteAgentApiToDaemonMessage,
@@ -567,6 +568,39 @@ async function notifyPendingRemoteAgentDeliveries(params: {
         pendingForSend.map((delivery) => delivery.deliveryId),
         now
       )
+      // Open the reverse-MCP turn epoch on any live session of each dispatched
+      // (agent, conversation): a tools/call in the woken turn links THIS wake's
+      // delivery origins, not prior turns' (F3 reverse-MCP half). No-op when no
+      // reverse-MCP session is connected — its first tools/call `extend`s from
+      // the live delivery rows anyway.
+      const wakeByConversation = new Map<
+        string,
+        {
+          remoteAgentId: string
+          conversationId: string
+          traceparents: Array<string | undefined>
+        }
+      >()
+      for (const delivery of pendingForSend) {
+        const key = `${delivery.remoteAgentId}:${delivery.conversationId}`
+        let slice = wakeByConversation.get(key)
+        if (!slice) {
+          slice = {
+            remoteAgentId: delivery.remoteAgentId,
+            conversationId: delivery.conversationId,
+            traceparents: [],
+          }
+          wakeByConversation.set(key, slice)
+        }
+        slice.traceparents.push(delivery.traceparent)
+      }
+      for (const slice of wakeByConversation.values()) {
+        beginTurnForConversation(
+          slice.remoteAgentId,
+          slice.conversationId,
+          slice.traceparents
+        )
+      }
     } else {
       await scheduleDeliveryRetry(
         machineId,
@@ -1379,6 +1413,34 @@ export async function completeRemoteAgentDeliveries(params: {
     machine.machineId,
     rows.map((row) => row.id)
   )
+
+  // Signal the daemon to reclaim its FUNCTIONAL pending-delivery set for these
+  // completions. This is F3's root fix: completion is observed ONLY api-side
+  // (reverse-MCP check_messages / read_history), so without this frame the
+  // daemon never releases a succeeded delivery and its origin_carriers collapse
+  // to the whole conversation's history. Grouped by conversation; the carrier is
+  // the reverse-MCP request that observed completion. A daemon-offline send is a
+  // harmless no-op (sendToMachine returns false) — the retry worker re-notifies
+  // and the daemon's FIFO carrier backstop bounds staleness. The daemon must NOT
+  // clear its per-turn carrier snapshot on receipt (ruling R2): completion fires
+  // mid-turn and the running turn's links survive until its epoch closes.
+  const completedByConversation = new Map<string, string[]>()
+  for (const row of rows) {
+    const ids = completedByConversation.get(row.conversationId) ?? []
+    ids.push(row.id)
+    completedByConversation.set(row.conversationId, ids)
+  }
+  const completionCarrier = activeTraceCarrier()
+  for (const [conversationId, deliveryIds] of completedByConversation) {
+    sendToMachine(machine.machineId, {
+      type: "agent:deliveries:completed",
+      remoteAgentId: params.remoteAgentId,
+      conversationId,
+      deliveryIds,
+      traceparent: completionCarrier?.traceparent,
+      tracestate: completionCarrier?.tracestate,
+    })
+  }
 
   const byConversation = new Map<string, { sequence: number; itemId: string }>()
   for (const row of rows) {

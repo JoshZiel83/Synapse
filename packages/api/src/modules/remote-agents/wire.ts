@@ -111,6 +111,19 @@ export type RemoteAgentApiToDaemonMessage =
       traceparent?: string
       tracestate?: string
     }
+  | {
+      // Reclamation signal for the daemon's FUNCTIONAL pending-delivery set,
+      // emitted from completeRemoteAgentDeliveries once the api observes the
+      // deliveries completing (reverse-MCP check_messages / read_history). NOT
+      // an observability signal — the daemon must not clear its per-turn carrier
+      // snapshot on receipt (completion fires mid-turn). Gated trace fields.
+      type: "agent:deliveries:completed"
+      remoteAgentId: string
+      conversationId: string
+      deliveryIds: string[]
+      traceparent?: string
+      tracestate?: string
+    }
 
 export function parseRemoteAgentMachineMessage(
   raw: unknown
@@ -240,6 +253,15 @@ function toWireApiMessage(
         remote_agent_id: message.remoteAgentId,
         task_id: message.taskId,
         task: message.task,
+        traceparent: message.traceparent,
+        tracestate: message.tracestate,
+      }
+    case "agent:deliveries:completed":
+      return {
+        type: "agent:deliveries:completed",
+        remote_agent_id: message.remoteAgentId,
+        conversation_id: message.conversationId,
+        delivery_ids: message.deliveryIds,
         traceparent: message.traceparent,
         tracestate: message.tracestate,
       }

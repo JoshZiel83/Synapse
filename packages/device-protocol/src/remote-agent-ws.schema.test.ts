@@ -3,8 +3,10 @@ import test from "node:test"
 import {
   RemoteAgentApiAuthErrorMessageSchema,
   RemoteAgentApiConnectedMessageSchema,
+  RemoteAgentApiDeliveriesCompletedMessageSchema,
   RemoteAgentApiStartMessageSchema,
   RemoteAgentApiTaskResolvedMessageSchema,
+  RemoteAgentApiToDaemonWsMessageSchema,
   RemoteAgentDaemonToApiWsMessageSchema,
   RemoteAgentMachineReadyMessageSchema,
   RemoteAgentStatusMessageSchema,
@@ -179,4 +181,69 @@ test("RemoteAgentApiTaskResolvedMessageSchema rejects camelCase task resolved fi
       task: { id: "task-1" },
     })
   )
+})
+
+test("RemoteAgentApiDeliveriesCompletedMessageSchema round-trips a well-formed frame with a gated carrier", () => {
+  const parsed = RemoteAgentApiDeliveriesCompletedMessageSchema.parse({
+    type: "agent:deliveries:completed",
+    remote_agent_id: "agent-1",
+    conversation_id: "conv-1",
+    delivery_ids: ["d1", "d2"],
+    traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    tracestate: "othervendor=xyz",
+  })
+  assert.deepEqual(parsed.delivery_ids, ["d1", "d2"])
+  assert.equal(
+    parsed.traceparent,
+    "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+  )
+  // Part of the api→daemon discriminated union.
+  const viaUnion = RemoteAgentApiToDaemonWsMessageSchema.parse({
+    type: "agent:deliveries:completed",
+    remote_agent_id: "agent-1",
+    conversation_id: "conv-1",
+    delivery_ids: ["d1"],
+  })
+  assert.equal(viaUnion.type, "agent:deliveries:completed")
+})
+
+test("RemoteAgentApiDeliveriesCompletedMessageSchema rejects malformed frames", () => {
+  // Missing conversation_id.
+  assert.throws(() =>
+    RemoteAgentApiDeliveriesCompletedMessageSchema.parse({
+      type: "agent:deliveries:completed",
+      remote_agent_id: "agent-1",
+      delivery_ids: ["d1"],
+    })
+  )
+  // Empty delivery_ids.
+  assert.throws(() =>
+    RemoteAgentApiDeliveriesCompletedMessageSchema.parse({
+      type: "agent:deliveries:completed",
+      remote_agent_id: "agent-1",
+      conversation_id: "conv-1",
+      delivery_ids: [],
+    })
+  )
+  // Unknown extra key (strictObject).
+  assert.throws(() =>
+    RemoteAgentApiDeliveriesCompletedMessageSchema.parse({
+      type: "agent:deliveries:completed",
+      remote_agent_id: "agent-1",
+      conversation_id: "conv-1",
+      delivery_ids: ["d1"],
+      extra: true,
+    })
+  )
+})
+
+test("RemoteAgentApiDeliveriesCompletedMessageSchema degrades a malformed carrier to absent", () => {
+  const parsed = RemoteAgentApiDeliveriesCompletedMessageSchema.parse({
+    type: "agent:deliveries:completed",
+    remote_agent_id: "agent-1",
+    conversation_id: "conv-1",
+    delivery_ids: ["d1"],
+    traceparent: "not-a-traceparent",
+  })
+  assert.equal(parsed.traceparent, undefined)
 })

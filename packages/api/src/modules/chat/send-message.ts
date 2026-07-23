@@ -2,6 +2,7 @@ import {
   type ChatConversationItem,
   type ChatConversationSendMessageRequest,
 } from "@synapse/shared"
+import { trace } from "@opentelemetry/api"
 import type { Executor } from "../../infrastructure/database/kysely.js"
 import { enqueueActorWakeupsForConversationMessage } from "./actor-wakeup.js"
 import { ensureClientInstance } from "./client-instances.js"
@@ -74,6 +75,16 @@ export async function sendChatConversationMessageUseCase(
   params: SendChatConversationMessageInput,
   deps: SendChatConversationMessageDeps
 ): Promise<ChatConversationSendMessageRecord> {
+  // The join key that keeps a send correlatable even when the client's replayed
+  // trace carrier is deliberately dropped (>24h stale) and this span roots a
+  // fresh trace. Stamped on the ambient http SERVER span (the api's remote
+  // parent when a fresh carrier IS present, or the root when it is not).
+  if (params.clientMessageId) {
+    trace
+      .getActiveSpan()
+      ?.setAttribute("synapse.chat.client_message_id", params.clientMessageId)
+  }
+
   const contentBlocks = params.contentBlocks
   if (!Array.isArray(contentBlocks) || contentBlocks.length === 0) {
     throw createChatError(

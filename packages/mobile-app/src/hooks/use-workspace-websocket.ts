@@ -2,7 +2,7 @@ import { useEffect, useRef, type MutableRefObject } from "react"
 
 import { getWebSocketUrl } from "@/lib/config"
 import { useSession } from "@/providers/session-provider"
-import { getActiveSpan, spanIsSampled, spanToJSON } from "@sentry/react-native"
+import { withClientSpan } from "@/lib/client-trace"
 import type { ChatSocketEvent } from "@shared"
 import {
   createChatSocket,
@@ -59,22 +59,20 @@ function dispatchConnected() {
 }
 
 /**
- * W3C trace context for outgoing work-starting WS frames (auth/subscribe),
- * built from the active Sentry span at frame-send time. The RN SDK does not
- * re-export `getTraceData`, so the traceparent is assembled from
- * `getActiveSpan()` + `spanToJSON()` + `spanIsSampled()` (spec form
- * `00-<traceId>-<spanId>-<01|00>`). No active span (including Sentry
- * uninitialized — DSN unset) ⇒ undefined ⇒ the frame goes out unstamped and
- * the server starts a fresh root.
+ * Per-frame W3C trace context for outgoing work-starting WS frames. Opens a
+ * SHORT real client span (`ws.send auth` / `ws.send subscribe`, op `ws.client`)
+ * via the shared `withClientSpan` helper and stamps ITS span context, so each
+ * reconnect/late-`onopen` frame parents to a span the SDK actually created —
+ * never the old hand-assembled carrier that went unstamped whenever no idle span
+ * was active. No Sentry client ⇒ nothing is stamped and the server starts a
+ * fresh root.
  */
-function getWsTraceContext(): ChatSocketTraceContext | undefined {
-  const span = getActiveSpan()
-  if (!span) return undefined
-  const { trace_id: traceId, span_id: spanId } = spanToJSON(span)
-  if (!traceId || !spanId) return undefined
-  return {
-    traceparent: `00-${traceId}-${spanId}-${spanIsSampled(span) ? "01" : "00"}`,
-  }
+function getWsTraceContext(
+  frame: "auth" | "subscribe"
+): ChatSocketTraceContext | undefined {
+  return withClientSpan(`ws.send ${frame}`, "ws.client", (carrier) =>
+    carrier ? { traceparent: carrier } : undefined
+  )
 }
 
 let sharedHandle: ChatSocketHandle | null = null

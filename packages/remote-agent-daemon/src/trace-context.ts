@@ -129,6 +129,22 @@ export function runWithoutCarrier<T>(fn: () => T): T {
   return store.run(NO_CARRIER, fn)
 }
 
+/**
+ * Launch a long-lived / detached task that OUTLIVES its creating turn, made
+ * context-free by construction: it runs under {@link runWithoutCarrier} so it
+ * can never pin itself to whichever turn's carrier happened to be active at the
+ * launch site (the drainEvents defect — F4). The task drives many turns over
+ * its lifetime, so re-entering the CURRENT turn's carrier inside it is the
+ * caller's job (see ConversationTurns.scoped, which wraps each lifecycle
+ * callback in its own per-turn carrier). Fire-and-forget: the returned promise
+ * is intentionally not awaited here (the loop is the caller's lifetime).
+ */
+export function detach(fn: () => Promise<unknown>): void {
+  runWithoutCarrier(() => {
+    void fn()
+  })
+}
+
 /** The active turn's W3C trace carrier, if any. */
 export function getCarrier(): TraceCarrier | undefined {
   const value = store.getStore()
