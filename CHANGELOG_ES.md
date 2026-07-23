@@ -22,58 +22,30 @@ proyecto procura seguir el [Versionado Semántico](https://semver.org/lang/es/sp
 
 ## [Unreleased]
 
-Correcciones de la ronda 2 sobre la exactitud del trazado distribuido (commits `defdece3`,
-`f6c456b5`, `cd615060`, `79ddc845`). Cambian contratos de wire, de cola y de telemetría, y
-requieren un **redespliegue coordinado**: el procedimiento exacto (orden de compilación
-obligatorio, `--force-recreate` y una lista de verificación posterior al recreate) es el
-runbook de despliegue en
-[`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No
-cambió ningún esquema de base de datos, así que esta versión no necesita `db:rebuild`.
+## [0.27.0] - 2026-07-23
 
-### Breaking (cambios incompatibles)
+Correcciones de exactitud de la ronda 2 del trazado distribuido (commits `defdece3`, `f6c456b5`, `cd615060`, `79ddc845`), además de un endurecimiento del borde público. Cambian contratos de wire, de cola y de telemetría, y requieren un **redespliegue coordinado**: el procedimiento exacto (orden de compilación obligatorio, `--force-recreate` y una lista de verificación posterior al recreate) es el runbook de despliegue en [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No cambió ningún esquema de base de datos, así que esta versión no necesita `db:rebuild`.
 
-- **Aumento de versión del estado de la cola del outbox de chat (móvil).** El estado de la
-  cola almacenada del outbox de chat sin conexión se subió a una nueva versión como ruptura
-  limpia. Los mensajes que una compilación anterior dejó en cola pero sin enviar se
-  descartan al actualizar; la app móvil reconstruye su outbox en la primera carga. Ningún
-  mensaje ya enviado ni ningún dato del servidor se ve afectado.
-- **Protocolo wire del daemon de agentes remotos.** Se reestructuró el cuerpo de la trama
-  `fail-deliveries` y se añadió una nueva trama `agent:deliveries:completed` (ambas llevan
-  ahora los `wireTraceContextFields` firmados, no cadenas sueltas). Un daemon compilado
-  antes de este cambio recibe `400` para esas tramas hasta que se recompile y republique
-  (`deploy.md` §5b); las entregas afectadas quedan pendientes y vuelven a notificar, por lo
-  que no se pierden datos. Se eliminó `AgentSession.setMcpServers` de la interfaz del
-  driver.
-- **Spans por hook de `@fastify/otel` eliminados; el propagador de salida falla cerrado; se
-  corrige la precedencia del nombre de servicio de OTel (api).** `@fastify/otel` se
-  actualizó a 0.20.1 con `instrumentHooks:false`, de modo que cada solicitud produce ahora
-  un único span SERVER y desaparecen los 8 spans de hooks de ciclo de vida por solicitud —
-  cualquier panel o alerta que consulte `fastify.type=hook` pierde esos datos. El
-  propagador de salida de primera parte ahora falla cerrado incondicionalmente: ya no emite
-  a terceros un `traceparent` no muestreado con flags `00` (ni un `tracestate` de proveedor
-  heredado). `OTEL_SERVICE_NAME` y `OTEL_RESOURCE_ATTRIBUTES` ahora sí anulan el nombre de
-  servicio interno (antes la precedencia estaba invertida) — un despliegue que dependía del
-  comportamiento anterior verá cambiar el nombre de servicio reportado. (Que Sentry quede
-  por defecto solo en errores reduce el volumen de spans, pero eso en sí no es un cambio
-  incompatible.)
-- **Límite y gramática de `tracestate` entrante endurecidos.** `MAX_TRACESTATE_LENGTH` se
-  redujo de 1024 a 512 (el valor que `@opentelemetry/core` 2.8.0 realmente impone) y la
-  gramática de claves de `tracestate` se amplió al superconjunto Nivel 2 de W3C
-  trace-context. Un `tracestate` entrante de más de 512 caracteres o con más de 32 miembros
-  ahora se descarta por completo, en lugar de recuperarse parcialmente en silencio.
+### Cambiado
 
-### Added (añadido)
+- **Cambio incompatible:** el estado de cola almacenado del outbox de chat sin conexión se subió de versión como ruptura limpia **tanto en web como en móvil** (snapshot móvil v2→v3; `StoredChatQueueState` compartido v4→v5, incluido el service worker). Los mensajes que una compilación anterior dejó en cola pero sin enviar se descartan al actualizar; los clientes reconstruyen el outbox en la primera carga. Los mensajes ya enviados y los datos del lado del servidor no se ven afectados.
+- Wire del daemon de agentes remotos: un nuevo frame `agent:deliveries:completed` (api→daemon) libera el conjunto de entregas pendientes del daemon, y los campos de traza de los frames del daemon pasan ahora por el gate `wireTraceContextFields` (validados por schema; un valor malformado se trata como ausente). Un daemon compilado antes de este cambio ignora en silencio el frame nuevo hasta que se recompile y republique (`deploy.md` §5b): las entregas afectadas quedan pendientes y vuelven a notificar, así que no se pierde nada. Se eliminó `AgentSession.setMcpServers` de la interfaz del driver, y un guard de CI exige ahora la paridad de frames entre api y daemon. (La reestructuración del cuerpo de `fail-deliveries` se publicó en la v0.26.0.)
+- `@fastify/otel` 0.20.1 con `instrumentHooks:false`: cada solicitud produce ahora un único span SERVER y desaparecen los spans de hooks de ciclo de vida por solicitud — cualquier panel o alerta que consulte `fastify.type=hook` pierde esos datos. El propagador de salida de primera parte ahora falla cerrado incondicionalmente (no emite a terceros ni un `traceparent` con flags `00` ni un `tracestate` de proveedor heredado), y `OTEL_SERVICE_NAME`/`OTEL_RESOURCE_ATTRIBUTES` ahora sí anulan el nombre de servicio interno (la precedencia anterior estaba invertida).
+- Se endureció el manejo del `tracestate` entrante: `MAX_TRACESTATE_LENGTH` se redujo de 1024 a 512 (el valor que `@opentelemetry/core` 2.8.0 realmente impone), con la gramática de claves ampliada al superconjunto del Nivel 2 de W3C; un encabezado de más de 512 caracteres, con más de 32 miembros, claves duplicadas, valores demasiado largos o miembros malformados ahora se descarta por completo, en lugar de recuperarse parcialmente.
+- El parcheo de dependencias pasó de `patch-package` a un aplicador de primera parte, `scripts/apply-patches.mjs` (postinstall y los Dockerfiles de api/web/mobile-web); un device runtime instalado vía npm no incluye los binarios auxiliares de Go/Rust y ahora se degrada de forma controlada con una advertencia al arrancar.
 
-- **Limitación de tasa en el borde público y marcador de ingreso Ring-0.** Limitación
-  generosa en las dos plantillas públicas de nginx — `limit_req` en `/api/` y `limit_conn`
-  en `/ws` (`429`, no `503`; una carga de página normal de ~30 solicitudes nunca lo
-  dispara), IPv6 con clave por `/64` en el borde TLS (njs) o por dirección en el perfil
-  http. También el marcador Ring-0 infalsificable `x-synapse-trace-ingress`, un
-  `SYNAPSE_TRACE_SAMPLING_SALT` opcional para el muestreador de proporción con clave, y
-  límites explícitos de Tempo `overrides.defaults`. Los umbrales y perillas están
-  documentados en
-  [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §6
-  (límites de tasa) y §1 (variables de entorno). No es un cambio incompatible.
+### Añadido
+
+- Limitación de tasa en el borde público en las dos plantillas públicas de nginx — `limit_req` en `/api/` y `/ws` más `limit_conn` en `/ws` (`429`, no `503`; una carga de página normal nunca lo dispara), IPv6 con clave por `/64` en el borde TLS (njs). También el marcador Ring-0 infalsificable `x-synapse-trace-ingress`, un `SYNAPSE_TRACE_SAMPLING_SALT` opcional para el muestreador de proporción con clave, límites explícitos de Tempo `overrides.defaults`, y una advertencia al arrancar cuando `SYNAPSE_SERVER_TIMING_TRACE=on` coexiste con un muestreador de proporción. Umbrales y parámetros: [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §6 y §1.
+- Correlación de trazas del lado del cliente en web y móvil: los carriers provienen ahora de spans reales del SDK (se eliminaron los ids de span fabricados), con spans de cliente breves alrededor de los frames de auth/subscribe de WebSocket.
+- El cua-helper de Go y el fs-helper de Rust emiten spans SERVER por RPC con atributos semconv de JSON-RPC.
+- Vida útil de los trace-carriers acotada al turn tanto en la api (`TurnCarrierCache`) como en el daemon (turn-epoch), lo que corrige la atribución de spans del reverse-MCP; un nuevo conmutador triestado `OTEL_TRACES_EXPORTER` (sin definir/`otlp`/`none`) y normalización de `OTEL_TRACES_SAMPLER` sin distinguir mayúsculas de minúsculas; nuevos helpers de tracestate en `@synapse/shared` (`sanitizeTracestateHeader`, `isValidTracestateHeader`, constantes de gramática) — todo ello aditivo.
+- Este registro de cambios retroactivo y trilingüe (English, 简体中文, Español), que reconstruye el historial de versiones v0.1.0–v0.26.2 con 50 tags anotados.
+- CI: por primera vez hay un gate para los tests en otros lenguajes (`go test` para el sidecar cua, `cargo test` para el fs-helper), y el guard de propagación de trazas incorpora reglas de paridad de frames y de alcance por turn.
+
+### Corregido
+
+- Caché de carriers del fan-in del daemon: al alcanzar el tope de 20 entradas, la deduplicación ahora expulsa el carrier más antiguo en lugar de descartar el más nuevo — antes, el carrier de origen del turn actual podía ser justamente el descartado.
 
 ## [0.26.2] - 2026-07-17
 
@@ -602,7 +574,8 @@ Un runtime autoalojado y centrado en la conversación para compañeros de equipo
 - **Memoria** — memoria semántica híbrida in-process, particionada en cinco ámbitos (workspace_shared, conversation_shared, actor_private, participant_private, user_private) y siete categorías de item, que combina recuperación léxica (FTS + trigram) y vectorial mediante un modelo `multilingual-e5-small` de transformers.js empaquetado (VECTOR(384), HNSW cosine) que genera embeddings localmente sin sidecar externo, más ejecuciones de recall registradas.
 - **Despliegue autoalojado** — una disposición de host único en Ubuntu: nginx como punto de entrada público, systemd para la API y la web de escritorio (`packages/web-next`), PostgreSQL dockerizado (pgvector/pg16) y Redis 7, una imagen de API ejecutada con tsx, y un perfil de Compose `production` para la pila completa en contenedores; incluye una app móvil Expo, junto con README y CHANGELOG en inglés, 简体中文 y Español.
 
-[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.26.2...HEAD
+[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/zai-org/Synapse/compare/v0.26.2...v0.27.0
 [0.26.2]: https://github.com/zai-org/Synapse/compare/v0.26.1...v0.26.2
 [0.26.1]: https://github.com/zai-org/Synapse/compare/v0.26.0...v0.26.1
 [0.26.0]: https://github.com/zai-org/Synapse/compare/v0.25.5...v0.26.0

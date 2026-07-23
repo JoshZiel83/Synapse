@@ -20,54 +20,30 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
-Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `cd615060`,
-`79ddc845`). They change wire, queue, and telemetry contracts and require a **coordinated
-redeploy** — the exact procedure (hard build order, `--force-recreate`, and a
-post-recreate verification checklist) is the rollout runbook in
-[`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No
-database schema changed, so this release needs no `db:rebuild`.
+## [0.27.0] - 2026-07-23
 
-### Breaking
+Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `cd615060`, `79ddc845`) plus public-edge hardening. They change wire, queue, and telemetry contracts and require a **coordinated redeploy** — the exact procedure (hard build order, `--force-recreate`, and a post-recreate verification checklist) is the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No database schema changed, so this release needs no `db:rebuild`.
 
-- **Chat outbox queue-state version bump (mobile).** The offline chat outbox's stored
-  queue state was bumped to a new version as a clean break. Any messages left
-  queued-but-unsent by a previous build are dropped on upgrade; the mobile app
-  re-bootstraps its outbox on first load. No already-sent message and no server-side data
-  is affected.
-- **Remote-agent daemon wire protocol.** The `fail-deliveries` frame body was reshaped and
-  a new `agent:deliveries:completed` frame was added (both now carry the signed
-  `wireTraceContextFields`, not bare strings). A daemon built before this change receives
-  `400` for those frames until it is rebuilt and republished (`deploy.md` §5b); affected
-  deliveries stay pending and re-notify, so no data is lost. `AgentSession.setMcpServers`
-  was removed from the driver interface.
-- **`@fastify/otel` per-hook spans removed; egress propagator fails closed; OTel
-  service-name precedence corrected (api).** `@fastify/otel` was upgraded to 0.20.1 with
-  `instrumentHooks:false`, so each request now produces a single SERVER span and the 8
-  per-request lifecycle-hook spans are gone — any dashboard or alert querying
-  `fastify.type=hook` loses that data. The first-party egress propagator now fails closed
-  unconditionally: it no longer emits an unsampled flags-`00` `traceparent` (nor an
-  inherited vendor `tracestate`) to third parties. `OTEL_SERVICE_NAME` and
-  `OTEL_RESOURCE_ATTRIBUTES` now correctly override the built-in service name (the previous
-  precedence was inverted) — a deployment that relied on the old behavior will see its
-  reported service name change. (Sentry defaulting to errors-only drops span volume but is
-  not itself breaking.)
-- **Inbound `tracestate` cap and grammar tightened.** `MAX_TRACESTATE_LENGTH` was
-  reconciled down from 1024 to 512 (the value `@opentelemetry/core` 2.8.0 actually
-  enforces) and the `tracestate` key grammar was widened to the W3C trace-context Level-2
-  superset. An inbound `tracestate` longer than 512 characters or with more than 32 members
-  is now dropped as a whole rather than silently partial-salvaged.
+### Changed
+
+- **Breaking:** the offline chat outbox's stored queue state was version-bumped as a clean break on **both web and mobile** (mobile snapshot v2→v3; shared `StoredChatQueueState` v4→v5, including the service worker). Messages left queued-but-unsent by a previous build are dropped on upgrade; clients rebuild the outbox on first load. Already-sent messages and server-side data are unaffected.
+- Remote-agent daemon wire: a new `agent:deliveries:completed` frame (api→daemon) reclaims the daemon's pending-delivery set, and daemon-frame trace fields are gated `wireTraceContextFields` (schema-validated; malformed values degrade to absent). A daemon built before this change silently ignores the new frame until it is rebuilt and republished (`deploy.md` §5b) — affected deliveries stay pending and re-notify, so nothing is lost. `AgentSession.setMcpServers` was removed from the driver interface, and a CI guard now enforces api↔daemon frame parity. (The `fail-deliveries` body reshape shipped in v0.26.0.)
+- `@fastify/otel` 0.20.1 with `instrumentHooks:false`: each request now produces a single SERVER span and the per-request lifecycle-hook spans are gone — dashboards or alerts querying `fastify.type=hook` lose that data. The first-party egress propagator now fails closed unconditionally (no flags-`00` `traceparent` nor inherited vendor `tracestate` to third parties), and `OTEL_SERVICE_NAME`/`OTEL_RESOURCE_ATTRIBUTES` now correctly override the built-in service name (the previous precedence was inverted).
+- Inbound `tracestate` handling tightened: `MAX_TRACESTATE_LENGTH` reconciled down from 1024 to 512 (the value `@opentelemetry/core` 2.8.0 enforces), with the key grammar widened to the W3C Level-2 superset; a header longer than 512 characters, with more than 32 members, duplicate keys, over-long values, or malformed members is now dropped as a whole rather than partially salvaged.
+- Dependency patching moved from `patch-package` to a first-party `scripts/apply-patches.mjs` applier (postinstall and the api/web/mobile-web Dockerfiles); an npm-installed device runtime ships without the Go/Rust helper binaries and now degrades gracefully with a startup warning.
 
 ### Added
 
-- **Public-edge rate limiting and Ring-0 ingress marker.** Generous rate limiting on the
-  two public nginx templates — `limit_req` on `/api/` and `limit_conn` on `/ws` (`429` not
-  `503`; a normal ~30-request page load never trips it), IPv6 keyed per `/64` on the TLS
-  edge (njs) or per-address on the http profile. Also the unspoofable
-  `x-synapse-trace-ingress` Ring-0 marker, an optional `SYNAPSE_TRACE_SAMPLING_SALT` for
-  the keyed ratio sampler, and explicit Tempo `overrides.defaults` bounds. Thresholds and
-  knobs are documented in
-  [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §6
-  (rate limits) and §1 (environment variables). Not a breaking change.
+- Public-edge rate limiting on the two public nginx templates — `limit_req` on `/api/` and `/ws` plus `limit_conn` on `/ws` (`429`, not `503`; a normal page load never trips it), IPv6 keyed per `/64` at the TLS edge (njs). Also the unspoofable `x-synapse-trace-ingress` Ring-0 marker, an optional `SYNAPSE_TRACE_SAMPLING_SALT` for the keyed ratio sampler, explicit Tempo `overrides.defaults` bounds, and a startup warning when `SYNAPSE_SERVER_TIMING_TRACE=on` coexists with a ratio sampler. Thresholds and knobs: [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §6 and §1.
+- Client-side trace correlation on web and mobile: carriers now come from real SDK spans (fabricated span ids eliminated), with short client spans around WebSocket auth/subscribe frames.
+- The Go cua-helper and the Rust fs-helper emit per-RPC SERVER spans with JSON-RPC semconv attributes.
+- Turn-scoped trace-carrier lifetimes on both the api (`TurnCarrierCache`) and the daemon (turn-epoch), fixing reverse-MCP span attribution; a new `OTEL_TRACES_EXPORTER` tri-state switch (unset/`otlp`/`none`) and case-insensitive `OTEL_TRACES_SAMPLER` normalization; new `@synapse/shared` tracestate helpers (`sanitizeTracestateHeader`, `isValidTracestateHeader`, grammar constants) — all additive.
+- This retroactive trilingual changelog (English, 简体中文, Español), reconstructing the release history v0.1.0–v0.26.2 with 50 annotated tags.
+- CI: cross-language tests are gated for the first time (`go test` for the cua sidecar, `cargo test` for fs-helper), and the trace-propagation guard gained frame-parity and turn-scope rules.
+
+### Fixed
+
+- Daemon fan-in carrier cache: at the 20-entry cap, dedupe now evicts the oldest carrier instead of dropping the newest — previously the current turn's origin carrier could be the one discarded.
 
 ## [0.26.2] - 2026-07-17
 
@@ -596,7 +572,8 @@ A self-hosted, conversation-centric runtime for digital teammates, where the con
 - **Memory** — in-process hybrid semantic memory partitioned into five scopes (workspace_shared, conversation_shared, actor_private, participant_private, user_private) across seven item categories, combining lexical (FTS + trigram) and vector recall via a bundled transformers.js `multilingual-e5-small` model (VECTOR(384), HNSW cosine) that embeds locally with no external sidecar, plus recorded recall runs.
 - **Self-hosted deployment** — a single Ubuntu host layout: nginx public entrypoint, systemd for the API and desktop web (`packages/web-next`), Dockerized PostgreSQL (pgvector/pg16) and Redis 7, a tsx-run API image, and a `production` Compose profile for the full containerized stack; ships an Expo mobile app and README/CHANGELOG locales in English, 简体中文, and Español.
 
-[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.26.2...HEAD
+[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/zai-org/Synapse/compare/v0.26.2...v0.27.0
 [0.26.2]: https://github.com/zai-org/Synapse/compare/v0.26.1...v0.26.2
 [0.26.1]: https://github.com/zai-org/Synapse/compare/v0.26.0...v0.26.1
 [0.26.0]: https://github.com/zai-org/Synapse/compare/v0.25.5...v0.26.0

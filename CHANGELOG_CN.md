@@ -18,44 +18,30 @@
 
 ## [Unreleased]
 
-分布式追踪 round-2 正确性修复（提交 `defdece3`、`f6c456b5`、`cd615060`、`79ddc845`）。
-它们改变了 wire、队列与遥测契约，需要一次**协同重新部署**——精确步骤（硬构建顺序、
-`--force-recreate`、以及落地后核对清单）见
-[`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的
-Rollout 运行手册。本次无数据库 schema 变更，故无需 `db:rebuild`。
+## [0.27.0] - 2026-07-23
 
-### Breaking（破坏性）
+分布式追踪 round-2 正确性修复（提交 `defdece3`、`f6c456b5`、`cd615060`、`79ddc845`），外加公网边缘加固。它们改变了 wire、队列与遥测契约，需要一次**协同重新部署**——精确步骤（硬构建顺序、`--force-recreate`、以及重建容器后的核对清单）见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的 rollout 运行手册。本次无数据库 schema 变更，故无需 `db:rebuild`。
 
-- **聊天发件箱队列状态版本升级（移动端）。** 离线聊天发件箱存储的队列状态作为干净断裂
-  升到新版本。旧版本中处于「已排队但未发送」的消息在升级时被丢弃；移动端在首次加载时重建
-  发件箱。已发送的消息与任何服务端数据都不受影响。
-- **remote-agent 守护进程 wire 协议。** `fail-deliveries` 帧体被重塑，并新增
-  `agent:deliveries:completed` 帧（二者现在携带带签名的 `wireTraceContextFields`，而非裸
-  字符串）。此改动之前构建的 daemon 对这些帧会收到 `400`，直到重新构建并发布
-  （`deploy.md` §5b）；受影响的投递保持 pending 并重新通知，因此不丢数据。
-  `AgentSession.setMcpServers` 已从驱动接口移除。
-- **`@fastify/otel` 逐 hook span 移除；出站传播器 fail-closed；OTel service-name 优先级修正
-  （api）。** `@fastify/otel` 升级到 0.20.1 并设 `instrumentHooks:false`，于是每个请求现在
-  只产生一个 SERVER span，每请求 8 个生命周期 hook span 消失——任何按 `fastify.type=hook`
-  查询的仪表盘或告警会失去这部分数据。第一方出站传播器现在无条件 fail-closed：不再向第三方
-  发出未采样的 flags-`00` `traceparent`（也不再发出继承而来的厂商 `tracestate`）。
-  `OTEL_SERVICE_NAME` 与 `OTEL_RESOURCE_ATTRIBUTES` 现在能正确覆盖内置的 service name（此前
-  优先级是反的）——依赖旧行为的部署会看到其上报的 service name 改变。（Sentry 默认仅
-  errors 会降低 span 量，但这本身不是破坏性变更。）
-- **入站 `tracestate` 上限与文法收紧。** `MAX_TRACESTATE_LENGTH` 从 1024 下调到 512
-  （`@opentelemetry/core` 2.8.0 实际强制的值），并把 `tracestate` 键文法放宽到 W3C
-  trace-context Level-2 超集。入站 `tracestate` 超过 512 字符或超过 32 个成员时，现在整体
-  丢弃，而不再静默地部分抢救。
+### 变更
 
-### Added（新增）
+- **破坏性变更：** 离线聊天发件箱存储的队列状态在 **Web 与移动端两侧**作为干净断裂升到了新版本（移动端快照 v2→v3；共享 `StoredChatQueueState` v4→v5，含 service worker）。旧构建遗留的「已排队但未发送」消息在升级时被丢弃；客户端在首次加载时重建发件箱。已发送的消息与服务端数据均不受影响。
+- Remote-agent daemon 的 wire 协议：新增 `agent:deliveries:completed` 帧（api→daemon）用于回收 daemon 的待投递集合，daemon 帧上的 trace 字段统一门控在 `wireTraceContextFields` 之下（经 schema 校验；畸形值按缺失处理）。此改动之前构建的 daemon 会静默忽略新帧，直到重新构建并发布（`deploy.md` §5b）——受影响的投递保持 pending 并重新通知，因此不丢数据。`AgentSession.setMcpServers` 已从驱动接口移除，并新增一条 CI guard 强制 api↔daemon 两侧帧对齐。（`fail-deliveries` 帧体重塑已随 v0.26.0 发布。）
+- `@fastify/otel` 升级到 0.20.1 并设 `instrumentHooks:false`：每个请求现在只产生一个 SERVER span，逐请求的生命周期 hook span 消失——按 `fastify.type=hook` 查询的仪表盘或告警会失去这部分数据。第一方出站传播器现在无条件 fail-closed（不再向第三方发出 flags-`00` 的 `traceparent`，也不再发出继承而来的厂商 `tracestate`）；`OTEL_SERVICE_NAME`/`OTEL_RESOURCE_ATTRIBUTES` 现在能正确覆盖内置的 service name（此前优先级是反的）。
+- 收紧入站 `tracestate` 处理：`MAX_TRACESTATE_LENGTH` 从 1024 下调到 512（对齐 `@opentelemetry/core` 2.8.0 实际强制的值），键文法则放宽到 W3C Level-2 超集；头部超过 512 字符、成员多于 32 个、键重复、值超长或成员畸形时，现在整体丢弃，而不再部分抢救。
+- 依赖打补丁从 `patch-package` 迁移到第一方的 `scripts/apply-patches.mjs` 应用器（postinstall 及 api/web/mobile-web 的 Dockerfile）；通过 npm 安装的设备运行时不含 Go/Rust helper 二进制，现在会优雅降级并在启动时给出警告。
 
-- **公网边缘限流与 Ring-0 ingress marker。** 在两个 public nginx 模板上做宽松限流——`/api/`
-  上 `limit_req`、`/ws` 上 `limit_conn`（返回 `429` 而非 `503`；一次正常约 30 请求的页面
-  加载绝不触发），IPv6 在 TLS 边缘按 `/64`（njs）、在 http profile 按整地址 key。另含不可
-  伪造的 `x-synapse-trace-ingress` Ring-0 marker、给 keyed ratio 采样器用的可选
-  `SYNAPSE_TRACE_SAMPLING_SALT`，以及显式的 Tempo `overrides.defaults` 兜底上限。阈值与旋钮
-  见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md)
-  §6（限流）与 §1（环境变量）。非破坏性变更。
+### 新增
+
+- 公网边缘限流，作用于两个 public nginx 模板——`/api/` 与 `/ws` 上 `limit_req`，`/ws` 上另加 `limit_conn`（返回 `429` 而非 `503`；一次正常的页面加载绝不触发），IPv6 在 TLS 边缘按 `/64` 取 key（njs）。另含不可伪造的 `x-synapse-trace-ingress` Ring-0 marker、供 keyed ratio 采样器使用的可选 `SYNAPSE_TRACE_SAMPLING_SALT`、显式的 Tempo `overrides.defaults` 上限，以及 `SYNAPSE_SERVER_TIMING_TRACE=on` 与 ratio 采样器并存时的启动警告。阈值与旋钮见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §6 与 §1。
+- Web 与移动端的客户端 trace 关联：carrier 现在来自真实的 SDK span（不再伪造 span id），并在 WebSocket 认证/订阅帧前后加上短小的客户端 span。
+- Go cua-helper 与 Rust fs-helper 逐 RPC 发出 SERVER span，带 JSON-RPC semconv 属性。
+- trace carrier 的生命周期改为以 turn 为作用域，api（`TurnCarrierCache`）与 daemon（turn-epoch）两侧皆然，修复了 reverse-MCP 的 span 归属；新增 `OTEL_TRACES_EXPORTER` 三态开关（未设置/`otlp`/`none`）与对 `OTEL_TRACES_SAMPLER` 不区分大小写的归一化；`@synapse/shared` 新增 tracestate 辅助函数（`sanitizeTracestateHeader`、`isValidTracestateHeader` 及文法常量）——均为纯增量。
+- 本追溯性三语更新日志（English、简体中文、Español），以 50 个附注 tag 重建 v0.1.0–v0.26.2 的发布历史。
+- CI：跨语言测试首次纳入门控（cua sidecar 的 `go test`、fs-helper 的 `cargo test`），trace 传播 guard 新增帧对齐与 turn 作用域规则。
+
+### 修复
+
+- Daemon fan-in 的 carrier 缓存：达到 20 条上限时，去重改为淘汰最旧的 carrier，而不是丢弃最新的——此前当前 turn 的 origin carrier 可能恰好是被丢弃的那一个。
 
 ## [0.26.2] - 2026-07-17
 
@@ -584,7 +570,8 @@ Rollout 运行手册。本次无数据库 schema 变更，故无需 `db:rebuild`
 - **Memory** — 进程内的混合语义记忆，划分为五个 scope（workspace_shared、conversation_shared、actor_private、participant_private、user_private），横跨七个 item 分类，结合词法(FTS + trigram)与向量召回——经由一个内置的 transformers.js `multilingual-e5-small` 模型（VECTOR(384)、HNSW cosine）在本地做 embedding、无需外部 sidecar，并留存每次召回的运行记录。
 - **自托管部署** — 一套单台 Ubuntu 宿主机的部署布局：nginx 公网入口、面向 API 与桌面 web（`packages/web-next`）的 systemd、容器化的 PostgreSQL（pgvector/pg16）与 Redis 7、一个以 tsx 运行的 API 镜像，以及一个用于整套容器化栈的 `production` Compose profile；并随附一个 Expo 移动端 app，以及 English、简体中文、Español 三种语言的 README/CHANGELOG。
 
-[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.26.2...HEAD
+[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/zai-org/Synapse/compare/v0.26.2...v0.27.0
 [0.26.2]: https://github.com/zai-org/Synapse/compare/v0.26.1...v0.26.2
 [0.26.1]: https://github.com/zai-org/Synapse/compare/v0.26.0...v0.26.1
 [0.26.0]: https://github.com/zai-org/Synapse/compare/v0.25.5...v0.26.0
