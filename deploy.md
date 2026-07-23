@@ -298,6 +298,31 @@ docker compose --profile production --profile tls up -d --force-recreate nginx
 docker compose --profile production --profile http up -d --force-recreate nginx-http
 ```
 
+### 7.1 Coordinated multi-image rebuild (web + nginx, or a whole release)
+
+> **Build order is load-bearing.** The TLS `nginx` image does `FROM ${WEB_IMAGE}` and
+> `COPY --from=web .../.next/static`, baking web's chunks into the nginx image. Rebuilding
+> `web` **without** rebuilding `nginx` serves new HTML against nginx's stale baked chunks —
+> every chunk 404s. `nginx`'s `WEB_IMAGE` build arg reads the freshly built web image
+> **tag**, not a compose build dependency, so compose does not guarantee web builds first.
+> Build them as **separate, ordered** invocations; do not lean on a single
+> `up -d --build web nginx` (it may build them in parallel). The `nginx` single-file
+> template + `ratelimit.js` bind mounts also need a **`--force-recreate`** (not reload/
+> restart) to take effect — a plain edit swaps the inode and the container keeps serving
+> the deleted one.
+
+The trace-correctness round-2 rollout (commits `defdece3`, `f6c456b5`, `cd615060`,
+`79ddc845`) is exactly this shape and has an exact runnable procedure — build order
+`web → nginx → mobile-web → api`, per-image `--no-deps --force-recreate`, and a
+post-recreate verification checklist (edge strip trio + `x-synapse-trace-ingress` marker +
+`limit_req`/`limit_conn`; a real 4xx SERVER span UNSET not ERROR; forged trace headers
+stripped; a rate-limit smoke) — in
+[`docs/logging-refactor/04-operations.md`](docs/logging-refactor/04-operations.md) §7. The
+api rebuild is what applies the in-image `@fastify/otel` patch (§8b prerequisite pattern);
+after it, republish the remote-agent daemon (§5b) so paired daemons pick up the new wire
+frames (un-upgraded daemons get `400` until republished, deliveries stay pending — no data
+loss). See the breaking-change list in `CHANGELOG.md`.
+
 ## 8. Verification
 
 Check containers:
