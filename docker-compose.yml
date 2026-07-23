@@ -253,7 +253,18 @@ services:
       # trace;desc=00-<trace-id>-<span-id>-<flags>). off | errors (default,
       # 5xx only) | on.
       SYNAPSE_SERVER_TIMING_TRACE: ${SYNAPSE_SERVER_TIMING_TRACE:-errors}
+      # OPTIONAL secret keying the ratio sampler (ingress-trust.ts). Only used
+      # when a ratio-class OTEL_TRACES_SAMPLER is set; unset ⇒ fresh random salt
+      # per process. Needed only for a MULTI-REPLICA api behind one public origin
+      # (so a browser trace landing on another replica gets the same answer). NOT
+      # given to the Python sidecars — they run stock spec ParentBased samplers
+      # that honor the api's decision via flags and never re-decide.
+      SYNAPSE_TRACE_SAMPLING_SALT: ${SYNAPSE_TRACE_SAMPLING_SALT:-}
     ports:
+      # Ring-0 invariant: the api's HTTP port MUST stay bound to loopback. The
+      # ABSENCE of nginx's forced `x-synapse-trace-ingress` header is what tells
+      # the sampler a request did NOT traverse the public edge (ingress-trust.ts);
+      # publishing 3001 on a public interface would make that statement false.
       - "127.0.0.1:3001:3001"
     extra_hosts:
       # Lets the API reach an AI base URL served on the host (set a model item's
@@ -913,6 +924,11 @@ services:
       LETSENCRYPT_CERT_NAME: ${LETSENCRYPT_CERT_NAME:?LETSENCRYPT_CERT_NAME is required. Run ./setup.sh first.}
     volumes:
       - ./infrastructure/nginx/public.conf.template:/etc/nginx/templates/default.conf.template:ro
+      # Ring-0 rate-limit client key: njs computes the IPv6 /64 (js_set
+      # $synapse_client_key). Bind-mounted (not baked) so it rides the same
+      # force-recreate as the template — no image rebuild needed. The http
+      # profile (stock nginx:alpine, below) has no njs and keys per-address.
+      - ./infrastructure/nginx/ratelimit.js:/etc/nginx/ratelimit.js:ro
       - certbot_etc:/etc/letsencrypt:ro
       - certbot_www:/var/www/certbot:ro
     depends_on:

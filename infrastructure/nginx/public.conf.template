@@ -3,6 +3,34 @@ map $http_upgrade $connection_upgrade {
     '' close;
 }
 
+# ─── Public rate limiting (Ring 0) — docs/logging-refactor/04-operations.md ──
+# Bounds unauthenticated flood on the two api-facing public locations. The
+# thresholds are GENEROUS: a normal page load or chat session never reaches
+# them; only abnormal volume is shaped. Static assets, `/`, `/_next/*`, ACME and
+# the registry vhost are deliberately NOT limited (that is what keeps the
+# "normal users never notice" promise).
+#
+# Client key ($synapse_client_key): IPv4 by full address; IPv6 collapsed to the
+# /64 its whole allocation lives in, so one /64 is one client instead of 2^64
+# free identities. The /64 is computed from the address STRUCTURE by njs
+# (ratelimit.js) so it handles compressed forms (::1, fe80::1, 2001:db8::1) that
+# a textual regex silently gets wrong — adjudication-2 R4. njs is already loaded
+# here for the CDT deltas (cdt.js). The http-profile edge (public-http.conf.
+# template, stock nginx without njs) keys per-address instead — see that file.
+js_import synapse_ratelimit from /etc/nginx/ratelimit.js;
+js_set $synapse_client_key synapse_ratelimit.clientKey;
+limit_req_zone  $synapse_client_key zone=synapse_api_req:10m rate=50r/s;
+limit_req_zone  $synapse_client_key zone=synapse_ws_req:10m  rate=10r/s;
+limit_conn_zone $synapse_client_key zone=synapse_ws_conn:10m;
+# 429, not the nginx default 503: the condition is per-client volume and a client
+# that can read the status can back off; 503 is indistinguishable from a backend
+# outage. warn, not the default error: these lines are the tuning signal, and the
+# image symlinks error.log to /dev/stderr (so `docker logs synapse-nginx`).
+limit_req_status 429;
+limit_conn_status 429;
+limit_req_log_level warn;
+limit_conn_log_level warn;
+
 # ─── Edge-owned compression (Next sets compress:false) ──────────────────────
 # brotli + zstd on-the-fly for proxied DYNAMIC responses (SSR HTML, RSC, API),
 # *_static for precompressed /_next/static, gzip as the universal fallback.
@@ -132,6 +160,12 @@ server {
     proxy_set_header tracestate "";
     proxy_set_header baggage "";
     proxy_set_header sentry-trace "";
+    # Ring-0 ingress marker — nginx OWNS this header. proxy_set_header REPLACES
+    # any client-supplied copy (single or repeated, probe-proven), so its
+    # presence upstream means exactly "arrived through the public edge". The api
+    # selects its span attribute synapse.trace.ingress=public from it. It grants
+    # NOTHING: never an authn/authz/rate-limit-exemption input, never echoed.
+    proxy_set_header x-synapse-trace-ingress "public";
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
@@ -144,6 +178,9 @@ server {
 
     location /api/ {
         set $api_upstream api;
+        # 200 requests instantly, then 50/s sustained, per client (zone at the
+        # top of this file). nodelay: a burst passes or 429s, never queued.
+        limit_req zone=synapse_api_req burst=200 nodelay;
         proxy_pass http://$api_upstream:3001;
         proxy_read_timeout 120s;
         proxy_send_timeout 120s;
@@ -151,14 +188,23 @@ server {
 
     location /ws {
         set $api_upstream api;
+        # Upgrades are cheap to bound — one request per connection.
+        limit_req zone=synapse_ws_req burst=50 nodelay;
+        # CONCURRENT sessions per client: a WS connection holds its slot for the
+        # whole connection lifetime (hours), so this counts sessions, not
+        # traffic. 128 covers many tabs plus several daemons behind one NAT; a
+        # large corporate/carrier-grade NAT is the case that needs it raised.
+        limit_conn synapse_ws_conn 128;
         proxy_pass http://$api_upstream:3001;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        # Ring-0 strip re-declared: this location's own proxy_set_header
-        # kills server-level inheritance (traceparent still passes).
+        # Ring-0 strip + ingress marker re-declared: this location's own
+        # proxy_set_header kills server-level inheritance (traceparent still
+        # passes; the marker still OVERRIDES any client copy).
         proxy_set_header tracestate "";
         proxy_set_header baggage "";
         proxy_set_header sentry-trace "";
+        proxy_set_header x-synapse-trace-ingress "public";
         proxy_read_timeout 86400s;
     }
 
@@ -206,11 +252,13 @@ server {
         proxy_pass http://$web_upstream:3000;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        # Ring-0 strip re-declared: this location's own proxy_set_header
-        # kills server-level inheritance (traceparent still passes).
+        # Ring-0 strip + ingress marker re-declared: this location's own
+        # proxy_set_header kills server-level inheritance (traceparent still
+        # passes; the marker still OVERRIDES any client copy).
         proxy_set_header tracestate "";
         proxy_set_header baggage "";
         proxy_set_header sentry-trace "";
+        proxy_set_header x-synapse-trace-ingress "public";
         proxy_buffering off;
         proxy_read_timeout 86400s;
     }
@@ -220,11 +268,13 @@ server {
         proxy_pass http://$web_upstream:3000;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        # Ring-0 strip re-declared: this location's own proxy_set_header
-        # kills server-level inheritance (traceparent still passes).
+        # Ring-0 strip + ingress marker re-declared: this location's own
+        # proxy_set_header kills server-level inheritance (traceparent still
+        # passes; the marker still OVERRIDES any client copy).
         proxy_set_header tracestate "";
         proxy_set_header baggage "";
         proxy_set_header sentry-trace "";
+        proxy_set_header x-synapse-trace-ingress "public";
         proxy_buffering off;
         proxy_read_timeout 86400s;
         # Advertise the compression dictionary so browsers idle-fetch it (CDT).
@@ -289,6 +339,12 @@ server {
     proxy_set_header tracestate "";
     proxy_set_header baggage "";
     proxy_set_header sentry-trace "";
+    # Ring-0 ingress marker — nginx OWNS this header. proxy_set_header REPLACES
+    # any client-supplied copy (single or repeated, probe-proven), so its
+    # presence upstream means exactly "arrived through the public edge". The api
+    # selects its span attribute synapse.trace.ingress=public from it. It grants
+    # NOTHING: never an authn/authz/rate-limit-exemption input, never echoed.
+    proxy_set_header x-synapse-trace-ingress "public";
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
@@ -301,6 +357,9 @@ server {
 
     location /api/ {
         set $api_upstream api;
+        # 200 requests instantly, then 50/s sustained, per client (zone at the
+        # top of this file). nodelay: a burst passes or 429s, never queued.
+        limit_req zone=synapse_api_req burst=200 nodelay;
         proxy_pass http://$api_upstream:3001;
         proxy_read_timeout 120s;
         proxy_send_timeout 120s;
@@ -308,14 +367,23 @@ server {
 
     location /ws {
         set $api_upstream api;
+        # Upgrades are cheap to bound — one request per connection.
+        limit_req zone=synapse_ws_req burst=50 nodelay;
+        # CONCURRENT sessions per client: a WS connection holds its slot for the
+        # whole connection lifetime (hours), so this counts sessions, not
+        # traffic. 128 covers many tabs plus several daemons behind one NAT; a
+        # large corporate/carrier-grade NAT is the case that needs it raised.
+        limit_conn synapse_ws_conn 128;
         proxy_pass http://$api_upstream:3001;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        # Ring-0 strip re-declared: this location's own proxy_set_header
-        # kills server-level inheritance (traceparent still passes).
+        # Ring-0 strip + ingress marker re-declared: this location's own
+        # proxy_set_header kills server-level inheritance (traceparent still
+        # passes; the marker still OVERRIDES any client copy).
         proxy_set_header tracestate "";
         proxy_set_header baggage "";
         proxy_set_header sentry-trace "";
+        proxy_set_header x-synapse-trace-ingress "public";
         proxy_read_timeout 86400s;
     }
 
@@ -378,6 +446,12 @@ server {
     proxy_set_header tracestate "";
     proxy_set_header baggage "";
     proxy_set_header sentry-trace "";
+    # Ring-0 ingress marker — nginx OWNS this header. proxy_set_header REPLACES
+    # any client-supplied copy (single or repeated, probe-proven), so its
+    # presence upstream means exactly "arrived through the public edge". The api
+    # selects its span attribute synapse.trace.ingress=public from it. It grants
+    # NOTHING: never an authn/authz/rate-limit-exemption input, never echoed.
+    proxy_set_header x-synapse-trace-ingress "public";
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
@@ -392,11 +466,13 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # Ring-0 strip re-declared: this location's own proxy_set_header
-        # kills server-level inheritance (traceparent still passes).
+        # Ring-0 strip + ingress marker re-declared: this location's own
+        # proxy_set_header kills server-level inheritance (traceparent still
+        # passes; the marker still OVERRIDES any client copy).
         proxy_set_header tracestate "";
         proxy_set_header baggage "";
         proxy_set_header sentry-trace "";
+        proxy_set_header x-synapse-trace-ingress "public";
         proxy_read_timeout 300s;
         proxy_send_timeout 300s;
         proxy_request_buffering off;

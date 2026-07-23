@@ -1,19 +1,38 @@
 // P-A7 (sampler remote-arm matrix) — §3a of
-// docs/trace-correctness-remediation-plan-2026-07-12.md (adjudication 1 as
-// amended by A2). Drives the REAL buildSamplerFromEnvVars() (imported from
-// instrumentation.ts, loaded inert under OTEL_SDK_DISABLED) across the six
+// docs/trace-correctness-remediation-plan-2026-07-12.md (adjudication 1 / A2,
+// amended by round-2 A3). Drives the REAL buildSamplerFromEnvVars() (imported
+// from instrumentation.ts, loaded inert under OTEL_SDK_DISABLED) across the six
 // spec values + malformed inputs, asserting the hardened remote-parent arms:
 // operator intent wins over any inbound sampled flag, in BOTH directions, and
-// ratio-class roots bind BOTH remote arms to the SAME deterministic ratio
-// instance. Also pins the SDK's per-trace-id ratio determinism (an
-// implementation property the SDK spec never fixed — §3a requires the pin).
+// ratio-class roots bind BOTH remote arms to the SAME deterministic instance.
+//
+// Round-2 A3 additions (R3 — ONE ratio function per process): when a ratio-class
+// sampler is configured, the KEYED accumulator (KeyedTraceIdRatioSampler: salted
+// HMAC of the trace id) is the ratio for the root arm AND both remote arms,
+// replacing the SDK's public XOR fold — so the structural id
+// `deadbeefdeadbeefcafebabecafebabe` (which the stock fold records at every
+// nonzero ratio) is NOT recorded, for a marked OR unmarked parent alike (the
+// marker does NOT change the sampling math). The unspoofable ingress marker's
+// only effect is the span attribute synapse.trace.ingress=public, stamped by
+// IngressTaggingSampler on public-edge ENTRY spans in EVERY config (incl. the
+// AlwaysOn default) and surviving SentryWrappedSampler.
 // Run: npx tsx scripts/trace-probes/p-a7-sampler-matrix.ts
 import { check, finish } from "./_shared.js"
 
 process.env.OTEL_SDK_DISABLED = "true"
 process.env.SENTRY_DSN = ""
-const { buildSamplerFromEnvVars, normalizeTracesSamplerEnv } =
-  await import("../../src/instrumentation.js")
+// Fixed salt so keyed decisions are reproducible across rebuilds within this run
+// (unset would mint a fresh random salt per buildSamplerFromEnvVars() call).
+process.env.SYNAPSE_TRACE_SAMPLING_SALT = "p-a7-fixed-probe-salt"
+const {
+  buildSamplerFromEnvVars,
+  normalizeTracesSamplerEnv,
+  SentryWrappedSampler,
+} = await import("../../src/instrumentation.js")
+import {
+  ATTR_TRACE_INGRESS,
+  markPublicIngress,
+} from "../../src/infrastructure/observability/ingress-trust.js"
 
 import {
   ROOT_CONTEXT,
@@ -22,7 +41,13 @@ import {
   trace,
   type Context,
 } from "@opentelemetry/api"
-import { SamplingDecision, type Sampler } from "@opentelemetry/sdk-trace-base"
+import {
+  SamplingDecision,
+  TraceIdRatioBasedSampler,
+  type Sampler,
+} from "@opentelemetry/sdk-trace-base"
+
+const STRUCTURAL_ID = "deadbeefdeadbeefcafebabecafebabe" // XOR fold = 0
 
 function randomTraceId(): string {
   let id = ""
@@ -41,11 +66,25 @@ function remoteParentCtx(traceId: string, sampled: boolean): Context {
   })
 }
 
+/** A remote parent that arrived through the public edge (nginx-marked). */
+function publicIngressRemoteParentCtx(
+  traceId: string,
+  sampled: boolean
+): Context {
+  return markPublicIngress(remoteParentCtx(traceId, sampled))
+}
+
 function decide(sampler: Sampler, ctx: Context, traceId: string): boolean {
   return (
     sampler.shouldSample(ctx, traceId, "probe", SpanKind.INTERNAL, {}, [])
       .decision === SamplingDecision.RECORD_AND_SAMPLED
   )
+}
+
+/** The synapse.trace.ingress attribute the sampler stamped (or undefined). */
+function ingressAttr(sampler: Sampler, ctx: Context, traceId: string): unknown {
+  return sampler.shouldSample(ctx, traceId, "probe", SpanKind.SERVER, {}, [])
+    .attributes?.[ATTR_TRACE_INGRESS]
 }
 
 function build(name: string | undefined, arg?: string): Sampler {
@@ -210,10 +249,12 @@ for (const badArg of ["abc", "-0.2", "1.5", "NaN"]) {
     const fromNormalizedEnv = buildSamplerFromEnvVars() // reads the written-back value
     process.env.OTEL_TRACES_SAMPLER = normalized
     const fromLower = buildSamplerFromEnvVars()
+    // Every build is IngressTaggingSampler-wrapped, so compare toString() (which
+    // embeds the inner sampler composition) rather than the always-equal class.
     check(
-      `normalize "${raw}": sampler class matches the lowercase spelling (${fromLower.constructor.name})`,
-      fromNormalizedEnv.constructor.name === fromLower.constructor.name,
-      `${fromNormalizedEnv.constructor.name} vs ${fromLower.constructor.name}`
+      `normalize "${raw}": sampler composition matches the lowercase spelling`,
+      fromNormalizedEnv.toString() === fromLower.toString(),
+      `${fromNormalizedEnv.toString()} vs ${fromLower.toString()}`
     )
   }
   // Negative: a genuinely unknown value is only trim+lowercased (STILL unknown),
@@ -229,6 +270,169 @@ for (const badArg of ["abc", "-0.2", "1.5", "NaN"]) {
   check(
     "normalizeTracesSamplerEnv() returns undefined when the var is unset",
     normalizeTracesSamplerEnv() === undefined
+  )
+}
+
+// ── Round-2 A3: keyed ratio (R3) + ingress-marker attribute ──────────────────
+// (1) The structural id the stock XOR fold records at every nonzero ratio is
+//     NOT recorded by the keyed remote arms — marked OR unmarked, both flags.
+{
+  // Document the stock property that motivated the fix.
+  const stock = new TraceIdRatioBasedSampler(0.000001)
+  check(
+    "stock TraceIdRatioBasedSampler(1e-6) records the structural id (the XOR-fold bypass being removed)",
+    stock.shouldSample(
+      ROOT_CONTEXT,
+      STRUCTURAL_ID,
+      "p",
+      SpanKind.INTERNAL,
+      {},
+      []
+    ).decision === SamplingDecision.RECORD_AND_SAMPLED
+  )
+  const sampler = build("parentbased_traceidratio", "0.000001")
+  for (const sampled of [false, true]) {
+    check(
+      `parentbased_traceidratio(1e-6): structural id NOT recorded via UNMARKED remote parent (flags-${sampled ? "01" : "00"}) — keyed arm`,
+      !decide(sampler, remoteParentCtx(STRUCTURAL_ID, sampled), STRUCTURAL_ID)
+    )
+    check(
+      `parentbased_traceidratio(1e-6): structural id NOT recorded via MARKED remote parent (flags-${sampled ? "01" : "00"}) — marker does NOT change sampling (R3)`,
+      !decide(
+        sampler,
+        publicIngressRemoteParentCtx(STRUCTURAL_ID, sampled),
+        STRUCTURAL_ID
+      )
+    )
+  }
+}
+
+// (2) Marked decisions are deterministic across repeated calls and identical to
+//     the unmarked decision for the same id (the marker is attribute-only).
+{
+  const sampler = build("parentbased_traceidratio", "0.25")
+  let stable = true
+  let markerNeutral = true
+  for (const id of ids.slice(0, 500)) {
+    const marked = decide(sampler, publicIngressRemoteParentCtx(id, true), id)
+    if (marked !== decide(sampler, publicIngressRemoteParentCtx(id, true), id))
+      stable = false
+    if (marked !== decide(sampler, remoteParentCtx(id, true), id))
+      markerNeutral = false
+  }
+  check("keyed ratio: marked remote-parent decisions are deterministic", stable)
+  check(
+    "keyed ratio: marked and unmarked decisions agree per id (marker never changes the decision, R3)",
+    markerNeutral
+  )
+}
+
+// (3) Marked empirical rate at ARG=0.5 within tolerance over the corpus.
+{
+  const sampler = build("parentbased_traceidratio", "0.5")
+  let sampled = 0
+  for (const id of ids)
+    if (decide(sampler, publicIngressRemoteParentCtx(id, true), id)) sampled++
+  const rate = sampled / N
+  check(
+    `keyed ratio(0.5): marked empirical rate ≈ 0.5 (got ${rate.toFixed(3)})`,
+    rate > 0.44 && rate < 0.56,
+    rate
+  )
+}
+
+// (4) A2's both-arms rule still holds for marked AND unmarked parents in every
+//     ratio config — inbound -01 cannot FORCE, inbound -00 cannot ERASE.
+{
+  const sampler = build("parentbased_traceidratio", "0.25")
+  let noForge = true
+  let noErase = true
+  for (const id of ids.slice(0, 500)) {
+    const root = decide(sampler, ROOT_CONTEXT, id)
+    for (const ctx of [
+      remoteParentCtx(id, true),
+      publicIngressRemoteParentCtx(id, true),
+    ]) {
+      if (decide(sampler, ctx, id) !== root) noForge = false
+    }
+    for (const ctx of [
+      remoteParentCtx(id, false),
+      publicIngressRemoteParentCtx(id, false),
+    ]) {
+      if (decide(sampler, ctx, id) !== root) noErase = false
+    }
+  }
+  check(
+    "keyed ratio: inbound -01 cannot FORCE (both arms bound to root), marked and unmarked",
+    noForge
+  )
+  check(
+    "keyed ratio: inbound -00 cannot ERASE (both arms bound to root), marked and unmarked",
+    noErase
+  )
+}
+
+// (5) The ingress attribute is present on a MARKED entry span in EVERY sampler
+//     config (incl. AlwaysOn default), absent for unmarked, absent for a
+//     local-parent (descendant) span.
+{
+  const configs: Array<[string, string | undefined, string | undefined]> = [
+    ["unset (AlwaysOn default)", undefined, undefined],
+    ["parentbased_always_on", "parentbased_always_on", undefined],
+    ["always_on", "always_on", undefined],
+    ["parentbased_traceidratio", "parentbased_traceidratio", "1"],
+    ["traceidratio", "traceidratio", "1"],
+    // always_off / parentbased_always_off never record, so nothing to tag.
+  ]
+  for (const [label, name, arg] of configs) {
+    const sampler = build(name, arg)
+    const id = ids[0]!
+    check(
+      `${label}: marked remote-parent entry span carries ${ATTR_TRACE_INGRESS}=public`,
+      ingressAttr(sampler, publicIngressRemoteParentCtx(id, true), id) ===
+        "public"
+    )
+    check(
+      `${label}: UNMARKED remote-parent entry span has no ingress attribute`,
+      ingressAttr(sampler, remoteParentCtx(id, true), id) === undefined
+    )
+    check(
+      `${label}: marked LOCAL-parent (descendant) span is NOT tagged`,
+      ingressAttr(
+        sampler,
+        markPublicIngress(
+          trace.setSpanContext(ROOT_CONTEXT, {
+            traceId: id,
+            spanId: "00f067aa0ba902b7",
+            traceFlags: TraceFlags.SAMPLED,
+            isRemote: false,
+          })
+        ),
+        id
+      ) === undefined
+    )
+  }
+  // A recording public-edge entry span with an ABSENT parent is also tagged.
+  check(
+    "AlwaysOn default: marked absent-parent entry span carries the ingress attribute",
+    ingressAttr(build(undefined), markPublicIngress(ROOT_CONTEXT), ids[0]!) ===
+      "public"
+  )
+}
+
+// (6) The ingress attribute SURVIVES SentryWrappedSampler (fix (d): the wrap
+//     used to discard the inner result's attributes).
+{
+  const wrapped = new SentryWrappedSampler(build(undefined))
+  const id = ids[0]!
+  check(
+    "SentryWrappedSampler preserves the ingress attribute on a marked entry span",
+    ingressAttr(wrapped, publicIngressRemoteParentCtx(id, true), id) ===
+      "public"
+  )
+  check(
+    "SentryWrappedSampler adds no ingress attribute to an unmarked span",
+    ingressAttr(wrapped, remoteParentCtx(id, true), id) === undefined
   )
 }
 

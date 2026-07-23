@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
-# P-F (ingress half) — the forged-header ingress probe, §4.F verification /
-# Phase-4 gate of docs/trace-correctness-remediation-plan-2026-07-12.md.
+# P-F (ingress half) — the Ring-0 edge gate probe, §4.F verification / Phase-4
+# gate of docs/trace-correctness-remediation-plan-2026-07-12.md, extended for the
+# round-2 trust boundary (§3a A3): the ingress MARKER + the rate LIMITER.
 #
 # Boots BOTH public edge templates exactly the way the deploy does (template
 # mounted at /etc/nginx/templates/default.conf.template, rendered by the nginx
-# image's envsubst entrypoint) in front of a header-echoing upstream that
-# impersonates api/web/mobile-web/verdaccio, then sends requests carrying
-# forged `traceparent`/`tracestate`/`baggage`/`sentry-trace` at the public
-# origin and asserts the Ring-0 trust boundary
-# (docs/trace-propagation-policy.md):
-#   * upstream receives the forged headers as traceparent-ONLY —
+# image's envsubst entrypoint; ratelimit.js bind-mounted into the TLS edge since
+# it is not yet baked into the running image) in front of a header-echoing
+# upstream that impersonates api/web/mobile-web/verdaccio, then sends requests
+# carrying forged `traceparent`/`tracestate`/`baggage`/`sentry-trace` AND a
+# forged `x-synapse-trace-ingress` at the public origin and asserts:
+#   * STRIP: upstream receives the forged headers as traceparent-ONLY —
 #     tracestate/baggage/sentry-trace are stripped on EVERY proxied location,
 #     repeated specifically for /ws and / (the proxy_set_header inheritance
 #     footgun locations, which declare their own and re-declare the strips);
+#   * MARKER: upstream ALWAYS receives `x-synapse-trace-ingress: public` — the
+#     nginx-forced value OVERRIDES a forged single copy AND a duplicated copy,
+#     on inheriting AND self-declaring locations;
+#   * LIMITER: a page-load-shaped burst to /api/ passes clean, a rapid flood
+#     yields a 200/429 mix (never 503) with `limiting requests … synapse_api_req`
+#     in the edge log; /ws is bounded at its lower burst;
 #   * each location still passes its existing headers (X-Forwarded-* on
 #     inheriting locations; Upgrade/Connection on the self-declaring ones).
 #
@@ -45,6 +52,8 @@ FORGED_TP='00-11111111111111111111111111111111-2222222222222222-01'
 FORGED_TS='rojo=00f067aa0ba902b7,congo=t61rcWkgMzE'
 FORGED_BAGGAGE='userId=forged,serverNode=DF%2028'
 FORGED_SENTRY='11111111111111111111111111111111-2222222222222222-1'
+# Forged Ring-0 marker: nginx must OVERRIDE this with "public" on every location.
+FORGED_INGRESS='internal'
 
 PASS=0
 FAIL=0
@@ -96,6 +105,7 @@ server {
         add_header x-echo-tracestate $http_tracestate always;
         add_header x-echo-baggage $http_baggage always;
         add_header x-echo-sentry-trace $http_sentry_trace always;
+        add_header x-echo-ingress $http_x_synapse_trace_ingress always;
         add_header x-echo-upgrade $http_upgrade always;
         add_header x-echo-connection $http_connection always;
         add_header x-echo-xff $http_x_forwarded_for always;
@@ -136,6 +146,7 @@ docker run -d --name "$TLS_C" --network "$NET" \
   -e SYNAPSE_REGISTRY_DOMAIN="$REGISTRY_DOMAIN" \
   -e LETSENCRYPT_CERT_NAME="$CERT_NAME" \
   -v "$TLS_TEMPLATE":/etc/nginx/templates/default.conf.template:ro \
+  -v "${REPO_ROOT}/infrastructure/nginx/ratelimit.js":/etc/nginx/ratelimit.js:ro \
   -v "$TMP/letsencrypt":/etc/letsencrypt:ro \
   -v "$TMP/certbot-www":/var/www/certbot:ro \
   "$TLS_IMAGE" >/dev/null
@@ -151,7 +162,8 @@ curl_edge() { # curl_edge <curl args...> — prints response headers
     curl -sk -D- -o /dev/null --max-time 10 "$@"
 }
 forged=(-H "traceparent: $FORGED_TP" -H "tracestate: $FORGED_TS"
-        -H "baggage: $FORGED_BAGGAGE" -H "sentry-trace: $FORGED_SENTRY")
+        -H "baggage: $FORGED_BAGGAGE" -H "sentry-trace: $FORGED_SENTRY"
+        -H "x-synapse-trace-ingress: $FORGED_INGRESS")
 
 wait_ready() { # wait_ready <label> <curl args...>
   local label="$1"; shift
@@ -180,6 +192,8 @@ assert_case() { # assert_case <label> <headers> <port> <expect_xfwd 0|1> <expect
   ! has "$hdrs" "^x-echo-tracestate:"; check "$label: tracestate STRIPPED" $?
   ! has "$hdrs" "^x-echo-baggage:"; check "$label: baggage STRIPPED" $?
   ! has "$hdrs" "^x-echo-sentry-trace:"; check "$label: sentry-trace STRIPPED" $?
+  # THE marker assertion: nginx forces `public`, overriding the forged `internal`.
+  has "$hdrs" "^x-echo-ingress: public"; check "$label: ingress marker forced to public" $?
   # Existing headers still pass.
   if [ "$expect_xfwd" -eq 1 ]; then
     has "$hdrs" "^x-echo-xff: "; check "$label: X-Forwarded-For passes" $?
@@ -228,6 +242,48 @@ assert_case "http /ws"      "$(curl_edge "${forged[@]}" --http1.1 -H 'Upgrade: w
 assert_case "http /_next/"  "$(curl_edge "${forged[@]}" --http1.1 -H 'Upgrade: websocket' "http://$HTTP_C/_next/probe")" 3000 0 1
 assert_case "http /"        "$(curl_edge "${forged[@]}" --http1.1 -H 'Upgrade: websocket' "http://$HTTP_C/probe")" 3000 0 1
 assert_case "http /mobile/" "$(curl_edge "${forged[@]}" "http://$HTTP_C/mobile/probe")"  80   1 0
+
+# ── Marker: a DUPLICATED forged client copy is also overridden to public ─────
+dup="$(curl_edge --connect-to "$PUBLIC_DOMAIN:443:$TLS_C:443" \
+  -H "x-synapse-trace-ingress: internal" -H "x-synapse-trace-ingress: forged2" \
+  "https://$PUBLIC_DOMAIN/api/dupmarker")"
+has "$dup" "^x-echo-ingress: public"; check "marker: duplicated forged copy overridden to public" $?
+! has "$dup" "^x-echo-ingress:.*internal"; check "marker: forged value does not leak upstream" $?
+
+# ── Limiter smoke (U2) ───────────────────────────────────────────────────────
+# One curl PROCESS with N URLs (keepalive) is fast enough to exhaust the burst;
+# a slow one-request-per-container loop never would. sort|uniq -c → "<n> <code>".
+flood() { # flood <count> <base> <path-prefix> [extra curl args...]
+  local count="$1" base="$2" prefix="$3"; shift 3
+  local urls="" i
+  for i in $(seq 1 "$count"); do urls="$urls ${base}${prefix}${i}"; done
+  docker run --rm --network "$NET" nginx:alpine \
+    curl -sk -o /dev/null -w '%{http_code}\n' "$@" $urls 2>/dev/null | sort | uniq -c
+}
+codecount() { printf '%s\n' "$1" | awk -v c="$2" '$2==c{print $1}'; }
+
+# (a) page-load-shaped burst (30 << burst 200) on a fresh bucket ⇒ zero 429.
+small="$(flood 30 "http://$HTTP_C" /api/pl)"
+[ "$(codecount "$small" 429)" = "" ]; check "limiter: 30-request page-load burst to /api/ has zero 429" $?
+
+# (b) rapid flood ⇒ a 200/429 MIX, never 503, and the tripped zone is logged.
+big="$(flood 400 "http://$HTTP_C" /api/fl)"
+[ -n "$(codecount "$big" 200)" ]; check "limiter: /api/ flood yields some 200" $?
+[ -n "$(codecount "$big" 429)" ]; check "limiter: /api/ flood yields some 429" $?
+[ -z "$(codecount "$big" 503)" ]; check "limiter: /api/ flood never 503 (429 not the default 503)" $?
+has "$(docker logs "$HTTP_C" 2>&1)" 'limiting requests.*by zone "synapse_api_req"'
+check "limiter: edge log names the synapse_api_req zone" $?
+
+# (c) /ws at its lower burst (50) also shapes a flood.
+bigws="$(flood 200 "http://$HTTP_C" /ws)"
+[ -n "$(codecount "$bigws" 429)" ]; check "limiter: /ws flood yields some 429 (burst 50)" $?
+
+# (d) TLS edge — the njs /64 key path — also limits (proves js_set works as a
+#     limit_req_zone key at runtime, not just parses).
+bigtls="$(flood 400 "https://$PUBLIC_DOMAIN" /api/fl --connect-to "$PUBLIC_DOMAIN:443:$TLS_C:443")"
+[ -n "$(codecount "$bigtls" 429)" ]; check "limiter: TLS /api/ flood yields some 429 (njs js_set /64 key)" $?
+has "$(docker logs "$TLS_C" 2>&1)" 'limiting requests.*by zone "synapse_api_req"'
+check "limiter: TLS edge log names the synapse_api_req zone" $?
 
 echo
 echo "p-f-ingress-strip: $PASS passed, $FAIL failed"

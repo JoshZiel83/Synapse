@@ -6,7 +6,7 @@
 // context — through the REAL extractEnvelopeTraceContext helper, since that is
 // the code path every WS surface runs in production under Sentry-ON.
 // Run: npx tsx scripts/trace-probes/p-d2-sentry-on-extract.ts
-import { propagation, trace, ROOT_CONTEXT } from "@opentelemetry/api"
+import { propagation, trace } from "@opentelemetry/api"
 import {
   CompositePropagator,
   W3CTraceContextPropagator,
@@ -14,6 +14,7 @@ import {
 import { SentryPropagator } from "@sentry/opentelemetry"
 import { FirstPartyOnlyPropagator } from "../../src/infrastructure/observability/first-party-propagator.js"
 import { extractEnvelopeTraceContext } from "../../src/infrastructure/observability/envelope-trace.js"
+import { isPublicIngress } from "../../src/infrastructure/observability/ingress-trust.js"
 import { check, finish } from "./_shared.js"
 
 // The Sentry-ON global propagator, byte-for-byte the instrumentation.ts shape:
@@ -63,14 +64,28 @@ check(
   unsampled
 )
 
-// Malformed carrier ⇒ ROOT_CONTEXT (fail-closed extraction; fresh root).
-check(
-  "malformed traceparent ⇒ ROOT_CONTEXT",
-  extractEnvelopeTraceContext({ traceparent: "garbage" }) === ROOT_CONTEXT
-)
-check(
-  "non-object envelope ⇒ ROOT_CONTEXT",
-  extractEnvelopeTraceContext("nope") === ROOT_CONTEXT
-)
+// Malformed carrier ⇒ parentless, marked public-ingress (fail-closed extraction;
+// fresh root, but Ring-0 by construction — §3a A3). "ROOT_CONTEXT" degraded to
+// "no span context + public-ingress marker", never a bare identity return.
+{
+  const malformed = extractEnvelopeTraceContext({ traceparent: "garbage" })
+  check(
+    "malformed traceparent ⇒ parentless root",
+    trace.getSpanContext(malformed) === undefined
+  )
+  check(
+    "malformed traceparent ⇒ marked public-ingress",
+    isPublicIngress(malformed)
+  )
+  const nonObject = extractEnvelopeTraceContext("nope")
+  check(
+    "non-object envelope ⇒ parentless root",
+    trace.getSpanContext(nonObject) === undefined
+  )
+  check(
+    "non-object envelope ⇒ marked public-ingress",
+    isPublicIngress(nonObject)
+  )
+}
 
 finish("P-D2")

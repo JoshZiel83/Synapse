@@ -54,6 +54,14 @@
  *                                        Set-but-invalid values log at diag ERROR.
  *   SYNAPSE_TRACE_FIRST_PARTY_HOSTS      extra first-party hosts for egress header
  *                                        propagation (first-party-propagator.ts).
+ *   SYNAPSE_TRACE_SAMPLING_SALT          OPTIONAL secret keying the ratio sampler
+ *                                        (ingress-trust.ts). Only consulted when a
+ *                                        ratio-class OTEL_TRACES_SAMPLER is set;
+ *                                        unset ⇒ 16 random bytes per process.
+ *                                        Required only if >1 api replica serves one
+ *                                        public origin (so a browser trace landing
+ *                                        on a different replica gets the same
+ *                                        answer). Treat as a secret; never logged.
  *
  * If neither OTLP nor Sentry is configured, spans are still created (so logs
  * carry trace_id) but nothing is exported — a safe no-backend default.
@@ -82,21 +90,38 @@
  *     literal merge (which would override the operator) exists.
  *   - diag default level is ERROR, not the spec's `info` (exporter failures log;
  *     healthy operation stays silent). Override via OTEL_LOG_LEVEL.
- *   - Hardened remote-parent sampler arms (§3a, adjudication 1 + amendment A2):
- *     inbound remote flags are ADVISORY — operator intent wins in both directions.
+ *   - Hardened remote-parent sampler arms (§3a, adjudication 1 + A2, amended by
+ *     round-2 A3): inbound remote flags are ADVISORY — operator intent wins in
+ *     both directions. Every arm is wrapped by IngressTaggingSampler so a
+ *     public-edge entry span carries synapse.trace.ingress=public.
  *
  *       OTEL_TRACES_SAMPLER        | root        | remoteParentSampled | remoteParentNotSampled
  *       ---------------------------|-------------|---------------------|-----------------------
  *       unset (default)            | AlwaysOn    | AlwaysOn            | AlwaysOn
  *       parentbased_always_on      | AlwaysOn    | AlwaysOn            | AlwaysOn
- *       parentbased_traceidratio   | ratio(ARG)  | same ratio instance | same ratio instance
+ *       parentbased_traceidratio   | keyed ratio | same keyed instance | same keyed instance
  *       parentbased_always_off     | AlwaysOff   | AlwaysOff           | AlwaysOff
- *       always_on/always_off/traceidratio — as specced, no ParentBased wrapper.
+ *       always_on/always_off — as specced, no ParentBased wrapper.
+ *       traceidratio               | keyed ratio (no ParentBased wrapper — spec)
  *
  *     The spec's default ParentBased arms (AlwaysOn/AlwaysOff) would let a forged
  *     one-line `…-00`/`…-01` header erase or force backend recording; binding both
- *     arms bounds forged flags by the operator's own rate. The bound is
- *     volume-economic, not absolute (trace-id mining residual, §3a).
+ *     arms bounds forged flags by the operator's own rate.
+ *
+ *     R3 (adjudication-2) — ONE ratio function per process: when a ratio-class
+ *     sampler is configured, a KEYED accumulator (KeyedTraceIdRatioSampler:
+ *     salted HMAC of the trace id) is the ratio for the root arm AND both remote
+ *     arms, REPLACING the SDK's public XOR fold. That fold (four 32-bit words
+ *     XOR'd vs floor(ratio*0xffffffff)) let a structured id like
+ *     `deadbeefdeadbeefcafebabecafebabe` record at every nonzero ratio in O(1) —
+ *     no mining. The keyed arm removes that offline, universal, permanent bypass;
+ *     the residual is an ONLINE, per-deployment, rate-limited search whose yield
+ *     is capped by the nginx edge limiter. The sampler is a cooperative-client
+ *     VOLUME knob, NOT a security control — the edge limiter (limit_req/limit_conn)
+ *     is the volume bound and Tempo overrides are the last-resort bound. The
+ *     unspoofable nginx marker distinguishes Ring-0 from Ring-1 for ATTRIBUTES/
+ *     policy only, never for a second sampling math (that would split a trace
+ *     that entered via the edge then hopped internally).
  *
  * LOAD-BEARING MECHANISM (not residue — do not "clean up"): the forced CJS
  * requires at the bottom of the provider block (`cjsRequire("http"/"https"/
@@ -106,9 +131,12 @@
  * import-in-the-middle loader is registered. Pinned by probe P-A5 (pg/ioredis)
  * and the boot-matrix node:http traceparent check.
  *
- * LAYER RESPONSIBILITIES (§3a — neither layer claims the other's job):
- *   - this sampler = FORCE and ERASE bounds on inbound flags (volume-economic);
- *   - nginx (Ring 0) = vendor-state hygiene + tracestate/baggage trust boundary.
+ * LAYER RESPONSIBILITIES (§3a/A3 — neither layer claims the other's job):
+ *   - this sampler = FORCE/ERASE bounds + keyed ratio (a cooperative-client
+ *     volume knob, NOT a security control) + the ingress span attribute;
+ *   - nginx (Ring 0) = vendor-state hygiene + the unspoofable ingress marker +
+ *     the request-rate bound (limit_req/limit_conn on /api/ and /ws);
+ *   - Tempo = the last-resort ingest bound (overrides.defaults).
  *
  * W3C baggage is deliberately NOT propagated (adjudication 6): the Sentry-off
  * propagator is W3CTraceContextPropagator only — no W3CBaggagePropagator — until
@@ -159,7 +187,6 @@ import {
   AlwaysOnSampler,
   BatchSpanProcessor,
   ParentBasedSampler,
-  TraceIdRatioBasedSampler,
   type Sampler,
   type SamplingResult,
   type SpanProcessor,
@@ -176,6 +203,12 @@ import {
 import { createRequire } from "node:module"
 import type { FastifyInstance } from "fastify"
 import { firstPartyPropagator } from "./infrastructure/observability/first-party-propagator.js"
+import {
+  IngressTaggingSampler,
+  KeyedTraceIdRatioSampler,
+  PublicIngressPropagator,
+  resolveSamplingSalt,
+} from "./infrastructure/observability/ingress-trust.js"
 import { isExpectedClientError } from "./infrastructure/observability/request-error-classification.js"
 import { sanitizeTraceState } from "./infrastructure/observability/traceparent.js"
 
@@ -300,8 +333,18 @@ function defaultParentBasedAlwaysOn(): Sampler {
   })
 }
 
-/** Env-driven sampler for the provider, read from process.env at call time. */
+/**
+ * Env-driven sampler for the provider, read from process.env at call time. The
+ * returned sampler is ALWAYS wrapped in IngressTaggingSampler, so a public-edge
+ * entry span carries `synapse.trace.ingress=public` in every config — the ONLY
+ * observable effect of the Ring-0 marker under the shipped AlwaysOn default
+ * (probe P-A7 exercises the real composition through this function).
+ */
 export function buildSamplerFromEnvVars(): Sampler {
+  return new IngressTaggingSampler(buildBaseSamplerFromEnvVars())
+}
+
+function buildBaseSamplerFromEnvVars(): Sampler {
   const name = getStringFromEnv("OTEL_TRACES_SAMPLER")
   switch (name) {
     case undefined:
@@ -313,8 +356,13 @@ export function buildSamplerFromEnvVars(): Sampler {
       return new AlwaysOffSampler()
     case "traceidratio":
       // No ParentBased wrapper — the SDK spec requires traceidratio to ignore
-      // the parent flag.
-      return new TraceIdRatioBasedSampler(parseSamplerRatioArg())
+      // the parent flag. The KEYED accumulator (salted HMAC of the trace id, not
+      // the SDK's public XOR fold) is THE ratio function, so a public caller
+      // cannot mine a trace id that always records (F6).
+      return new KeyedTraceIdRatioSampler(
+        parseSamplerRatioArg(),
+        resolveSamplingSalt()
+      )
     case "parentbased_always_off": {
       const alwaysOff = new AlwaysOffSampler()
       return new ParentBasedSampler({
@@ -324,16 +372,23 @@ export function buildSamplerFromEnvVars(): Sampler {
       })
     }
     case "parentbased_traceidratio": {
-      // BOTH remote arms share the SAME ratio instance: forged 01 and
-      // forged/honest 00 flags are equally bounded by the operator's ratio,
-      // and per-trace-id determinism keeps first-party traces whole. (Local
-      // arms keep the SDK's parent-respecting defaults — local parents ARE
-      // this process's own ratio decisions.)
-      const ratio = new TraceIdRatioBasedSampler(parseSamplerRatioArg())
+      // R3 (adjudication-2): ONE ratio function per process. The keyed
+      // accumulator is the ratio for the root arm AND both remote arms (ONE
+      // shared instance) — it REPLACES the XOR fold entirely, never two
+      // functions over one trace-id space (an edge-keyed decision followed by a
+      // differently-computed internal hop would contradict and split the trace).
+      // A2's both-arms rule is intact: a forged 01 cannot FORCE and a
+      // forged/honest 00 cannot ERASE — both are bounded by the operator ratio.
+      // The salt is resolved once. (Local arms keep the SDK's parent-respecting
+      // defaults — a local parent IS this process's own keyed decision.)
+      const keyed = new KeyedTraceIdRatioSampler(
+        parseSamplerRatioArg(),
+        resolveSamplingSalt()
+      )
       return new ParentBasedSampler({
-        root: ratio,
-        remoteParentSampled: ratio,
-        remoteParentNotSampled: ratio,
+        root: keyed,
+        remoteParentSampled: keyed,
+        remoteParentNotSampled: keyed,
       })
     }
     default:
@@ -353,7 +408,10 @@ export function buildSamplerFromEnvVars(): Sampler {
  * harmless, because Sentry forwarding is decided event-level in
  * beforeSendTransaction (§3a).
  */
-class SentryWrappedSampler implements Sampler {
+// Exported as a probe seam (p-a7 constructs it directly to assert the ingress
+// attribute survives the Sentry wrap): wrapSamplingDecision is a pure function,
+// so this class needs no live Sentry client to run.
+export class SentryWrappedSampler implements Sampler {
   constructor(private readonly base: Sampler) {}
 
   shouldSample(
@@ -364,7 +422,7 @@ class SentryWrappedSampler implements Sampler {
     attributes: Attributes,
     links: Link[]
   ): SamplingResult {
-    const { decision } = this.base.shouldSample(
+    const base = this.base.shouldSample(
       samplingContext,
       traceId,
       spanName,
@@ -372,11 +430,20 @@ class SentryWrappedSampler implements Sampler {
       attributes,
       links
     )
-    return wrapSamplingDecision({
-      decision,
+    const wrapped = wrapSamplingDecision({
+      decision: base.decision,
       context: samplingContext,
       spanAttributes: attributes,
     })
+    // wrapSamplingDecision returns only { decision, traceState } — it DISCARDS
+    // the inner SamplingResult's attributes. Merge them back, or the ingress
+    // attribute (IngressTaggingSampler) would vanish whenever Sentry is ON.
+    return base.attributes
+      ? {
+          ...wrapped,
+          attributes: { ...wrapped.attributes, ...base.attributes },
+        }
+      : wrapped
   }
 
   toString(): string {
@@ -646,10 +713,17 @@ const provider = otelDisabled
 
 if (provider) {
   provider.register({
-    // The Ring-2 egress choke point wraps the composite (both configs). It now
-    // fails CLOSED unconditionally (F12) — no Sentry-gated delegate branch — so
-    // it takes no sentryEnabled argument.
-    propagator: firstPartyPropagator(basePropagator),
+    // Two wrappers, outermost first:
+    //   PublicIngressPropagator — marks any context extracted from a carrier
+    //     that carries the nginx-forced x-synapse-trace-ingress header as
+    //     Ring-0. OUTERMOST so extraction marking is unconditional; it never
+    //     writes the marker on inject (receive-side signal only).
+    //   firstPartyPropagator (Ring-2 egress choke point) — wraps the composite
+    //     in both configs; fails CLOSED on inject (F12), delegates extract
+    //     UNCONDITIONALLY (P-D2), so the ingress marking above always runs.
+    propagator: new PublicIngressPropagator(
+      firstPartyPropagator(basePropagator)
+    ),
     // Sentry needs its context manager for per-request isolation scopes; the
     // plain AsyncLocalStorage manager is its Sentry-off equivalent.
     contextManager: sentryClient

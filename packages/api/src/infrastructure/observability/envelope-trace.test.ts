@@ -1,8 +1,19 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { propagation, trace, ROOT_CONTEXT } from "@opentelemetry/api"
+import { propagation, trace, type Context } from "@opentelemetry/api"
 import { W3CTraceContextPropagator } from "@opentelemetry/core"
 import { extractEnvelopeTraceContext } from "./envelope-trace.js"
+import { isPublicIngress } from "./ingress-trust.js"
+
+// A degraded envelope returns a PARENTLESS context (no span context, so a fresh
+// root span is opened) that is nonetheless marked public-ingress — a WS envelope
+// carrier is Ring-0 by construction, so every per-message span is an
+// untrusted-ingress entry span (§3a A3). "Degrade-not-reject" is now "parentless
+// + marked", NOT "=== ROOT_CONTEXT".
+function assertDegradedRoot(ctx: Context, msg?: string): void {
+  assert.equal(trace.getSpanContext(ctx), undefined, msg)
+  assert.equal(isPublicIngress(ctx), true, msg)
+}
 
 // The helper extracts through the GLOBAL propagator (in production the
 // FirstPartyOnlyPropagator-wrapped composite, whose extract delegates
@@ -29,23 +40,26 @@ test("valid envelope ⇒ remote context with the carrier's exact ids + tracestat
   assert.equal(sc.traceState?.get("vendor"), "abc")
 })
 
-test("absent / malformed / non-string traceparent ⇒ ROOT_CONTEXT (degrade-not-reject)", () => {
-  assert.equal(extractEnvelopeTraceContext({ type: "auth" }), ROOT_CONTEXT)
-  assert.equal(
+test("absent / malformed / non-string traceparent ⇒ parentless marked root (degrade-not-reject)", () => {
+  assertDegradedRoot(extractEnvelopeTraceContext({ type: "auth" }), "absent")
+  assertDegradedRoot(
     extractEnvelopeTraceContext({ traceparent: "garbage" }),
-    ROOT_CONTEXT
+    "garbage"
   )
-  assert.equal(
+  assertDegradedRoot(
     // all-zero span-id — regex-invalid per W3C §3.2
     extractEnvelopeTraceContext({
       traceparent: `00-${TRACE_ID}-0000000000000000-01`,
     }),
-    ROOT_CONTEXT
+    "zero span-id"
   )
-  assert.equal(extractEnvelopeTraceContext({ traceparent: 42 }), ROOT_CONTEXT)
-  assert.equal(extractEnvelopeTraceContext(null), ROOT_CONTEXT)
-  assert.equal(extractEnvelopeTraceContext("string"), ROOT_CONTEXT)
-  assert.equal(extractEnvelopeTraceContext(undefined), ROOT_CONTEXT)
+  assertDegradedRoot(
+    extractEnvelopeTraceContext({ traceparent: 42 }),
+    "non-string"
+  )
+  assertDegradedRoot(extractEnvelopeTraceContext(null), "null")
+  assertDegradedRoot(extractEnvelopeTraceContext("string"), "string")
+  assertDegradedRoot(extractEnvelopeTraceContext(undefined), "undefined")
 })
 
 test("over-512 / grammar-invalid / duplicate-key / non-string tracestate drops the FIELD but keeps the traceparent", () => {
@@ -91,5 +105,20 @@ test("a Level-2-only key the transport salvages drops the tracestate WHOLE, trac
 
 test("a 5KB hostile traceparent degrades cleanly (batch-poisoning guard)", () => {
   const ctx = extractEnvelopeTraceContext({ traceparent: "z".repeat(5120) })
-  assert.equal(ctx, ROOT_CONTEXT)
+  assertDegradedRoot(ctx)
+})
+
+test("every exit is marked public-ingress (WS carriers are Ring-0 by construction)", () => {
+  // valid carrier ⇒ remote parent, still marked
+  assert.equal(
+    isPublicIngress(
+      extractEnvelopeTraceContext({
+        traceparent: VALID_TRACEPARENT,
+        tracestate: "vendor=abc",
+      })
+    ),
+    true
+  )
+  // degraded ⇒ parentless, still marked (covered by assertDegradedRoot above too)
+  assert.equal(isPublicIngress(extractEnvelopeTraceContext({})), true)
 })

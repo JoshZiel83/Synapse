@@ -16,8 +16,20 @@
 // trace_id is an internal correlation id; exposing it to every client is a small
 // information-disclosure surface (and meaningless for unsampled requests), so it
 // is GATED via env — default = only on 5xx, where it is most useful for triage.
-// This deployment sets it to `on` (see .env) to expose on every response:
 //   SYNAPSE_SERVER_TIMING_TRACE = off | errors (default) | on
+//
+// SAMPLING ORACLE (round-2 trust boundary, §3a A3). Mode `on` echoes the SAMPLED
+// FLAG of the active span to EVERY client. On a public deployment running a
+// ratio-class OTEL_TRACES_SAMPLER that turns the sampler's offline-mining
+// residual into an ONLINE oracle: a client can test candidate trace ids and keep
+// the ones that record. This CANNOT be designed away — presence/absence of any
+// response-side trace-correlation channel leaks the same decision bit, and that
+// channel is exactly what makes the browser-side trace-context Level 3 bridge
+// work (already wired via CORS exposedHeaders: ["server-timing"]). The bound is
+// the nginx limit_req at the edge, not this header. Recommended public posture:
+// `errors` (the default) or `off` with a ratio sampler. A boot warning fires
+// below when `on` coincides with a ratio sampler; see docs/logging-refactor/
+// 04-operations.md and docs/trace-propagation-policy.md.
 //
 // We append to (never clobber) any upstream Server-Timing, and only set headers
 // when there is something to report.
@@ -35,6 +47,21 @@ function resolveTraceMode(): TraceMode {
 export default fp(
   async function serverTiming(app: FastifyInstance) {
     const mode = resolveTraceMode()
+
+    // Boot warning: mode `on` + a ratio-class sampler = an online sampling
+    // oracle (see the file header). Named vars + doc pointer, once at
+    // registration.
+    if (
+      mode === "on" &&
+      (process.env.OTEL_TRACES_SAMPLER || "").includes("traceidratio")
+    ) {
+      app.log.warn(
+        "SYNAPSE_SERVER_TIMING_TRACE=on with a ratio-class OTEL_TRACES_SAMPLER " +
+          "echoes the sampled flag to every client — an ONLINE sampling oracle. " +
+          "Use `errors` or `off` on a public ratio-sampled deployment " +
+          "(docs/logging-refactor/04-operations.md)."
+      )
+    }
 
     app.addHook("onSend", async (_req, reply, payload) => {
       const parts: string[] = []

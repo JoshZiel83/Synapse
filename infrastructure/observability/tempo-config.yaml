@@ -27,3 +27,24 @@ storage:
       path: /var/tempo/wal
     local:
       path: /var/tempo/blocks
+
+# ─── Last-resort ingest bounds (Ring-0 defense in depth) ────────────────────
+# Previously INHERITED defaults, written out so the final bound on a forged or
+# flooded trace is reviewable in-repo. These are NOT the primary control: they
+# are per-tenant and this deployment is single-tenant, so tripping them drops
+# LEGITIMATE traces too (denial of monitoring). The primary control is the nginx
+# limit_req/limit_conn at the public edge; this is the backstop under it.
+# Validate before shipping any edit:
+#   docker run --rm -v $PWD/infrastructure/observability/tempo-config.yaml:\
+#     /etc/tempo/config.yaml:ro grafana/tempo:2.6.1 \
+#     -config.file=/etc/tempo/config.yaml -config.verify=true
+# (a typo'd key fails loudly: "field ... not found in type overrides.legacyConfig").
+overrides:
+  defaults:
+    ingestion:
+      rate_strategy: local
+      rate_limit_bytes: 15000000 # ~15 MB/s sustained per tenant
+      burst_size_bytes: 20000000
+      max_traces_per_user: 10000 # live traces held by the ingester
+    global:
+      max_bytes_per_trace: 5000000 # one trace id can never exceed 5 MB

@@ -10,10 +10,23 @@
 // upgrade request, and falling back to the ambient context would re-parent
 // message spans onto connection-lifetime state. A frame without (or with an
 // invalid) carrier gets a fresh root, full stop.
+//
+// RING-0 BY CONSTRUCTION (round-2 trust boundary, §3a A3): a WS envelope carrier
+// is client-supplied — the frame is untrusted, which is exactly why the raw
+// {traceparent, tracestate} fields are re-validated here. So EVERY per-message
+// span is a public-ingress entry span and this helper marks its context
+// public-ingress on ALL exits (the extracted context AND every ROOT_CONTEXT
+// early return), UNCONDITIONALLY. Marking here rather than threading a flag from
+// the upgrade request is deliberate and fail-closed: a new WS surface that calls
+// this helper inherits the marking for free and cannot forget to opt in. This
+// closes the per-message trace-id adoption path an HTTP-only ingress fix would
+// miss (an HTTP marker never touches these carriers). The marker only feeds the
+// span attribute + policy (never sampling math, R3); it never rides any wire.
 
 import { ROOT_CONTEXT, type Context } from "@opentelemetry/api"
 import type { TraceCarrier } from "@synapse/shared"
 import { createLogger } from "../logger/index.js"
+import { markPublicIngress } from "./ingress-trust.js"
 import {
   extractTraceCarrierContext,
   isValidTraceparent,
@@ -61,12 +74,16 @@ function warnInvalidFieldOnce(
  * traceparent (degrade-not-reject).
  */
 export function extractEnvelopeTraceContext(envelope: unknown): Context {
-  if (typeof envelope !== "object" || envelope === null) return ROOT_CONTEXT
+  // markPublicIngress on EVERY exit: a WS frame is Ring-0 by construction, so
+  // its per-message span is always an untrusted-ingress entry span (see header).
+  if (typeof envelope !== "object" || envelope === null) {
+    return markPublicIngress(ROOT_CONTEXT)
+  }
   const { traceparent, tracestate } = envelope as Record<string, unknown>
   if (!isValidTraceparent(traceparent)) {
     if (traceparent !== undefined)
       warnInvalidFieldOnce("traceparent", traceparent)
-    return ROOT_CONTEXT
+    return markPublicIngress(ROOT_CONTEXT)
   }
   const carrier: TraceCarrier = { traceparent }
   if (typeof tracestate === "string") {
@@ -76,7 +93,7 @@ export function extractEnvelopeTraceContext(envelope: unknown): Context {
   } else if (tracestate !== undefined) {
     warnInvalidFieldOnce("tracestate", tracestate)
   }
-  return extractTraceCarrierContext(ROOT_CONTEXT, carrier)
+  return markPublicIngress(extractTraceCarrierContext(ROOT_CONTEXT, carrier))
 }
 
 /**

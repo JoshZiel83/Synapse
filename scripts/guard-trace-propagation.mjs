@@ -89,6 +89,29 @@
 //     never flagged. A crossFileRule, not a line rule, precisely because the
 //     regression form spans lines.
 //
+// Edge trust-boundary ratchets (workstream E — Ring-0 marker + rate limits):
+//
+//   edge_marker_missing (cross-file) — in each of the two public nginx templates
+//     the count of `proxy_set_header x-synapse-trace-ingress` MUST equal the
+//     count of `proxy_set_header tracestate` (the strip trio is the existing,
+//     correct enumeration of every server- AND location-level proxy_set_header
+//     scope). nginx does NOT inherit proxy_set_header into a location that
+//     declares its own set, so a missing marker re-declaration silently lets a
+//     client copy through — invisible without this equality check.
+//
+//   edge_ratelimit_missing (cross-file) — every `location /api/ {` block in both
+//     public templates contains `limit_req zone=synapse_api_req`, and every
+//     `location /ws {` block contains BOTH `limit_req zone=synapse_ws_req` and
+//     `limit_conn synapse_ws_conn`. Dropping one silently unmeters a public
+//     api-facing location.
+//
+//   ingress_marker_misuse (cross-file) — the ingress-trust symbols
+//     (PUBLIC_INGRESS_HEADER / isPublicIngress / markPublicIngress) may appear
+//     ONLY in instrumentation.ts, envelope-trace.ts, the ingress-trust module +
+//     its test, and the trace probes. The marker is a downgrade-only span-
+//     attribute signal; it must never reach auth, route or rate-limit code (where
+//     it would become a trust oracle).
+//
 // Zero-violation (no baseline): all rules are clean today, so any new violation
 // fails CI outright.
 //
@@ -595,6 +618,158 @@ export const crossFileRules = [
           out.push({
             file: CODEC,
             text: `api→daemon frame "${dm[1]}" (${name}) has no matching z.literal in the daemon codec — it would be dropped silently`,
+          })
+        }
+      }
+      return out
+    },
+  },
+  {
+    // E: the ingress marker must be re-declared in EVERY proxy_set_header scope
+    // of both public templates. nginx does not inherit proxy_set_header into a
+    // location that declares its own set, so the correct enumeration of scopes
+    // is the existing strip trio: count(marker) MUST equal count(tracestate).
+    id: "edge_marker_missing",
+    hint: 'add `proxy_set_header x-synapse-trace-ingress "public";` next to EVERY `proxy_set_header tracestate "";` (server level + each self-declaring location) in the public nginx templates — a missing re-declaration silently lets a client-supplied marker copy through the inheritance gap',
+    check(ctx) {
+      const out = []
+      const TEMPLATES = [
+        "infrastructure/nginx/public.conf.template",
+        "infrastructure/nginx/public-http.conf.template",
+      ]
+      const count = (s, re) => (s.match(re) ?? []).length
+      for (const file of TEMPLATES) {
+        const content = ctx.readFile(file)
+        if (content == null) {
+          out.push({ file, text: "public nginx template is missing" })
+          continue
+        }
+        const tracestate = count(content, /proxy_set_header\s+tracestate\s/g)
+        const marker = count(
+          content,
+          /proxy_set_header\s+x-synapse-trace-ingress\s/g
+        )
+        if (marker !== tracestate) {
+          out.push({
+            file,
+            text: `ingress-marker count ${marker} != tracestate-strip count ${tracestate} (every proxy_set_header scope must re-declare the marker)`,
+          })
+        }
+      }
+      return out
+    },
+  },
+  {
+    // E: every public api-facing location must be metered. Extract each
+    // `location /api/ {` and `location /ws {` block by brace matching (the blocks
+    // are non-nested) and assert the limit directives are inside.
+    id: "edge_ratelimit_missing",
+    hint: "restore the limiter: `location /api/` needs `limit_req zone=synapse_api_req`; `location /ws` needs `limit_req zone=synapse_ws_req` AND `limit_conn synapse_ws_conn` — dropping one silently unmeters a public api-facing location (U2)",
+    check(ctx) {
+      const out = []
+      const TEMPLATES = [
+        "infrastructure/nginx/public.conf.template",
+        "infrastructure/nginx/public-http.conf.template",
+      ]
+      // Body of every `location <path> {` block whose path matches `want`, by
+      // brace depth (these locations have no nested braces).
+      const locationBodies = (content, want) => {
+        const bodies = []
+        const re = /location\s+([^\s{]+)\s*\{/g
+        let m
+        while ((m = re.exec(content)) !== null) {
+          if (m[1] !== want) continue
+          let depth = 1
+          let i = re.lastIndex
+          const start = i
+          while (i < content.length && depth > 0) {
+            const ch = content[i]
+            if (ch === "{") depth++
+            else if (ch === "}") depth--
+            i++
+          }
+          bodies.push(content.slice(start, i))
+        }
+        return bodies
+      }
+      for (const file of TEMPLATES) {
+        const content = ctx.readFile(file)
+        if (content == null) {
+          out.push({ file, text: "public nginx template is missing" })
+          continue
+        }
+        const apiBodies = locationBodies(content, "/api/")
+        if (apiBodies.length === 0) {
+          out.push({ file, text: "no `location /api/` block found" })
+        }
+        for (const body of apiBodies) {
+          if (!/limit_req\s+zone=synapse_api_req/.test(body)) {
+            out.push({
+              file,
+              text: "a `location /api/` block is missing `limit_req zone=synapse_api_req`",
+            })
+          }
+        }
+        const wsBodies = locationBodies(content, "/ws")
+        if (wsBodies.length === 0) {
+          out.push({ file, text: "no `location /ws` block found" })
+        }
+        for (const body of wsBodies) {
+          if (!/limit_req\s+zone=synapse_ws_req/.test(body)) {
+            out.push({
+              file,
+              text: "a `location /ws` block is missing `limit_req zone=synapse_ws_req`",
+            })
+          }
+          if (!/limit_conn\s+synapse_ws_conn/.test(body)) {
+            out.push({
+              file,
+              text: "a `location /ws` block is missing `limit_conn synapse_ws_conn`",
+            })
+          }
+        }
+      }
+      return out
+    },
+  },
+  {
+    // E: the ingress marker is a downgrade-only span-attribute signal. Its
+    // symbols must never reach auth/route/rate-limit code, where a reader could
+    // turn the marker into a trust oracle. Allow only the plumbing + tests/probes.
+    id: "ingress_marker_misuse",
+    hint: "the ingress marker (PUBLIC_INGRESS_HEADER/isPublicIngress/markPublicIngress) is downgrade-only trust — it may appear ONLY in ingress-trust.ts (+ its test), instrumentation.ts, envelope-trace.ts and the trace probes; it must never reach auth/route/rate-limit code (that would make it a trust oracle)",
+    check(ctx) {
+      const out = []
+      const SYMBOL_RE =
+        /\b(?:PUBLIC_INGRESS_HEADER|isPublicIngress|markPublicIngress)\b/
+      const ALLOWED = new Set([
+        "packages/api/src/infrastructure/observability/ingress-trust.ts",
+        "packages/api/src/infrastructure/observability/ingress-trust.test.ts",
+        "packages/api/src/instrumentation.ts",
+        "packages/api/src/infrastructure/observability/envelope-trace.ts",
+      ])
+      const scanRoots = ["packages/api/src", "packages/api/scripts"]
+      for (const root of scanRoots) {
+        for (const abs of ctx.listTsFiles(root)) {
+          const rel = relative(ctx.repoRoot, abs)
+          if (ALLOWED.has(rel)) continue
+          if (rel.startsWith("packages/api/scripts/trace-probes/")) continue
+          let content
+          try {
+            content = readFileSync(abs, "utf8")
+          } catch {
+            continue
+          }
+          content.split("\n").forEach((line, i) => {
+            const trimmed = line.trimStart()
+            if (trimmed.startsWith("//") || trimmed.startsWith("*")) return
+            if (SYMBOL_RE.test(line)) {
+              out.push({
+                file: rel,
+                line: i + 1,
+                text: line.trim(),
+              })
+            }
           })
         }
       }
