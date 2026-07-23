@@ -131,6 +131,12 @@ class ClaudeAgentSession implements AgentSession {
   private query: ClaudeQuery | null = null
   private claudeSessionId: string | undefined
   private drainPromise: Promise<void> | null = null
+  // True while a turn is in flight (a prompt was seeded/sent and its `result`
+  // has not yet arrived). The session-death `finally` emits its terminal
+  // `turn_completed` ONLY when this is set, so a stream that closes while the
+  // session is IDLE never fabricates a terminal for a turn that already ended
+  // (§5d — the driver-level half of exactly-once turn completion).
+  private turnOutstanding = false
 
   constructor(
     readonly remoteAgentId: string,
@@ -179,7 +185,12 @@ class ClaudeAgentSession implements AgentSession {
         message: `Claude SDK iterator threw: ${message}`,
       })
     } finally {
-      this.eventQueue.push({ kind: "turn_completed" })
+      // Session death. Emit the terminal ONLY for a turn that was actually in
+      // flight (§5d) so an idle-then-closed stream never fabricates one.
+      if (this.turnOutstanding) {
+        this.turnOutstanding = false
+        this.eventQueue.push({ kind: "turn_completed" })
+      }
       this.eventQueue.close()
     }
   }
@@ -212,12 +223,16 @@ class ClaudeAgentSession implements AgentSession {
           message: errorMessage,
         })
       }
+      // The turn's normal terminal — clear the in-flight flag so the
+      // session-death `finally` won't re-emit for an already-completed turn.
+      this.turnOutstanding = false
       this.eventQueue.push({ kind: "turn_completed" })
     }
   }
 
   async send(prompt: string, _options?: SendPromptOptions) {
     if (!prompt.trim()) return
+    this.turnOutstanding = true
     this.prompts.push(userMessage(prompt))
   }
 
@@ -264,6 +279,7 @@ class ClaudeAgentSession implements AgentSession {
 
   /** Test/internal helper: enqueue a seed prompt before query() starts iterating. */
   seedPrompt(message: SDKUserMessage) {
+    this.turnOutstanding = true
     this.prompts.push(message)
   }
 

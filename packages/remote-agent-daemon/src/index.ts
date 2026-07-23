@@ -404,6 +404,15 @@ class DaemonSupervisor {
       const ws = new WebSocket(wsUrl)
       this.ws = ws
       let heartbeatTimer: NodeJS.Timeout | null = null
+      // Δ5 dead-peer detection. The api replies {type:"pong"} to every
+      // heartbeat; each tick that fires with no intervening pong increments this
+      // counter, and a pong resets it. After two consecutive unanswered
+      // heartbeats the socket is presumed dead and force-closed so the reconnect
+      // loop takes over — a half-open TCP connection (peer vanished without a
+      // FIN) otherwise wedges this promise indefinitely, holding a machine slot
+      // the api can only reclaim once its own stale-connection reaper (Δ5, api
+      // side) fires.
+      let missedPongs = 0
 
       const cleanup = () => {
         if (heartbeatTimer) {
@@ -415,7 +424,21 @@ class DaemonSupervisor {
 
       ws.once("open", () => {
         log("info", "daemon", "WebSocket connected")
+        missedPongs = 0
         heartbeatTimer = setInterval(() => {
+          if (missedPongs >= 2) {
+            log(
+              "warn",
+              "daemon",
+              "Heartbeat timeout — no pong from server; closing socket",
+              { missedPongs }
+            )
+            try {
+              ws.close(4002, "heartbeat timeout")
+            } catch {}
+            return
+          }
+          missedPongs += 1
           this.send({
             type: "heartbeat",
           } satisfies RemoteAgentMachineHeartbeatMessage)
@@ -476,6 +499,7 @@ class DaemonSupervisor {
         }
 
         if (message?.type === "pong") {
+          missedPongs = 0
           log("debug", "daemon", "Received heartbeat pong")
           return
         }
@@ -496,19 +520,20 @@ class DaemonSupervisor {
             const agent = this.getOrCreateAgent(start.remoteAgentId)
             await agent.configure(start)
             if (start.conversationId) {
-              // The turn this start drives is scoped to the start frame's
-              // carrier (a non-delivery driver), so the agent's lifecycle
-              // callbacks re-enter this trace via ConversationTurns.scoped.
-              agent.noteTurnDriver(start.conversationId, frameCarrier(start))
-              // Server only sends agent:start for pairs with pending work, so
-              // bootstrapping the runtime here is enough — its initial prompt
-              // tells the agent to call check_messages immediately, and the
-              // subsequent agent:deliver (queued right after agent:start by
-              // startBoundRemoteAgents) is a no-op while a wake is in flight.
+              // The bootstrap turn this start raises is scoped to the start
+              // frame's carrier (a non-delivery driver): pass it as driverCarrier
+              // so ensureRuntimeForConversation notes it under the bootstrap
+              // epoch and the lifecycle callbacks re-enter this trace via
+              // ConversationTurns.scoped. Server only sends agent:start for pairs
+              // with pending work, so bootstrapping here is enough — the initial
+              // prompt tells the agent to call check_messages immediately, and
+              // the agent:deliver queued right after (by startBoundRemoteAgents)
+              // dedups / queues while this bootstrap turn is in flight.
               await agent.ensureRuntimeForConversation({
                 conversationId: start.conversationId,
                 resumeSessionId: start.sessionId ?? undefined,
                 wake: false,
+                driverCarrier: frameCarrier(start),
               })
             }
           })
@@ -596,15 +621,21 @@ class ManagedRemoteAgent {
   private readonly runtimes = new Map<string, ConversationRuntime>()
   private readonly pendingTasks = new Map<string, PendingTaskRecord>()
   private readonly latestPlanByConversation = new Map<string, LatestPlanDraft>()
-  // FUNCTIONAL crash-retry state: deliveries we've routed into a conversation
-  // runtime but haven't yet reclaimed. Reclaimed by the api's
-  // `agent:deliveries:completed` frame on success (forgetDeliveries) and drained
-  // to the server's fail-deliveries endpoint on runtime crash / stop so the
-  // backoff worker can reschedule. Capped per conversation (oldest-evicted).
-  // This is SEPARATE from the observability turn snapshot below (ruling R2): a
-  // completed delivery leaves this set but its carrier stays linkable until the
-  // turn's epoch closes.
-  private readonly pendingDeliveryIds = new Map<string, Set<string>>()
+  // FUNCTIONAL crash-retry state, EPOCH-KEYED per conversation: the deliveries
+  // routed into each turn (keyed by its epoch) that haven't yet been reclaimed.
+  // Reclaimed by the api's `agent:deliveries:completed` frame on success
+  // (forgetDeliveries, across all epochs) and drained to the fail-deliveries
+  // endpoint when a turn ends / drops / the runtime closes so the backoff worker
+  // reschedules. Epoch-keying makes the turn-end drain EXACT — a completing turn
+  // A fail-reports only ITS own unconsumed deliveries, never a queued successor
+  // B's (the R3 cross-turn fix). Capped at a per-conversation TOTAL across epochs
+  // (oldest epoch's oldest id evicted). SEPARATE from the observability turn
+  // snapshot below (ruling R2): a completed delivery leaves this set but its
+  // carrier stays linkable until the turn's epoch closes.
+  private readonly pendingDeliveryIds = new Map<
+    string,
+    Map<string, Set<string>>
+  >()
   // Per-DELIVERY W3C trace carriers (from the api's agent:deliver items). One
   // batch fans in deliveries from MANY requests, each with its own trace. Every
   // traced delivery keeps its own carrier here; the turn snapshot (`turns`)
@@ -631,41 +662,88 @@ class ManagedRemoteAgent {
 
   private trackPendingDeliveries(
     conversationId: string,
+    epoch: string,
     deliveryIds: string[]
   ) {
     if (deliveryIds.length === 0) return
-    let set = this.pendingDeliveryIds.get(conversationId)
+    let byEpoch = this.pendingDeliveryIds.get(conversationId)
+    if (!byEpoch) {
+      byEpoch = new Map<string, Set<string>>()
+      this.pendingDeliveryIds.set(conversationId, byEpoch)
+    }
+    let set = byEpoch.get(epoch)
     if (!set) {
       set = new Set<string>()
-      this.pendingDeliveryIds.set(conversationId, set)
+      byEpoch.set(epoch, set)
     }
     for (const id of deliveryIds) set.add(id)
-    // Bound the per-conversation set (oldest first — Set preserves insertion
-    // order). An evicted id can no longer be failed-back on crash; the api's
-    // retry worker re-notifies it, so this is loss-of-eagerness only.
-    while (set.size > MAX_PENDING_DELIVERY_IDS_PER_CONVERSATION) {
-      const oldest = set.values().next().value
-      if (oldest === undefined) break
-      set.delete(oldest)
-      this.deliveryCarriers.delete(oldest)
-    }
-  }
-
-  private drainPendingDeliveries(conversationId: string): string[] {
-    const set = this.pendingDeliveryIds.get(conversationId)
-    if (!set || set.size === 0) return []
-    const ids = [...set]
-    this.pendingDeliveryIds.delete(conversationId)
-    return ids
+    this.enforcePendingCap(conversationId, byEpoch)
   }
 
   /**
-   * Record the driver frame that raised a non-delivery turn (agent:start with a
-   * conversation / agent:task:resolved), so the turn's lifecycle callbacks link
-   * that trace. Public because the driver frames are handled in the supervisor.
+   * Bound the per-conversation pending set at MAX total ids ACROSS epochs. Evicts
+   * from the oldest epoch (first in FIFO insertion order), oldest id first — so
+   * the newest turn's deliveries are never dropped. An evicted id can no longer
+   * be failed-back on crash; the api's retry worker re-notifies it (this is
+   * loss-of-eagerness only), and its stashed carrier is dropped in lockstep.
    */
-  noteTurnDriver(conversationId: string, carrier: TraceCarrier | undefined) {
-    this.turns.noteDriver(conversationId, carrier)
+  private enforcePendingCap(
+    conversationId: string,
+    byEpoch: Map<string, Set<string>>
+  ) {
+    let total = 0
+    for (const set of byEpoch.values()) total += set.size
+    while (total > MAX_PENDING_DELIVERY_IDS_PER_CONVERSATION) {
+      const oldestEpoch = byEpoch.keys().next().value
+      if (oldestEpoch === undefined) break
+      const set = byEpoch.get(oldestEpoch)
+      const oldestId = set?.values().next().value
+      if (!set || oldestId === undefined) {
+        byEpoch.delete(oldestEpoch)
+        continue
+      }
+      set.delete(oldestId)
+      this.deliveryCarriers.delete(oldestId)
+      if (set.size === 0) byEpoch.delete(oldestEpoch)
+      total -= 1
+    }
+    if (byEpoch.size === 0) this.pendingDeliveryIds.delete(conversationId)
+  }
+
+  /** True if the delivery id is still pending under ANY epoch of the conversation. */
+  private hasPendingDelivery(
+    conversationId: string,
+    deliveryId: string
+  ): boolean {
+    const byEpoch = this.pendingDeliveryIds.get(conversationId)
+    if (!byEpoch) return false
+    for (const set of byEpoch.values()) {
+      if (set.has(deliveryId)) return true
+    }
+    return false
+  }
+
+  /** Drain + remove ONE turn epoch's pending delivery ids (turn end / drop). */
+  private drainEpochDeliveries(
+    conversationId: string,
+    epoch: string
+  ): string[] {
+    const byEpoch = this.pendingDeliveryIds.get(conversationId)
+    if (!byEpoch) return []
+    const set = byEpoch.get(epoch)
+    byEpoch.delete(epoch)
+    if (byEpoch.size === 0) this.pendingDeliveryIds.delete(conversationId)
+    return set ? [...set] : []
+  }
+
+  /** Drain + remove EVERY epoch's pending delivery ids (runtime close). */
+  private drainConversationDeliveries(conversationId: string): string[] {
+    const byEpoch = this.pendingDeliveryIds.get(conversationId)
+    if (!byEpoch) return []
+    const ids: string[] = []
+    for (const set of byEpoch.values()) ids.push(...set)
+    this.pendingDeliveryIds.delete(conversationId)
+    return ids
   }
 
   /**
@@ -677,10 +755,13 @@ class ManagedRemoteAgent {
    * cannot strip the running turn's origin links.
    */
   private forgetDeliveries(conversationId: string, deliveryIds: string[]) {
-    const set = this.pendingDeliveryIds.get(conversationId)
-    if (!set) return
-    for (const id of deliveryIds) set.delete(id)
-    if (set.size === 0) this.pendingDeliveryIds.delete(conversationId)
+    const byEpoch = this.pendingDeliveryIds.get(conversationId)
+    if (!byEpoch) return
+    for (const [epoch, set] of byEpoch) {
+      for (const id of deliveryIds) set.delete(id)
+      if (set.size === 0) byEpoch.delete(epoch)
+    }
+    if (byEpoch.size === 0) this.pendingDeliveryIds.delete(conversationId)
   }
 
   /** Reclaim deliveries the api observed completing (pending set only). */
@@ -774,69 +855,107 @@ class ManagedRemoteAgent {
 
   async ensureRuntimeForConversation(params: {
     conversationId: string
+    epoch?: string
     resumeSessionId?: string
     wake?: boolean
     syntheticPrompt?: string
+    driverCarrier?: TraceCarrier
   }) {
-    const driver = tryGetDriver(this.runtimeKind)
-    if (!driver) {
-      const reason = `No driver registered for ${this.runtimeKind}`
-      this.publishStatus({
-        conversationId: params.conversationId,
-        state: "error",
-        statusText: reason,
-        lastError: reason,
-      })
-      throw new Error(reason)
-    }
-    const detected = driver.detect()
-    const runtimePath = this.runtimePath?.trim() || detected.executablePath
-    if (detected.status !== "available" || !runtimePath) {
-      const reason = describeRuntimeCatalogIssue(detected)
-      this.publishStatus({
-        conversationId: params.conversationId,
-        state: "error",
-        statusText: reason,
-        lastError: reason,
-      })
-      throw new Error(reason)
-    }
+    // The turn's epoch, resolved FIRST so the failure path below can reclaim its
+    // observability bucket no matter where the start fails: the api-minted
+    // `turn_epoch` for a delivery wake, else a daemon-minted id for a
+    // non-delivery wake (agent:start / task-resolved fallback). The matching
+    // ConversationTurns bucket is opened under the SAME epoch (here via
+    // noteDriver, or by the delivery path's noteDeliveries), so `frontEpoch` and
+    // the runtime's `runningEpoch` stay in lockstep.
+    const epoch = params.epoch ?? randomUUID()
+    try {
+      const driver = tryGetDriver(this.runtimeKind)
+      if (!driver) {
+        const reason = `No driver registered for ${this.runtimeKind}`
+        this.publishStatus({
+          conversationId: params.conversationId,
+          state: "error",
+          statusText: reason,
+          lastError: reason,
+        })
+        throw new Error(reason)
+      }
+      const detected = driver.detect()
+      const runtimePath = this.runtimePath?.trim() || detected.executablePath
+      if (detected.status !== "available" || !runtimePath) {
+        const reason = describeRuntimeCatalogIssue(detected)
+        this.publishStatus({
+          conversationId: params.conversationId,
+          state: "error",
+          statusText: reason,
+          lastError: reason,
+        })
+        throw new Error(reason)
+      }
 
-    let runtime = this.runtimes.get(params.conversationId)
-    const initialPrompt =
-      params.syntheticPrompt ??
-      buildBootstrapPrompt({
-        remoteAgentId: this.params.remoteAgentId,
-        runtimeKind: this.runtimeKind,
+      const wasFresh = !this.runtimes.has(params.conversationId)
+      let runtime = this.runtimes.get(params.conversationId)
+      const initialPrompt =
+        params.syntheticPrompt ??
+        buildBootstrapPrompt({
+          remoteAgentId: this.params.remoteAgentId,
+          runtimeKind: this.runtimeKind,
+          conversationId: params.conversationId,
+          workingDirectory: this.localRootPath ?? "",
+        })
+      if (!runtime) {
+        runtime = new ConversationRuntime({
+          remoteAgentId: this.params.remoteAgentId,
+          conversationId: params.conversationId,
+          runtimeKind: this.runtimeKind,
+          runtimePath,
+          rootDirectory: this.stateDirectory,
+          localRootPath: this.localRootPath,
+          serverUrl: this.params.config.serverUrl,
+          machineKey: this.params.config.apiKey,
+          proxyUrl: this.params.config.proxyUrl,
+          resumeSessionId: params.resumeSessionId,
+          callbacks: this.buildRuntimeCallbacks(),
+        })
+        this.runtimes.set(params.conversationId, runtime)
+      }
+      // Note the driver frame's carrier under the epoch this call actually
+      // OPENS — a fresh bootstrap or a wake. For an already-live idle runtime
+      // with no wake (a redundant agent:start), no turn opens, so noting would
+      // leave an orphan front bucket and break the frontEpoch⇔runningEpoch
+      // lockstep.
+      const opensTurn = wasFresh || params.wake === true
+      if (opensTurn && params.driverCarrier) {
+        this.turns.noteDriver(
+          params.conversationId,
+          epoch,
+          params.driverCarrier
+        )
+      }
+      await runtime.ensureStarted(initialPrompt, epoch)
+      if (params.wake) {
+        await runtime.sendPrompt(
+          epoch,
+          params.syntheticPrompt ?? buildWakePrompt()
+        )
+      }
+      this.publishStatus({
         conversationId: params.conversationId,
-        workingDirectory: this.localRootPath ?? "",
+        state: "running",
+        statusText: "Processing messages",
       })
-    if (!runtime) {
-      runtime = new ConversationRuntime({
-        remoteAgentId: this.params.remoteAgentId,
-        conversationId: params.conversationId,
-        runtimeKind: this.runtimeKind,
-        runtimePath,
-        rootDirectory: this.stateDirectory,
-        localRootPath: this.localRootPath,
-        serverUrl: this.params.config.serverUrl,
-        machineKey: this.params.config.apiKey,
-        proxyUrl: this.params.config.proxyUrl,
-        resumeSessionId: params.resumeSessionId,
-        initialPrompt,
-        callbacks: this.buildRuntimeCallbacks(),
-      })
-      this.runtimes.set(params.conversationId, runtime)
+    } catch (error) {
+      // The turn never armed (driver reject) or its bootstrap start threw and
+      // reset the gate — either way `epoch` will receive no terminal, so reclaim
+      // its observability snapshot here so `frontEpoch` never wedges on a dead
+      // turn (which would corrupt the api's Δ4 epoch reconcile forever). The
+      // caller (enqueueDeliveries' catch) fail-reports the deliveries. A no-op
+      // when this call opened no bucket for `epoch` (e.g. a guard reject before
+      // noteDriver on the agent:start path).
+      this.turns.end(params.conversationId, epoch)
+      throw error
     }
-    await runtime.ensureStarted()
-    if (params.wake) {
-      await runtime.sendPrompt(params.syntheticPrompt ?? buildWakePrompt())
-    }
-    this.publishStatus({
-      conversationId: params.conversationId,
-      state: "running",
-      statusText: "Processing messages",
-    })
   }
 
   async enqueueDeliveries(deliveries: Delivery[]) {
@@ -847,32 +966,46 @@ class ManagedRemoteAgent {
       byConversation.set(delivery.conversationId, list)
     }
     for (const [conversationId, items] of byConversation) {
-      // Remember EVERY traced delivery's own carrier (see the deliveryCarriers
+      // Dedup against the pending set (ALL epochs): the api's retry worker
+      // re-fires a still-pending delivery every ~10s (often under a NEW epoch),
+      // and while its turn is in flight we must not raise a duplicate wake. Only
+      // genuinely-new deliveries proceed; a delivery leaves the pending set only
+      // on completion (forgetDeliveries) or when its turn ends / drops (drain +
+      // fail-report), after which the next re-fire is fresh again — one turn per
+      // reschedule, never a double.
+      const fresh = items.filter(
+        (item) => !this.hasPendingDelivery(conversationId, item.deliveryId)
+      )
+      if (fresh.length === 0) continue
+      // One epoch per conversation slice — the api mints ONE `turn_epoch` for the
+      // whole (agent, conversation) dispatch. Absent (un-upgraded api during the
+      // daemon-first cutover) ⇒ the daemon self-mints so the turn is still
+      // epoch-scoped end to end.
+      const epoch = items[0]?.turnEpoch ?? randomUUID()
+      // Remember EVERY fresh delivery's own carrier (see the deliveryCarriers
       // doc) — within-batch contexts are preserved per delivery, not collapsed
-      // into a last-writer-wins conversation slot. The routing work below runs
-      // inside a carrier scope only when this conversation's slice of the
-      // batch has ONE distinct origin trace; a mixed-origin slice runs
-      // untraced (its failure report still carries every per-delivery
-      // carrier).
-      for (const item of items) {
+      // into a last-writer-wins slot.
+      for (const item of fresh) {
         this.deliveryCarriers.set(item.deliveryId, frameCarrier(item))
       }
-      const deliveryIds = items.map((item) => item.deliveryId)
-      // The deliveries routed into this conversation ARE the current turn's
-      // origins — the callbacks below read them via `turns` (not the whole
-      // conversation's pending set, the F3 collapse).
-      this.turns.noteDeliveries(conversationId, deliveryIds)
+      const deliveryIds = fresh.map((item) => item.deliveryId)
+      // The fresh deliveries routed into this turn ARE its origins — the
+      // callbacks read them via `turns` under THIS epoch (not the whole
+      // conversation's pending set: the F3 collapse the R3 epoch-keying undoes).
+      this.turns.noteDeliveries(conversationId, epoch, deliveryIds)
       const scope = this.deliveryCarriers.scopeFor(deliveryIds)
       await runWithCarrier(scope, async () => {
-        this.trackPendingDeliveries(conversationId, deliveryIds)
+        this.trackPendingDeliveries(conversationId, epoch, deliveryIds)
         const hasRuntime = this.runtimes.has(conversationId)
         try {
           await this.ensureRuntimeForConversation({
             conversationId,
+            epoch,
             // A fresh runtime starts with the bootstrap prompt, which already
             // instructs the agent to check_messages; piling another wake
             // prompt on top would duplicate the turn. An existing runtime
-            // needs the wake nudge to notice new work.
+            // needs the wake nudge (queued behind any in-flight turn) to
+            // notice new work.
             wake: hasRuntime,
           })
         } catch (error) {
@@ -881,7 +1014,7 @@ class ManagedRemoteAgent {
             "error",
             `remote-agent:${this.params.remoteAgentId}`,
             "Routing deliveries to conversation runtime failed; reporting back to server",
-            { conversationId, count: items.length, error: message }
+            { conversationId, count: fresh.length, error: message }
           )
           await this.reportDeliveryFailure(deliveryIds, message, conversationId)
           return
@@ -890,7 +1023,7 @@ class ManagedRemoteAgent {
           "debug",
           `remote-agent:${this.params.remoteAgentId}`,
           "Routed deliveries to conversation runtime",
-          { conversationId, count: items.length }
+          { conversationId, count: fresh.length }
         )
       })
     }
@@ -899,12 +1032,12 @@ class ManagedRemoteAgent {
   async resolveTask(message: TaskResolvedMessage) {
     const task = parseResolvedTaskPayload(message.task)
     const pending = this.pendingTasks.get(message.taskId)
-    // The task-resolver frame drives this turn (a non-delivery driver), so its
-    // carrier scopes the conversation's continuation callbacks.
-    const drivenConversationId = pending?.conversationId ?? task.conversationId
-    if (drivenConversationId) {
-      this.turns.noteDriver(drivenConversationId, frameCarrier(message))
-    }
+    // The task-resolver frame drives this turn (a non-delivery driver). When it
+    // RESUMES a paused turn (respondPermission below) its carrier is noted under
+    // that turn's running epoch; when it re-wakes via a synthetic prompt
+    // (fallback) the carrier rides ensureRuntimeForConversation's driverCarrier
+    // and is noted under the fresh epoch.
+    const driverCarrier = frameCarrier(message)
     if (!pending) {
       log(
         "warn",
@@ -914,14 +1047,26 @@ class ManagedRemoteAgent {
       )
       const conversationId = task.conversationId
       if (!conversationId) return
-      await this.applyResolvedTaskFallback(conversationId, task)
+      await this.applyResolvedTaskFallback(conversationId, task, driverCarrier)
       return
     }
     this.pendingTasks.delete(message.taskId)
     const runtime = this.runtimes.get(pending.conversationId)
     if (!runtime) {
-      await this.applyResolvedTaskFallback(pending.conversationId, task)
+      await this.applyResolvedTaskFallback(
+        pending.conversationId,
+        task,
+        driverCarrier
+      )
       return
+    }
+    // Link the resolve trace to the RUNNING (paused) turn so the resumed tool
+    // calls / completion join it. runningEpoch and frontEpoch are in lockstep;
+    // the ?? is a defensive fallback for a turn observed only via `turns`.
+    const openEpoch =
+      runtime.runningEpoch ?? this.turns.frontEpoch(pending.conversationId)
+    if (openEpoch) {
+      this.turns.noteDriver(pending.conversationId, openEpoch, driverCarrier)
     }
 
     if (pending.kind === "user_input") {
@@ -940,7 +1085,11 @@ class ManagedRemoteAgent {
           statusText: "Continuing after user input",
         })
       } catch (error) {
-        await this.applyResolvedTaskFallback(pending.conversationId, task)
+        await this.applyResolvedTaskFallback(
+          pending.conversationId,
+          task,
+          driverCarrier
+        )
       }
       return
     }
@@ -965,19 +1114,25 @@ class ManagedRemoteAgent {
       })
     } catch (error) {
       this.latestPlanByConversation.delete(pending.conversationId)
-      await this.applyResolvedTaskFallback(pending.conversationId, task)
+      await this.applyResolvedTaskFallback(
+        pending.conversationId,
+        task,
+        driverCarrier
+      )
     }
   }
 
   private async applyResolvedTaskFallback(
     conversationId: string,
-    task: ResolvedTaskPayload
+    task: ResolvedTaskPayload,
+    driverCarrier: TraceCarrier | undefined
   ) {
     if (task.kind === "user_input" && task.lifecycleStatus === "completed") {
       await this.ensureRuntimeForConversation({
         conversationId,
         wake: true,
         syntheticPrompt: buildResolvedUserInputPrompt(task),
+        driverCarrier,
       })
       return
     }
@@ -987,6 +1142,7 @@ class ManagedRemoteAgent {
         conversationId,
         wake: true,
         syntheticPrompt: planPrompt,
+        driverCarrier,
       })
     }
   }
@@ -1050,38 +1206,72 @@ class ManagedRemoteAgent {
         }
       ),
       onTurnCompleted: this.turns.scoped(
-        (conversationId: string, info: { hadError: boolean }) => {
-          // Turn ended cleanly: clear last_error so the UI doesn't show a
-          // stale alarm. Turn ended with an error: leave it alone (the
-          // corresponding onError already wrote the message; we don't want
-          // turn_completed to clobber it). The wire convention is:
-          //   lastError: ""     -> server clears
-          //   lastError: null   -> server preserves (COALESCE)
-          //   lastError: "msg"  -> server sets
-          this.publishStatus({
+        (
+          conversationId: string,
+          info: { hadError: boolean; epoch: string }
+        ) => {
+          // Δ3: reclaim exactly THIS turn's still-pending deliveries (never a
+          // queued successor's) before ending its snapshot. Any that survived to
+          // here never received an api completion frame, so fail-report them → the
+          // api reschedules (at-least-once). Drain + end BEFORE publishStatus so
+          // the status' turn_epoch reflects the NEXT queued turn (or null), not
+          // the one that just ended.
+          const strandedIds = this.drainEpochDeliveries(
             conversationId,
-            state: "idle",
-            statusText: "Idle",
-            lastError: info.hadError ? null : "",
-          })
-          // The turn's epoch closes here — its observability snapshot is dropped
-          // (NOT on delivery completion; ruling R2). A later turn re-notes fresh.
-          this.turns.end(conversationId)
+            info.epoch
+          )
+          this.turns.end(conversationId, info.epoch)
+          // After ending A, the front epoch is A's queued successor B (which
+          // `advanceGate` dispatches immediately after this callback) or null.
+          // A non-null front means the conversation is NOT idle — publish
+          // running so the UI never blinks idle mid-backlog; publishStatus reads
+          // frontEpoch, so its turn_epoch reconciles the api to B either way.
+          // last_error convention (both states): clean turn ("") clears the UI
+          // alarm; errored turn (null) preserves the message onError already
+          // wrote (COALESCE) rather than clobbering it.
+          const nextEpoch = this.turns.frontEpoch(conversationId)
+          this.publishStatus(
+            nextEpoch
+              ? {
+                  conversationId,
+                  state: "running",
+                  statusText: "Processing messages",
+                  lastError: info.hadError ? null : "",
+                }
+              : {
+                  conversationId,
+                  state: "idle",
+                  statusText: "Idle",
+                  lastError: info.hadError ? null : "",
+                }
+          )
+          if (strandedIds.length > 0) {
+            // Context-free fire-and-forget; reportDeliveryFailure re-establishes
+            // its own single-origin/masked scope for the POST.
+            detach(() =>
+              this.reportDeliveryFailure(
+                strandedIds,
+                "turn ended without delivery completion",
+                conversationId
+              )
+            )
+          }
         }
       ),
       onError: this.turns.scoped((conversationId: string, message: string) => {
+        // An `error` event is NOT terminal — the turn's own terminal
+        // (turn_completed on a clean/errored end, or onTurnDropped on session
+        // death) always follows and owns the epoch-scoped delivery drain.
+        // Draining here would be both redundant and WRONG: a whole-conversation
+        // sweep would also fail-report a queued successor turn's deliveries, and
+        // a codex non-terminal error would strand a turn that then completes
+        // normally. So this callback ONLY surfaces the error into the status.
         this.publishStatus({
           conversationId,
           state: "error",
           statusText: message,
           lastError: message,
         })
-        const ids = this.drainPendingDeliveries(conversationId)
-        if (ids.length > 0) {
-          // Context-free fire-and-forget; reportDeliveryFailure re-establishes
-          // its own single-origin/masked scope for the POST.
-          detach(() => this.reportDeliveryFailure(ids, message, conversationId))
-        }
       }),
       onUserInputRequested: this.turns.scoped(
         async (
@@ -1225,15 +1415,38 @@ class ManagedRemoteAgent {
       ),
       onClosed: this.turns.scoped((conversationId: string, reason: string) => {
         this.runtimes.delete(conversationId)
-        // Fix F3 extra-finding (a): a runtime close must drain + fail-report the
-        // conversation's still-pending deliveries so the retry worker reschedules
-        // (they were never leaked), then close the turn's epoch.
-        const ids = this.drainPendingDeliveries(conversationId)
+        // A runtime close is conversation-wide (the subprocess is gone, so no
+        // queued successor turn survives): drain + fail-report EVERY epoch's
+        // still-pending deliveries so the retry worker reschedules them (they
+        // were never leaked), then drop all of the conversation's turn snapshots.
+        const ids = this.drainConversationDeliveries(conversationId)
         if (ids.length > 0) {
           detach(() => this.reportDeliveryFailure(ids, reason, conversationId))
         }
-        this.turns.end(conversationId)
+        this.turns.endConversation(conversationId)
       }),
+      onTurnDropped: this.turns.scoped(
+        (conversationId: string, epoch: string) => {
+          // A single turn was stranded before its own terminal (the session died
+          // with it running / queued, or a wake was evicted from a full queue).
+          // Reclaim JUST that epoch's still-pending deliveries and fail-report
+          // them → the api reschedules (at-least-once), then end that one
+          // snapshot. No publishStatus: a dropped queued turn never became the
+          // running turn, and a dropped running turn's death is surfaced by the
+          // preceding onError / the reconnect; onClosed owns the whole-conv case.
+          const ids = this.drainEpochDeliveries(conversationId, epoch)
+          if (ids.length > 0) {
+            detach(() =>
+              this.reportDeliveryFailure(
+                ids,
+                "turn dropped before completion",
+                conversationId
+              )
+            )
+          }
+          this.turns.end(conversationId, epoch)
+        }
+      ),
     }
   }
 
@@ -1260,6 +1473,14 @@ class ManagedRemoteAgent {
     lastError?: string | null
   }) {
     const conversationId = params.conversationId ?? undefined
+    // Publish the RUNNING turn's epoch (front of the FIFO) so the api can
+    // reconcile its epoch-keyed turn carrier to the daemon's authoritative view:
+    // a later status wins only when its epoch is fresher (Δ4), and an idle(null)
+    // that races a freshly-armed turn cannot wipe that turn's bucket. null when
+    // the conversation has no open turn (idle) or the status is agent-wide.
+    const turnEpoch = conversationId
+      ? this.turns.frontEpoch(conversationId)
+      : null
     this.params.daemon.send({
       type: "agent:status",
       remote_agent_id: this.params.remoteAgentId,
@@ -1270,6 +1491,7 @@ class ManagedRemoteAgent {
       session_id: params.sessionId ?? null,
       last_error: params.lastError ?? null,
       run_key: params.runKey ?? null,
+      turn_epoch: turnEpoch,
       capabilities: runtimeCapabilitiesToWire(this.runtimeCapabilities()),
       ...activeWireTraceFields(),
     } satisfies RemoteAgentStatusMessage)

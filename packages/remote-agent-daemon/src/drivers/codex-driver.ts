@@ -204,6 +204,18 @@ class CodexAgentSession implements AgentSession {
   private currentModel: string | undefined
   private requestSeq = 0
   private readonly pendingRequests = new Map<string, JsonRpcMethod>()
+  // The JSON-RPC request id of the turn-bearing request currently outstanding
+  // (thread/start, thread/resume, or turn/start). A generic JSON-RPC error
+  // emits a terminal `turn_completed` ONLY when it matches this id (§5d) — so a
+  // late error for an already-completed turn, or an error for a fire-and-forget
+  // request (collaborationMode/list), never fabricates a spurious terminal.
+  private outstandingTurnRequestId: string | undefined
+  // Armed at `attach()` before `initialize`, cleared by the FIRST terminal of
+  // any kind. Covers the bootstrap window where §5a has already armed the
+  // runtime gate but no turn-bearing request id exists yet: an `initialize` /
+  // pre-`thread/start` error with the child still alive must still complete the
+  // seeded bootstrap turn instead of freezing it (Δ2).
+  private bootstrapOutstanding = false
   private readonly pendingPermissions = new Map<
     string,
     (decision: PermissionDecision) => void
@@ -242,9 +254,16 @@ class CodexAgentSession implements AgentSession {
         kind: "error",
         message: `codex app-server exited (code=${code ?? "?"} signal=${signal ?? "?"})`,
       })
+      // Session death is a terminal for whatever turn was outstanding.
+      this.outstandingTurnRequestId = undefined
+      this.bootstrapOutstanding = false
       this.eventQueue.push({ kind: "turn_completed" })
       this.eventQueue.close()
     })
+    // Arm the bootstrap terminal guard BEFORE initialize: §5a has already armed
+    // the runtime gate for the seeded turn, but no turn-bearing request id
+    // exists until thread/start (Δ2).
+    this.bootstrapOutstanding = true
     this.sendRequest("initialize", {
       clientInfo: {
         name: "synapse_remote_agent",
@@ -271,13 +290,30 @@ class CodexAgentSession implements AgentSession {
     }
 
     if (event.id !== undefined && "error" in event) {
+      const requestId = String(event.id)
+      this.pendingRequests.delete(requestId)
       this.eventQueue.push({
         kind: "error",
         message: String(
           event.error?.message ?? "codex app-server request failed"
         ),
       })
-      this.eventQueue.push({ kind: "turn_completed" })
+      // Emit the terminal ONLY when this error belongs to the turn-bearing
+      // request (§5d), or — during bootstrap, before any turn id is tracked —
+      // when it aborts the seeded bootstrap turn (Δ2). A late error for an
+      // already-completed turn, or one for a fire-and-forget request while a
+      // turn id IS tracked, emits no terminal (it would double-complete).
+      if (requestId === this.outstandingTurnRequestId) {
+        this.outstandingTurnRequestId = undefined
+        this.bootstrapOutstanding = false
+        this.eventQueue.push({ kind: "turn_completed" })
+      } else if (
+        this.bootstrapOutstanding &&
+        this.outstandingTurnRequestId === undefined
+      ) {
+        this.bootstrapOutstanding = false
+        this.eventQueue.push({ kind: "turn_completed" })
+      }
       return
     }
 
@@ -296,15 +332,19 @@ class CodexAgentSession implements AgentSession {
       case "initialize":
         this.sendNotification("initialized")
         this.sendRequest("collaborationMode/list", {})
+        // thread/start|resume is the first turn-bearing request of the bootstrap
+        // turn: track its id so an error on it (or the turn/start it chains to,
+        // re-tracked in startTurn) fires the terminal via the §5d id match.
+        // collaborationMode/list is fire-and-forget and stays untracked.
         if (this.threadId) {
-          this.sendRequest("thread/resume", {
+          this.outstandingTurnRequestId = this.sendRequest("thread/resume", {
             threadId: this.threadId,
             cwd: this.workingDirectory,
             approvalPolicy: "never",
             config: defaultThreadConfig(),
           } satisfies ThreadResumeParams)
         } else {
-          this.sendRequest("thread/start", {
+          this.outstandingTurnRequestId = this.sendRequest("thread/start", {
             cwd: this.workingDirectory,
             approvalPolicy: "never",
             sandbox: "workspace-write",
@@ -364,6 +404,11 @@ class CodexAgentSession implements AgentSession {
             message: errorMessage,
           })
         }
+        // The turn's authoritative terminal — clear the outstanding-turn guard so
+        // a later stray error on the same id cannot re-emit, and close the
+        // bootstrap window (Δ2).
+        this.outstandingTurnRequestId = undefined
+        this.bootstrapOutstanding = false
         this.eventQueue.push({ kind: "turn_completed" })
         break
       }
@@ -467,10 +512,14 @@ class CodexAgentSession implements AgentSession {
     }
   }
 
-  private sendRequest(method: JsonRpcMethod, params: Record<string, unknown>) {
+  private sendRequest(
+    method: JsonRpcMethod,
+    params: Record<string, unknown>
+  ): string {
     const id = `req-${++this.requestSeq}`
     this.pendingRequests.set(id, method)
     writeJsonLine(this.child, { jsonrpc: "2.0", id, method, params })
+    return id
   }
 
   private sendNotification(method: string, params?: Record<string, unknown>) {
@@ -502,7 +551,13 @@ class CodexAgentSession implements AgentSession {
       },
       ...(this.currentModel ? { model: this.currentModel } : {}),
     }
-    this.sendRequest("turn/start", codexTurnStartParamsToRequestParams(params))
+    // turn/start is the turn-bearing request once the thread exists: re-track its
+    // id (superseding the thread/start id) so a turn/start error fires the
+    // terminal via the §5d match, for both the bootstrap and every later turn.
+    this.outstandingTurnRequestId = this.sendRequest(
+      "turn/start",
+      codexTurnStartParamsToRequestParams(params)
+    )
   }
 
   async send(prompt: string, _options?: SendPromptOptions) {

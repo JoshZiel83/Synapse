@@ -73,6 +73,7 @@ test("parseServerMessage validates delivery and task-resolved frames", () => {
           deliveryId: "delivery-1",
           conversationId: "conversation-1",
           itemId: "item-1",
+          turnEpoch: undefined,
           traceparent: undefined,
           tracestate: undefined,
         },
