@@ -15,10 +15,26 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 > In `0.x`, a **minor** bump (`0.Y.0`) marks a consumer-facing break (REST/WebSocket routes
 > and DTOs, the device-protocol wire contract, `@synapse/shared` exports, authentication, or
 > a removed capability) and a **patch** (`0.y.Z`) is backward compatible. The tagged versions
-> below retroactively reconstruct the history of the `dev` line; the package manifests
-> themselves remain at `0.1.0` until a release is cut.
+> below through `0.27.0` retroactively reconstruct the history of the `dev` line, during
+> which the package manifests stayed at `0.1.0`; `0.28.0` is the first release published to
+> the package registry, and from it onward the manifests carry the released version.
 
 ## [Unreleased]
+
+## [0.28.0] - 2026-07-24
+
+Distributed-tracing round-3 correctness fix (commits `c068aef3`, `9b5a30c8`, `92645a74`): turn-scoped trace correlation for reverse-MCP tool calls across interleaved conversation wakes (F-r3-2). It changes the remote-agent daemon wire contract and requires a **coordinated redeploy** — the hard build order and post-recreate checks are the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7, with the R3 daemon-first cutover order in §7.4. No database schema changed, so this release needs no `db:rebuild`.
+
+This is also the first release in which the package manifests leave `0.1.0`: the coordinated set — `@synapse/device-protocol`, `@synapse/shared`, `@synapse/device-runtime`, `@synapse/device-sdk`, `@synapse/api`, and `@synapse/remote-agent-daemon` — is bumped in lockstep to `0.28.0`, and the four runtime packages are published to the private package registry. The platform runtime bundles stay decoupled at their own version.
+
+### Changed
+
+- **Breaking:** the remote-agent daemon wire gains an optional `turn_epoch` on both `agent:deliver` (api→daemon) and `agent:status` (daemon→api). Both frames validate as `z.strictObject`, so a peer built before this change strict-rejects the whole frame instead of ignoring the new field. Publishing to the registry stays dependency-ordered — `@synapse/device-protocol` → `shared` → `device-runtime` → `remote-agent-daemon` last (`deploy.md` §5b) — but the running deployment is rolled out **daemon first**: because the strict field lands on `agent:deliver`, upgrading the daemon ahead of the api keeps the delivery path clean (an old api simply omits the field), leaving only the daemon's `agent:status` frame dropped by a not-yet-upgraded api (turn correlation degraded, never a lost delivery). The reverse order would strict-reject every `agent:deliver` carrying the field and churn deliveries instead (still at-least-once — nothing is lost). The R3 cutover order is [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7.4.
+- The publishable @synapse packages are now a coordinated-redeploy set pinned to a single exact version; a new `guard:versions` gate (run in `verify:boundary`) enforces the lockstep version, the intra-set exact pins, the decoupled platform bundles, and package-lock sync.
+
+### Fixed
+
+- Interleaved conversation wakes no longer cross traces (F-r3-2): a late reverse-MCP `tools/call` from one turn is attributed to that turn's own delivery origins, never a concurrently-woken successor's. The daemon now holds an authoritative per-turn epoch behind a turn gate (one turn per conversation at a time; racing wakes queue in dispatch order and fire one at a time), the api keys its reverse-MCP span links on the daemon-confirmed running epoch, and turn completion drains exactly that epoch's pending set. A stale-machine-connection reaper finalizes a socket the OS never closed, and each driver emits at most one terminal signal per turn so the gate can never double-advance.
 
 ## [0.27.0] - 2026-07-23
 

@@ -13,10 +13,26 @@
 > 重新部署来处理，而非迁移（见 [`deploy.md`](./deploy.md)）。在 `0.x` 阶段，**次版本号**
 > 递增（`0.Y.0`）表示破坏了某个面向使用方的接口（REST/WebSocket 路由与 DTO、设备协议的
 > wire 格式、`@synapse/shared` 导出、认证，或移除了某项能力），**修订号**递增（`0.y.Z`）
-> 则保持向后兼容。下方带标签的版本是对 `dev` 线历史的追溯性重建；在正式发布之前，各包
-> manifest 本身仍保持 `0.1.0`。
+> 则保持向后兼容。下方 `0.27.0` 及更早的带标签版本是对 `dev` 线历史的追溯性重建，其间各包
+> manifest 一直保持 `0.1.0`；`0.28.0` 是首个发布到包注册表的版本，自此各包 manifest 开始
+> 记录已发布的版本号。
 
 ## [Unreleased]
+
+## [0.28.0] - 2026-07-24
+
+分布式追踪 round-3 正确性修复（提交 `c068aef3`、`9b5a30c8`、`92645a74`）：为跨交错会话唤醒的 reverse-MCP 工具调用提供以 turn 为作用域的 trace 关联（F-r3-2）。它改变了 remote-agent daemon 的 wire 契约，需要一次**协同重新部署**——硬构建顺序与重建容器后的核对清单见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的 rollout 运行手册，R3 的 daemon 先行上线顺序见 §7.4。本次无数据库 schema 变更，故无需 `db:rebuild`。
+
+这也是各包 manifest 首次离开 `0.1.0`：`@synapse/device-protocol`、`@synapse/shared`、`@synapse/device-runtime`、`@synapse/device-sdk`、`@synapse/api` 与 `@synapse/remote-agent-daemon` 这组包一同升到 `0.28.0`，其中四个运行时包发布到私有包注册表。平台运行时 bundle 与它们解耦，各自保持原有版本。
+
+### 变更
+
+- **破坏性变更：** remote-agent daemon 的 wire 在 `agent:deliver`（api→daemon）与 `agent:status`（daemon→api）两个方向上新增可选的 `turn_epoch`。两个帧都按 `z.strictObject` 校验，因此此改动之前构建的一端会整体拒收该帧，而非忽略这个新字段。发布到 registry 仍按依赖顺序——`@synapse/device-protocol` → `shared` → `device-runtime` → `remote-agent-daemon` 最后（`deploy.md` §5b）；而在跑的部署改为 **daemon 先行**上线：破坏落在 `agent:deliver` 上，先升级 daemon 再重建 api，投递路径全程不拒帧（旧 api 本就不带这个字段），偏斜窗口内只剩 daemon 的 `agent:status` 帧被尚未升级的 api 丢弃（turn 关联降级，但不丢投递）。反序（api 先行）会让每个带该字段的 `agent:deliver` 被整帧拒收，改为 churn 投递（仍是 at-least-once，不丢数据）。R3 的上线顺序见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7.4。
+- 可发布的 @synapse 包现在是一组协同重新部署、锁定到同一精确版本的集合；新增的 `guard:versions` 门控（在 `verify:boundary` 中运行）强制这组包版本同步递增、组内互相精确 pin、平台 bundle 保持解耦，以及 package-lock 同步。
+
+### 修复
+
+- 交错的会话唤醒不再串 trace（F-r3-2）：某个 turn 上迟到的 reverse-MCP `tools/call` 会归属到该 turn 自己的投递来源，而不会算到一个刚被唤醒的后继 turn 上。daemon 现在以一个权威的 per-turn epoch 为准，并加了一道 turn 门（每个会话同一时刻只跑一个 turn；抢跑的唤醒按派发顺序排队，逐个放行）；api 侧 reverse-MCP 的 span link 以 daemon 确认的运行中 epoch 为 key；turn 结束时精确清空该 epoch 的待处理集合。另有一个陈旧机器连接的回收器，负责收尾操作系统始终未 FIN 的套接字，且每个 driver 每个 turn 至多发出一次终止信号，使这道门不会重复推进。
 
 ## [0.27.0] - 2026-07-23
 

@@ -1,6 +1,6 @@
 {
   "name": "synapse",
-  "version": "0.1.0",
+  "version": "0.28.0",
   "private": true,
   "workspaces": [
     "packages/shared",
@@ -49,6 +49,7 @@
     "test:conformance": "npm run test:conformance -w packages/api",
     "guard:datetime": "node scripts/guard-datetime-boundaries.mjs",
     "guard:logging": "node scripts/guard-logging.mjs",
+    "guard:versions": "node scripts/guard-workspace-versions.mjs",
     "audit:business-enums": "node ./scripts/audit-business-enum-literals.mjs",
     "verify:boundary": "bash ./scripts/verify-boundary.sh",
     "audit:device-runtime-sidecars": "tsx ./scripts/audit-device-runtime-sidecars.mts",

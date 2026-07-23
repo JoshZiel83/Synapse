@@ -16,11 +16,27 @@ proyecto procura seguir el [Versionado Semántico](https://semver.org/lang/es/sp
 > marca una ruptura en una superficie expuesta al consumidor (rutas REST/WebSocket y DTOs, el
 > contrato wire del protocolo de dispositivos, los exports de `@synapse/shared`,
 > la autenticación, o una capacidad eliminada), y un **patch** (`0.y.Z`) es retrocompatible.
-> Las versiones etiquetadas a continuación reconstruyen retroactivamente el historial de la
-> rama `dev`; los archivos de manifiesto de los paquetes siguen en `0.1.0` hasta que se
-> publique una versión.
+> Las versiones etiquetadas a continuación hasta `0.27.0` reconstruyen retroactivamente el
+> historial de la rama `dev`, período durante el cual los manifiestos de los paquetes se
+> mantuvieron en `0.1.0`; `0.28.0` es la primera versión publicada en el registro de
+> paquetes, y a partir de ella los manifiestos llevan la versión publicada.
 
 ## [Unreleased]
+
+## [0.28.0] - 2026-07-24
+
+Corrección de exactitud de la ronda 3 del trazado distribuido (commits `c068aef3`, `9b5a30c8`, `92645a74`): correlación de trazas acotada al turn para las llamadas a herramientas de reverse-MCP a través de despertares de conversación intercalados (F-r3-2). Cambia el contrato wire del daemon de agentes remotos y requiere un **redespliegue coordinado**: el orden de compilación obligatorio y las comprobaciones posteriores al recreate son el runbook de despliegue en [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7, con el orden de cutover daemon-first de R3 en §7.4. No cambió ningún esquema de base de datos, así que esta versión no necesita `db:rebuild`.
+
+Es también la primera versión en la que los manifiestos de los paquetes dejan `0.1.0`: el conjunto coordinado — `@synapse/device-protocol`, `@synapse/shared`, `@synapse/device-runtime`, `@synapse/device-sdk`, `@synapse/api` y `@synapse/remote-agent-daemon` — sube en bloque a `0.28.0`, y los cuatro paquetes de runtime se publican en el registro de paquetes privado. Los bundles de runtime de plataforma permanecen desacoplados en su propia versión.
+
+### Cambiado
+
+- **Cambio incompatible:** el wire del daemon de agentes remotos gana un `turn_epoch` opcional tanto en `agent:deliver` (api→daemon) como en `agent:status` (daemon→api). Ambos frames se validan como `z.strictObject`, así que un par compilado antes de este cambio rechaza el frame entero en lugar de ignorar el campo nuevo. La publicación en el registro sigue el orden de dependencias — `@synapse/device-protocol` → `shared` → `device-runtime` → `remote-agent-daemon` al final (`deploy.md` §5b) —, pero el despliegue en ejecución se actualiza **primero el daemon**: como el campo estricto cae en `agent:deliver`, actualizar el daemon antes que la api mantiene limpia la ruta de entrega (una api antigua simplemente omite el campo) y solo queda el frame `agent:status` del daemon descartado por una api aún sin actualizar (correlación de turns degradada, nunca una entrega perdida). El orden inverso rechazaría cada `agent:deliver` que lleve el campo y provocaría churn de entregas en su lugar (aun así at-least-once, no se pierde nada). El orden de cutover de R3 está en [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7.4.
+- Los paquetes @synapse publicables forman ahora un conjunto de redespliegue coordinado fijado a una única versión exacta; un nuevo guard `guard:versions` (ejecutado en `verify:boundary`) exige el incremento de versión en bloque, los pines exactos dentro del conjunto, los bundles de plataforma desacoplados y la sincronización del package-lock.
+
+### Corregido
+
+- Los despertares de conversación intercalados ya no cruzan trazas (F-r3-2): una llamada `tools/call` de reverse-MCP tardía de un turn se atribuye a los orígenes de entrega de ese mismo turn, nunca a los de un sucesor recién despertado. El daemon mantiene ahora un epoch por turn autoritativo tras una compuerta de turns (un turn por conversación a la vez; los despertares que compiten se encolan en orden de despacho y se liberan de uno en uno), la api fija las span links de reverse-MCP en el epoch en ejecución confirmado por el daemon, y al completarse un turn se vacía exactamente el conjunto pendiente de ese epoch. Un recolector de conexiones de máquina obsoletas finaliza un socket que el sistema operativo nunca cerró (FIN), y cada driver emite como mucho una señal terminal por turn para que la compuerta no pueda avanzar dos veces.
 
 ## [0.27.0] - 2026-07-23
 

@@ -321,7 +321,10 @@ stripped; a rate-limit smoke) — in
 api rebuild is what applies the in-image `@fastify/otel` patch (§8b prerequisite pattern);
 after it, republish the remote-agent daemon (§5b) so paired daemons pick up the new wire
 frames (un-upgraded daemons get `400` until republished, deliveries stay pending — no data
-loss). See the breaking-change list in `CHANGELOG.md`.
+loss). (**R3 / v0.28.0 differs**: its strict wire break lands on `agent:deliver` itself, so
+the running daemon is rolled out **first**, before the api — see
+[`docs/logging-refactor/04-operations.md`](docs/logging-refactor/04-operations.md) §7.4.) See
+the breaking-change list in `CHANGELOG.md`.
 
 ## 8. Verification
 

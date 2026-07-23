@@ -1,6 +1,6 @@
 {
   "name": "@synapse/device-runtime",
-  "version": "0.1.0",
+  "version": "0.28.0",
   "type": "module",
   "publishConfig": {
     "access": "public"
@@ -43,8 +43,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@synapse/device-protocol": "0.1.0",
-    "@synapse/shared": "0.1.0",
+    "@synapse/device-protocol": "0.28.0",
+    "@synapse/shared": "0.28.0",
     "picomatch": "2.3.1",
     "semver": "7.7.4",
     "tar": "7.5.13",

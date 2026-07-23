@@ -1,6 +1,6 @@
 {
   "name": "@synapse/remote-agent-daemon",
-  "version": "0.1.0",
+  "version": "0.28.0",
   "type": "module",
   "publishConfig": {
     "access": "public"
@@ -33,7 +33,7 @@
     "zod": "4.3.6"
   },
   "devDependencies": {
-    "@synapse/device-protocol": "0.1.0",
+    "@synapse/device-protocol": "0.28.0",
     "@types/node": "^25.1.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.16.0",

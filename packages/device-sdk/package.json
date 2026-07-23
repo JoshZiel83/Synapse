@@ -1,6 +1,6 @@
 {
   "name": "@synapse/device-sdk",
-  "version": "0.1.0",
+  "version": "0.28.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -20,8 +20,8 @@
     "lint:fix": "eslint src --fix"
   },
   "dependencies": {
-    "@synapse/device-protocol": "*",
-    "@synapse/shared": "*"
+    "@synapse/device-protocol": "0.28.0",
+    "@synapse/shared": "0.28.0"
   },
   "devDependencies": {
     "typescript": "^5.4.0"

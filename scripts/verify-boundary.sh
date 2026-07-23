@@ -46,6 +46,10 @@ node ./scripts/guard-trace-propagation.mjs
 # Self-test the carrier-contract engine so a future refactor that silently stops
 # detecting ledger drift is caught here rather than passing CI with a dead ratchet.
 node --test ./scripts/guard-trace-propagation.test.mjs
+# Release-cohort version cohesion: the publishable @synapse packages must bump in
+# lockstep, pin each other to the exact cohort version (no `*`/range), keep the
+# platform bundles decoupled, and have the lock in sync. Cheap manifest+lock read.
+node ./scripts/guard-workspace-versions.mjs
 # Patches, two layers. (1) HOST tree: every patch in patches/ is applied to the
 # node_modules this gate runs against. --verify-only is load-bearing — a gate that
 # repairs its own subject reports nothing (CI `npm ci` already fires postinstall).
