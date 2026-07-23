@@ -557,11 +557,13 @@ function installUnifiedToolRegistry(
       {
         kind,
         attributes,
-        // Creation-time links to the turn's delivery-origin traces —
-        // send_message (and every other tool) joins the traces whose
-        // deliveries fed this turn. `originsForToolCall()` marks the epoch
-        // CONSUMED, so the next dispatched wake (`beginTurn`) opens a fresh turn
-        // instead of merging prior turns' origins (F3 reverse-MCP half).
+        // Creation-time links to the RUNNING turn's delivery-origin traces —
+        // send_message (and every other tool) joins the traces whose deliveries
+        // fed this turn. `originsForToolCall()` reads the daemon-confirmed
+        // running epoch's origins non-destructively (stable across the turn's
+        // tools/calls; the front advances only via `reconcile` on agent:status),
+        // so a queued successor's origins never leak in (F3 reverse-MCP half + R3
+        // cross-trace interleave).
         links: deliveryOriginLinks(
           spanScope.turnCarriers.originsForToolCall(),
           parentSpanContext?.traceId

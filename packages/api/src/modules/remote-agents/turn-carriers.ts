@@ -2,88 +2,209 @@ import { isValidTraceparent } from "../../infrastructure/observability/tracepare
 
 /**
  * TURN-scoped cache of a reverse-MCP conversation's delivery-origin
- * traceparents (deduped by trace id, cap 20 — matches the origin_carriers wire
- * cap). Every tools/call span is created with LINKS to the turn's origins.
+ * traceparents, keyed by the api-minted turn epoch (deduped by trace id, cap 20
+ * per epoch — matches the origin_carriers wire cap). Every tools/call span is
+ * created with LINKS to the RUNNING turn's origins.
  *
  * The turn epoch is owned by the api, NOT by agent behaviour: the api dispatches
- * the wake (`agent:deliver`), so `notifyPendingRemoteAgentDeliveries` opens a
- * new turn via `beginTurnForConversation` right after a successful send. The
- * `consumed` flag makes back-to-back delivery batches that feed ONE wake MERGE
- * (both pre-consumption), while a genuinely new wake after the agent has begun a
- * tools/call RESETS the origins — fixing F3's reverse-MCP half (the old
- * session-scoped cache linked every tools/call to prior turns' origins because
- * an active session's cache never reset).
+ * the wake (`agent:deliver`) under a minted epoch, so
+ * `notifyPendingRemoteAgentDeliveries` calls `beginTurnForConversation` with that
+ * epoch right after a successful send.
  *
- * Best-effort caveat: a turn woken by a non-delivery path (an agent that resumes
- * without a fresh `agent:deliver`) does not open an epoch here, so its first
- * tools/call may link the previous delivery-driven turn's origins; `extend`
- * (check_messages / read_history) still refreshes from the live delivery rows.
- * See docs/trace-propagation-policy.md.
+ * The single source of truth for WHICH epoch's origins a tools/call reads is
+ * `runningEpoch` — the last epoch the daemon confirmed as running via
+ * `agent:status.turn_epoch` (`reconcile`). Insertion order of the epoch map is
+ * used ONLY as a capacity-eviction tiebreak, never to decide the running turn:
+ * the api's epoch set is a SUBSET of the daemon's turns (a wake dispatched before
+ * the reverse-MCP transport registers opens no epoch here; the daemon mints its
+ * own epochs for bootstrap / task-resolve wakes), so positional inference of the
+ * front is unsound. Reads follow the daemon; the daemon is authoritative.
+ *
+ * Because reads key on `runningEpoch`, a wake re-fired under a fresh epoch (an
+ * at-least-once retry the daemon dedups) is correctness-harmless: its extra
+ * bucket is never fronted, so it is never read. Such never-fronted buckets are
+ * evicted before any turn the daemon has already run (completed turns first, a
+ * still-queued turn last), so retry churn can never displace a turn the daemon
+ * has yet to front — no membership dedup is needed (an earlier one was a net
+ * regression: `extend` below can seed a successor's origin into the running
+ * bucket, which a membership check misreads as an already-dispatched delivery).
+ *
+ * This fixes F3's reverse-MCP half (the old session-scoped cache linked every
+ * tools/call to prior turns' origins because an active session's cache never
+ * reset) AND R3's cross-trace interleave (a queued successor's origins can never
+ * be read while an earlier turn runs, because reads key on the daemon-confirmed
+ * running epoch — never on "the newest / oldest bucket").
+ *
+ * Best-effort caveats (see docs/trace-propagation-policy.md):
+ *  - Before the daemon confirms the first turn (`runningEpoch` still null) a
+ *    tools/call links nothing; the turn's first `extend` (check_messages /
+ *    read_history) seeds the running epoch's origins from the live delivery rows.
+ *  - `extend` reads EVERY pending delivery of the conversation, not just the
+ *    running turn's, because the delivery row carries no epoch. It links
+ *    CONSERVATIVELY: if the agent polls check_messages mid-turn while a successor
+ *    message is already queued, that successor's origin is also linked onto the
+ *    running turn. This over-links (a benign extra correlation) but never
+ *    UNDER-links — the successor's own turn still links its origin when the
+ *    daemon fronts it — and never mis-routes a read to the wrong turn. Under-
+ *    linking would be the worse error: the daemon may coalesce a separately-
+ *    dispatched delivery into the running turn, so epoch-filtering the rows would
+ *    strip an origin the turn genuinely processed.
  */
 const TURN_CARRIER_CAP = 20
+// Pure memory bound on retained epoch buckets, > the daemon's 100-deep per-
+// conversation turn queue. Eviction NEVER removes the runningEpoch bucket, and
+// prefers completed turns over never-fronted ones (see evictOverflow).
+const MAX_TURN_BUCKETS = 128
 
 export class TurnCarrierCache {
-  private readonly byTraceId = new Map<string, string>()
-  // True once the running turn's origins have been read for a tools/call span
-  // (`originsForToolCall`): the NEXT `beginTurn` then resets rather than merges.
-  private consumed = false
+  private readonly turns = new Map<string, Map<string, string>>()
+  // The daemon's last-confirmed running epoch — the ONLY bucket reads target.
+  // null = daemon idle / no turn confirmed yet ⇒ reads return empty.
+  private runningEpoch: string | null = null
+  // Epochs the daemon has confirmed running at least once (via `reconcile`). A
+  // fronted-but-superseded bucket is a COMPLETED turn; the cap evicts those
+  // before any bucket the daemon has never fronted, so a still-queued turn is
+  // never dropped ahead of stale finished ones (nor ahead of retry churn).
+  private readonly fronted = new Set<string>()
 
-  /**
-   * Merge valid, previously unseen origin traceparents; returns the NEWLY added
-   * ones (the mid-handler post-`addLink` set). Used by check_messages /
-   * read_history as they discover the turn's delivery rows.
-   */
-  extend(traceparents: Array<string | null | undefined>): string[] {
+  private bucket(epoch: string): Map<string, string> {
+    let b = this.turns.get(epoch)
+    if (!b) {
+      b = new Map<string, string>()
+      this.turns.set(epoch, b)
+      this.evictOverflow()
+    }
+    return b
+  }
+
+  // Cap retained buckets. Prefer evicting a COMPLETED turn (an epoch the daemon
+  // fronted and has since superseded) over one it has never fronted; never evict
+  // the confirmed running bucket. Within a tier, oldest-inserted goes first.
+  private evictOverflow(): void {
+    while (this.turns.size > MAX_TURN_BUCKETS) {
+      const victim = this.pickEvictable()
+      if (victim === undefined) break // only the running bucket remains
+      this.turns.delete(victim)
+      this.fronted.delete(victim)
+    }
+  }
+
+  private pickEvictable(): string | undefined {
+    let firstNeverFronted: string | undefined
+    for (const epoch of this.turns.keys()) {
+      if (epoch === this.runningEpoch) continue
+      if (this.fronted.has(epoch)) return epoch // a completed turn — evict first
+      if (firstNeverFronted === undefined) firstNeverFronted = epoch
+    }
+    return firstNeverFronted
+  }
+
+  private static addOrigins(
+    bucket: Map<string, string>,
+    traceparents: Array<string | null | undefined>
+  ): string[] {
     const added: string[] = []
     for (const traceparent of traceparents) {
       if (!isValidTraceparent(traceparent)) continue
       const traceId = traceparent.slice(3, 35)
-      if (this.byTraceId.has(traceId)) continue
-      while (this.byTraceId.size >= TURN_CARRIER_CAP) {
-        const oldest = this.byTraceId.keys().next().value
+      if (bucket.has(traceId)) continue
+      while (bucket.size >= TURN_CARRIER_CAP) {
+        const oldest = bucket.keys().next().value
         if (oldest === undefined) break
-        this.byTraceId.delete(oldest)
+        bucket.delete(oldest)
       }
-      this.byTraceId.set(traceId, traceparent)
+      bucket.set(traceId, traceparent)
       added.push(traceparent)
     }
     return added
   }
 
   /**
-   * Open (or extend) the turn's epoch with the dispatched wake's origins. Clears
-   * FIRST iff the current epoch was already consumed by a tools/call — so
-   * coalesced batches of one wake merge, but a new wake after consumption starts
-   * fresh.
+   * Attach the dispatched wake's origins to its epoch bucket. Does NOT change
+   * `runningEpoch` — a freshly-dispatched wake's bucket stays inert until the
+   * daemon confirms it via `reconcile`.
+   *
+   * No membership dedup: a still-pending delivery re-fired under a fresh minted
+   * epoch just opens another never-fronted bucket that reads never target, so
+   * the churn is memory-only (bounded by the cap's completed-first eviction). A
+   * dedup keyed on "every origin already in the running bucket" is unsound —
+   * `extend` can seed a queued successor's origin into the running bucket, so
+   * that successor's genuine new turn would be misread as a re-delivery and lose
+   * its bucket.
    */
-  beginTurn(traceparents: Array<string | null | undefined>): void {
-    if (this.consumed) {
-      this.byTraceId.clear()
-      this.consumed = false
-    }
-    this.extend(traceparents)
+  beginTurn(
+    epoch: string,
+    traceparents: Array<string | null | undefined>
+  ): void {
+    TurnCarrierCache.addOrigins(this.bucket(epoch), traceparents)
   }
 
   /**
-   * The turn's origin traceparents for a tools/call span's creation-time links,
-   * marking the epoch consumed (so the next dispatched wake opens a new turn).
+   * Merge valid, previously unseen origins into the RUNNING turn's bucket;
+   * returns the NEWLY added ones (the mid-handler post-`addLink` set). Used by
+   * check_messages / read_history as they discover the running turn's delivery
+   * rows. No-op returning `[]` when no turn is confirmed running.
    */
-  originsForToolCall(): string[] {
-    this.consumed = true
-    return [...this.byTraceId.values()]
+  extend(traceparents: Array<string | null | undefined>): string[] {
+    if (this.runningEpoch === null) return []
+    return TurnCarrierCache.addOrigins(
+      this.bucket(this.runningEpoch),
+      traceparents
+    )
   }
 
-  /** The current origins without consuming the epoch (tests / introspection). */
+  /**
+   * Reconcile the running epoch against the daemon's `agent:status.turn_epoch`.
+   * `string` → that epoch is running (get-or-create its bucket; drop nothing —
+   * a still-queued api bucket survives to be read once the daemon fronts it).
+   * `null` → daemon idle (reads return empty; buckets retained so a freshly-
+   * dispatched-but-unconfirmed epoch survives a stale idle status). `undefined`
+   * → no-op (malformed/foreign-frame guard; the daemon always sends the field).
+   */
+  reconcile(confirmedEpoch: string | null | undefined): void {
+    if (confirmedEpoch === undefined) return
+    if (confirmedEpoch === null) {
+      this.runningEpoch = null
+      return
+    }
+    this.runningEpoch = confirmedEpoch
+    this.fronted.add(confirmedEpoch)
+    this.bucket(confirmedEpoch)
+  }
+
+  /**
+   * The RUNNING turn's origin traceparents for a tools/call span's creation-time
+   * links. Non-consuming — the running turn's origins are stable across all of
+   * its tools/calls; the front advances only via `reconcile`. Empty when no turn
+   * is confirmed running.
+   */
+  originsForToolCall(): string[] {
+    if (this.runningEpoch === null) return []
+    const bucket = this.turns.get(this.runningEpoch)
+    return bucket ? [...bucket.values()] : []
+  }
+
+  /** The confirmed running epoch (tests / introspection). */
+  frontEpoch(): string | null {
+    return this.runningEpoch
+  }
+
+  /** The running turn's origins without side effects (tests / introspection). */
   list(): string[] {
-    return [...this.byTraceId.values()]
+    return this.originsForToolCall()
+  }
+
+  /** Retained epoch-bucket count (tests / introspection) — the memory bound. */
+  bucketCount(): number {
+    return this.turns.size
   }
 }
 
 // ─── process-local registry ─────────────────────────────────────────────────
-// Lets service.ts (which dispatches the wake) reach the reverse-MCP session's
-// cache (owned by mcp-endpoint.ts) WITHOUT an import cycle — both import this
-// leaf module. Keyed `${remoteAgentId}:${conversationId}`; a conversation can
-// have more than one live transport, so the value is a Set.
+// Lets service.ts (which dispatches the wake and receives agent:status) reach
+// the reverse-MCP session's cache (owned by mcp-endpoint.ts) WITHOUT an import
+// cycle — both import this leaf module. Keyed `${remoteAgentId}:${conversationId}`;
+// a conversation can have more than one live transport, so the value is a Set.
 const cachesByConversation = new Map<string, Set<TurnCarrierCache>>()
 
 function registryKey(remoteAgentId: string, conversationId: string): string {
@@ -115,18 +236,37 @@ export function registerTurnCarrierCache(
 }
 
 /**
- * Open a fresh turn on every live cache of a conversation, from the api that
- * just dispatched the wake. No-op when no reverse-MCP session is connected yet
- * (the first tools/call will `extend` from the delivery rows anyway).
+ * Attach a dispatched wake's origins to its epoch on every live cache of a
+ * conversation, from the api that just sent the wake. No-op when no reverse-MCP
+ * session is connected yet (the first tools/call will `extend` from the delivery
+ * rows once the daemon confirms the turn).
  */
 export function beginTurnForConversation(
   remoteAgentId: string,
   conversationId: string,
+  epoch: string,
   traceparents: Array<string | null | undefined>
 ): void {
   const set = cachesByConversation.get(
     registryKey(remoteAgentId, conversationId)
   )
   if (!set) return
-  for (const cache of set) cache.beginTurn(traceparents)
+  for (const cache of set) cache.beginTurn(epoch, traceparents)
+}
+
+/**
+ * Reconcile the running epoch on every live cache of a conversation against the
+ * daemon's authoritative `agent:status.turn_epoch`. No-op when no reverse-MCP
+ * session is connected.
+ */
+export function reconcileTurnForConversation(
+  remoteAgentId: string,
+  conversationId: string,
+  confirmedEpoch: string | null | undefined
+): void {
+  const set = cachesByConversation.get(
+    registryKey(remoteAgentId, conversationId)
+  )
+  if (!set) return
+  for (const cache of set) cache.reconcile(confirmedEpoch)
 }

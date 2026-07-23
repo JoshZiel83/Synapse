@@ -65,8 +65,9 @@ export type RemoteAgentMachineMessage =
       runKey?: string | null
       capabilities?: RemoteAgentRuntimeCapabilityRecord
       // The daemon's current front (running) turn epoch for this conversation:
-      // string while a turn is open, null when fully idle, undefined from an
-      // un-upgraded daemon. Drives the api turn-carrier reconcile (§6c).
+      // string while a turn is open, null when the conversation is fully idle.
+      // Optional only as a malformed-frame guard (the daemon always sends the
+      // field); drives the api turn-carrier reconcile (§6c).
       turnEpoch?: string | null
     } & RemoteAgentMachineMessageTraceContext)
 

@@ -114,6 +114,7 @@ test("parseRemoteAgentMachineMessage maps snake_case status capabilities", () =>
       supportsCodexAppServer: true,
       supportsStructuredIo: false,
     },
+    turnEpoch: undefined,
     traceparent: undefined,
     tracestate: undefined,
   })

@@ -246,6 +246,7 @@ test("tools/call span: no _meta ⇒ INTERNAL child of the ambient request span",
 test("tools/call span: creation-time delivery-origin links — self-link and flags-00 excluded", async () => {
   exporter.reset()
   const cache = new TurnCarrierCache()
+  cache.reconcile("epoch-1") // the daemon-confirmed running turn reads its bucket
   const linkedTrace = "1af7651916cd43dd8448eb211c80319d"
   cache.extend([
     // origin == the _meta parent's own trace ⇒ excluded (would be a self-link)
@@ -269,33 +270,44 @@ test("tools/call span: creation-time delivery-origin links — self-link and fla
   )
 })
 
-test("tools/call span: after beginTurn on a CONSUMED epoch links ONLY the new turn's origins (F3 reverse-MCP reset)", async () => {
+test("tools/call span: links the daemon-confirmed RUNNING turn's origins, never a queued successor's (F3 + R3)", async () => {
   exporter.reset()
   const cache = new TurnCarrierCache()
   const turn1Trace = "1af7651916cd43dd8448eb211c80319d"
   const turn2Trace = "3af7651916cd43dd8448eb211c80331f"
-  // Turn 1: a dispatched wake opens the epoch, then a tools/call consumes it.
-  cache.beginTurn([`00-${turn1Trace}-00000000000000bb-01`])
+  // Turn 1 dispatched AND confirmed running by the daemon; turn 2 dispatched but
+  // only QUEUED behind it (its bucket exists, but the daemon has not fronted it).
+  cache.beginTurn("epoch-1", [`00-${turn1Trace}-00000000000000bb-01`])
+  cache.beginTurn("epoch-2", [`00-${turn2Trace}-00000000000000cc-01`])
+  cache.reconcile("epoch-1")
   const handler1 = captureCallToolHandler([OK_TOOL], cache)
   await handler1({
     method: "tools/call",
     params: { name: "echo", arguments: { msg: "one" }, _meta: VALID_META },
   })
   const turn1Span = exporter.getFinishedSpans()[0]!
-  assert.equal(turn1Span.links.length, 1)
+  assert.equal(
+    turn1Span.links.length,
+    1,
+    "only the running turn 1's origin links"
+  )
   assert.equal(turn1Span.links[0]!.context.traceId, turn1Trace)
 
-  // Turn 2: the NEXT dispatched wake resets the consumed epoch — the prior
-  // turn's origin must NOT leak onto this turn's tools/call span.
+  // Turn 1 completes; the daemon fronts turn 2. The now-running turn links turn
+  // 2's origin ONLY — turn 1's origin must NOT leak forward either.
   exporter.reset()
-  cache.beginTurn([`00-${turn2Trace}-00000000000000cc-01`])
+  cache.reconcile("epoch-2")
   const handler2 = captureCallToolHandler([OK_TOOL], cache)
   await handler2({
     method: "tools/call",
     params: { name: "echo", arguments: { msg: "two" }, _meta: VALID_META },
   })
   const turn2Span = exporter.getFinishedSpans()[0]!
-  assert.equal(turn2Span.links.length, 1, "only the new turn's origin links")
+  assert.equal(
+    turn2Span.links.length,
+    1,
+    "only the now-running turn 2's origin links"
+  )
   assert.equal(turn2Span.links[0]!.context.traceId, turn2Trace)
 })
 

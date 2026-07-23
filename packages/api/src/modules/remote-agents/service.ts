@@ -53,7 +53,10 @@ import {
   replayResolvedRemoteAgentTasksUseCase,
 } from "./task-resolution-notifier.js"
 import * as repo from "./repo.js"
-import { beginTurnForConversation } from "./turn-carriers.js"
+import {
+  beginTurnForConversation,
+  reconcileTurnForConversation,
+} from "./turn-carriers.js"
 import {
   parseRemoteAgentMachineMessage,
   serializeRemoteAgentApiToDaemonMessage,
@@ -73,11 +76,23 @@ type MachineConnection = {
   fencingToken: string
   socket: any
   ready: boolean
+  // Wall-clock of the last frame accepted from THIS connection (post fencing
+  // guard). The stale-connection reaper closes a slot whose daemon has gone
+  // silent past STALE_MACHINE_CONNECTION_MS (a dead socket the OS never FIN'd).
+  lastSeenAt: number
 }
 
 const machineConnections = new Map<string, MachineConnection>()
 const deliveryInFlightByMachine = new Map<string, Map<string, number>>()
 const DELIVERY_IN_FLIGHT_TTL_MS = 5_000
+// Reap a machine slot whose daemon has sent nothing for 4× its 30s heartbeat.
+// A healthy daemon emits a heartbeat every 30s (each refreshes lastSeenAt), and
+// when it loses the server it self-closes at ~90s (3 ticks / 2 missed pongs at
+// 30s cadence) via a close frame the socket 'close' handler finalizes. 120s sits
+// strictly beyond that self-close, so the reaper only ever finalizes a socket
+// that died with no FIN — never racing a healthy or self-closing daemon.
+const STALE_MACHINE_CONNECTION_MS = 120_000
+const MACHINE_CONNECTION_SWEEP_MS = 30_000
 
 const tracer = trace.getTracer("synapse-remote-agents")
 
@@ -520,6 +535,7 @@ async function notifyPendingRemoteAgentDeliveries(params: {
       deliveryId: string
       conversationId: string
       itemId: string
+      turnEpoch?: string
       traceparent?: string
     }>
   >()
@@ -558,6 +574,37 @@ async function notifyPendingRemoteAgentDeliveries(params: {
     // idempotent, so re-sending the prefix on every batch is cheap and
     // robust.
     await sendAgentStartPrefix(connection, pendingForSend, machineId)
+    // Mint ONE turn epoch per (agent, conversation) BEFORE the send and stamp it
+    // on every delivery of that conversation: the daemon coalesces a
+    // conversation's deliveries into ONE turn and reads `items[0].turn_epoch`, so
+    // all of a conversation's deliveries in this batch MUST carry the same epoch.
+    // The SAME epoch keys the api-side turn-carrier bucket opened after the send,
+    // so a tools/call in the woken turn links THIS wake's delivery origins once
+    // the daemon confirms the epoch running (F3 reverse-MCP half + R3 interleave).
+    const wakeByConversation = new Map<
+      string,
+      {
+        remoteAgentId: string
+        conversationId: string
+        epoch: string
+        traceparents: Array<string | undefined>
+      }
+    >()
+    for (const delivery of pendingForSend) {
+      const key = `${delivery.remoteAgentId}:${delivery.conversationId}`
+      let slice = wakeByConversation.get(key)
+      if (!slice) {
+        slice = {
+          remoteAgentId: delivery.remoteAgentId,
+          conversationId: delivery.conversationId,
+          epoch: crypto.randomUUID(),
+          traceparents: [],
+        }
+        wakeByConversation.set(key, slice)
+      }
+      delivery.turnEpoch = slice.epoch
+      slice.traceparents.push(delivery.traceparent)
+    }
     const sent = safeSend(connection, {
       type: "agent:deliver",
       deliveries: pendingForSend,
@@ -569,35 +616,14 @@ async function notifyPendingRemoteAgentDeliveries(params: {
         now
       )
       // Open the reverse-MCP turn epoch on any live session of each dispatched
-      // (agent, conversation): a tools/call in the woken turn links THIS wake's
-      // delivery origins, not prior turns' (F3 reverse-MCP half). No-op when no
-      // reverse-MCP session is connected — its first tools/call `extend`s from
-      // the live delivery rows anyway.
-      const wakeByConversation = new Map<
-        string,
-        {
-          remoteAgentId: string
-          conversationId: string
-          traceparents: Array<string | undefined>
-        }
-      >()
-      for (const delivery of pendingForSend) {
-        const key = `${delivery.remoteAgentId}:${delivery.conversationId}`
-        let slice = wakeByConversation.get(key)
-        if (!slice) {
-          slice = {
-            remoteAgentId: delivery.remoteAgentId,
-            conversationId: delivery.conversationId,
-            traceparents: [],
-          }
-          wakeByConversation.set(key, slice)
-        }
-        slice.traceparents.push(delivery.traceparent)
-      }
+      // (agent, conversation). No-op when no reverse-MCP session is connected —
+      // its first tools/call `extend`s from the live delivery rows once the
+      // daemon confirms the turn.
       for (const slice of wakeByConversation.values()) {
         beginTurnForConversation(
           slice.remoteAgentId,
           slice.conversationId,
+          slice.epoch,
           slice.traceparents
         )
       }
@@ -1610,6 +1636,35 @@ async function finalizeMachineSession(
   }
 }
 
+/**
+ * Reap machine slots whose daemon has gone silent past
+ * STALE_MACHINE_CONNECTION_MS — a socket that died without the OS ever sending a
+ * FIN, so neither `close` nor `error` fired. Every entry in `machineConnections`
+ * is the live slot for its machine (superseded ones are deleted on connect), so
+ * the fencing re-check only guards against a race with a concurrent connect.
+ * finalize-then-close mirrors the socket error handler; both paths are
+ * idempotent, so the close event's own finalize is a safe no-op. Each machine is
+ * isolated so one repo failure cannot abort the sweep.
+ */
+async function reapStaleMachineConnections(): Promise<void> {
+  const now = Date.now()
+  for (const connection of [...machineConnections.values()]) {
+    if (now - connection.lastSeenAt <= STALE_MACHINE_CONNECTION_MS) continue
+    const tracked = machineConnections.get(connection.machineId)
+    if (!tracked || tracked.fencingToken !== connection.fencingToken) continue
+    try {
+      await finalizeMachineSession(connection, "stale connection reaped")
+    } catch {}
+    closeMachineConnection(connection, 4002, "heartbeat timeout")
+  }
+}
+
+// `.unref?.()` (matching the mcp-endpoint idle-transport reaper) so the sweep
+// never keeps a node:test worker alive or fires into a torn-down DB.
+setInterval(() => {
+  void reapStaleMachineConnections()
+}, MACHINE_CONNECTION_SWEEP_MS).unref?.()
+
 export async function handleRemoteAgentDaemonConnection(
   socket: any,
   req: any,
@@ -1669,6 +1724,7 @@ export async function handleRemoteAgentDaemonConnection(
     fencingToken,
     socket,
     ready: false,
+    lastSeenAt: Date.now(),
   }
   machineConnections.set(machine.id, connection)
   await setMachineLifecycleState(
@@ -1703,6 +1759,9 @@ export async function handleRemoteAgentDaemonConnection(
     if (!active || active.fencingToken !== fencingToken) {
       return
     }
+    // This connection is the live slot — mark it seen so the stale-connection
+    // reaper never reaps a daemon that is still talking to us.
+    active.lastSeenAt = Date.now()
 
     if (message?.type === "heartbeat") {
       await repo.heartbeatMachineSessionRepo(sessionId)
@@ -1752,6 +1811,18 @@ export async function handleRemoteAgentDaemonConnection(
     }
 
     if (message?.type === "agent:status") {
+      // Reconcile the turn-carrier running epoch SYNCHRONOUSLY, before the async
+      // span — process-local, no I/O — so back-to-back status frames on this
+      // socket land in arrival order and `runningEpoch` ends on the latest. This
+      // is what makes reverse-MCP tools/call links follow the daemon's confirmed
+      // running turn instead of guessing from bucket order (R3 §6c).
+      if (message.conversationId) {
+        reconcileTurnForConversation(
+          message.remoteAgentId,
+          message.conversationId,
+          message.turnEpoch
+        )
+      }
       await runMachineMessageSpan(machine.id, message, async () => {
         await updateRemoteAgentRuntimeStatus(machine.id, message)
       })
