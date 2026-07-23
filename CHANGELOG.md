@@ -8,11 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > [!WARNING]
-> Synapse is still in an early design and implementation phase (pre-1.0, currently
-> `0.1.0`). Under SemVer's 0.x rules any release may include breaking changes, and
-> backwards compatibility for old data is not guaranteed. Breaking changes are reconciled
-> by rebuilding the database (`npm run db:rebuild`) and redeploying, not by migrations —
-> see [`deploy.md`](./deploy.md).
+> Synapse is still in an early design and implementation phase (pre-1.0). Under SemVer's
+> 0.x rules any release may include breaking changes, and backward compatibility for old
+> data is not guaranteed — breaking changes are handled by rebuilding the database
+> (`npm run db:rebuild`) and redeploying, not by migrations (see [`deploy.md`](./deploy.md)).
+> In `0.x`, a **minor** bump (`0.Y.0`) marks a consumer-facing break (REST/WebSocket routes
+> and DTOs, the device-protocol wire contract, `@synapse/shared` exports, authentication, or
+> a removed capability) and a **patch** (`0.y.Z`) is backward compatible. The tagged versions
+> below retroactively reconstruct the history of the `dev` line; the package manifests
+> themselves remain at `0.1.0` until a release is cut.
 
 ## [Unreleased]
 
@@ -64,3 +68,582 @@ database schema changed, so this release needs no `db:rebuild`.
   knobs are documented in
   [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §6
   (rate limits) and §1 (environment variables). Not a breaking change.
+
+## [0.26.2] - 2026-07-17
+
+### Fixed
+
+- Remote-agent daemon: fan-in fail-delivery reports no longer inherit an ambient delivery trace; the API mints a fresh root span that links all origins, fixing mixed-origin correlation.
+
+## [0.26.1] - 2026-07-17
+
+### Added
+
+- End-to-end trace propagation across the edge and frontend: at the trust boundary nginx strips inbound vendor trace-state headers (`tracestate`, `baggage`, `sentry-trace`) while forwarding W3C `traceparent` (which the API validates at extract, treating its flags as advisory), and the web and mobile clients bridge browser spans over that `traceparent`.
+
+## [0.26.0] - 2026-07-17
+
+### Added
+
+- Trace consumers: daemon fan-in links, dispatch carrier, BullMQ producer spans, and OpenTelemetry across the Python sidecars. `resolution_traceparent` is persisted so a replayed resolution frame keeps the resolver's trace.
+
+### Changed
+
+- **Breaking:** the `POST /api/v1/internal/remote-agents/:remoteAgentId/fail-deliveries` request body was reshaped.
+
+## [0.25.5] - 2026-07-17
+
+### Added
+
+- Device-protocol envelope trace-carrier schemas and per-message WebSocket tracing. Trace fields are tolerant — a malformed or oversized value degrades to absent rather than rejecting the message.
+
+## [0.25.4] - 2026-07-16
+
+### Changed
+
+- OpenTelemetry now owns sampling and export; Sentry is demoted to a consumer. `SENTRY_TRACES_SAMPLE_RATE` is repurposed as a Sentry forward-rate.
+
+## [0.25.3] - 2026-07-15
+
+### Added
+
+- Shared tracing foundation: a first-party trace-carrier contract, propagator, and a `@fastify/otel` patch.
+
+## [0.25.2] - 2026-07-15
+
+### Removed
+
+- Reserved-but-inert `pty` capability machinery (the `pty` builtin-kind enum member, its policy, and the grant-creation reject path). Creating a pty grant always failed with HTTP 400 (`pty_not_supported`); it was never a routable capability.
+
+### Fixed
+
+- The API Docker image builds again, resolving a 14-day breakage caused by an unguarded `cp -r` of an assets path that had been deleted by the icon refactor.
+- Two off-box sandbox symlink escapes: an arbitrary host write via a base-snapshot symlink, and a read-side host-file exfiltration through `envd`'s stat-follows-symlink behavior.
+- A data-free convergence livelock in the off-box teardown path.
+
+## [0.25.1] - 2026-07-13
+
+### Added
+
+- `cubesandbox:bare` off-box sandbox provider (E2B-compatible wire) with lexical path confinement — the first remote runtime adapter.
+
+## [0.25.0] - 2026-07-12
+
+### Added
+
+- `runtimes` supertype: devices and sandboxes become detail tables on a single polymorphic `runtime_id`.
+- Sandbox runtime-generalization: a `${provider}:${mode}` adapter registry with on-box `local:bare` and `docker:bare` bare adapters and a new `SANDBOX_MODE` (`resident`|`bare`|`auto`) operator setting — the substrate the off-box provider in 0.25.1 builds on.
+
+### Changed
+
+- **Breaking:** `device_*` renamed to `runtime_*` across the schema, the device-protocol wire contract (`DEVICE_*` → `RUNTIME_*` enums, `DeviceHelloParams` → `RuntimeHelloParams`, `pendingDeviceId` → `pendingRuntimeId`), and `OperationEnvelope` fields.
+
+### Removed
+
+- The `device_sync_sources` table and its `DEVICE_SYNC_SOURCE_KINDS`/`DEVICE_SYNC_MODES`/`DEVICE_SYNC_STATUSES` exports (dropped outright — no `runtime_*` replacement). The other 14 `device_*` tables and their `Device*` exports from `@synapse/device-protocol` were renamed rather than removed (see Changed).
+
+## [0.24.1] - 2026-07-03
+
+### Added
+
+- Env-selected document extraction (`DOCUMENT_EXTRACTION_PROVIDER`) with an Apache Tika sidecar (PDF, DOCX, Markdown), enabled by default on the production profile, plus opt-in cloud providers (TextIn xParse, and an async LlamaParse path with a reconciliation sweeper). This completes the provider-abstraction work: the API image now bundles no inference engines.
+
+### Removed
+
+- The bundled `pdf-parse` dependency.
+
+## [0.24.0] - 2026-07-03
+
+### Removed
+
+- **Breaking:** the `audit_logs` compliance feature, end to end — the `GET /api/v1/workspaces/:workspaceId/audit-logs` route, the `AuditLog*` exports, and the `auditor` platform role. (This is distinct from `/api/v1/logs` and `/api/v1/reports`, which remain.)
+
+## [0.23.1] - 2026-07-03
+
+### Added
+
+- Env-selected embedding (`EMBEDDING_PROVIDER`) with a self-hosted bge-m3 sidecar plus a generic OpenAI-compatible adapter for cloud/self-hosted embedding vendors.
+
+### Changed
+
+- Memory vectors change from `VECTOR(384)` to `VECTOR(1024)` (e5-small → bge-m3); existing embeddings must be regenerated.
+
+### Removed
+
+- The bundled `@huggingface/transformers` dependency.
+
+## [0.23.0] - 2026-07-02
+
+### Added
+
+- A self-hosted `sherpa-stream` realtime-ASR sidecar and a provider session-factory.
+
+### Changed
+
+- **Breaking:** `ASR_PROVIDER` now defaults to `none`. Existing realtime-ASR deployments must set `ASR_PROVIDER=volcengine`, or the `/ws/asr` dictation gateway goes silent.
+
+## [0.22.2] - 2026-07-02
+
+### Added
+
+- Env-selected batch transcription with sherpa-onnx and faster-whisper sidecars (the `asr` Compose profile), restoring batch audio transcription as an out-of-process capability.
+
+## [0.22.1] - 2026-07-02
+
+### Added
+
+- Env-selected OCR (`OCR_PROVIDER`) with tesseract and PP-OCRv6 sidecars, defaulting to tesseract on the production profile.
+
+### Removed
+
+- The bundled `tesseract.js` dependency.
+
+## [0.22.0] - 2026-07-01
+
+### Added
+
+- A backend-free `web-next-design` UI sandbox (typed fake `ApiClient`) for design iteration.
+
+### Changed
+
+- **Breaking:** brand icons for IM and MCP plugins are now React components; the `iconUrl`, `pluginIconUrl`, and `iconAssetPath` response fields were removed.
+
+### Removed
+
+- `PLATFORM_ASSET_FILE_ORIGIN_SYSTEMS` exports and the MCP icon-seed pipeline.
+
+## [0.21.2] - 2026-07-01
+
+### Added
+
+- Compile-time contract-parity assertions across all shared type/schema pairs, plus new `@synapse/shared` exports (persisted content-block schema, transport-account schemas, and others).
+
+### Fixed
+
+- Drift between hand-written types and their Zod schemas.
+
+## [0.21.1] - 2026-06-22
+
+### Added
+
+- Firecrawl (hosted remote MCP) plus Notion, Xiaohongshu (小红书), and Bilibili MCP sidecars — all env-gated; the three sidecars share a new `_mcp_base` Python framework onto which the existing Mijia plugin was also migrated.
+
+## [0.21.0] - 2026-06-21
+
+### Added
+
+- Telegram (Bot API), WhatsApp (Cloud API), and WhatsApp-unofficial (Baileys QR) connectors, plus an ffmpeg voice transcoder.
+- Edge compression: a custom nginx build with Brotli, Zstandard, and RFC 9842 (`.dcb`/`.dcz`) delta-dictionary compression.
+- Browser telemetry ingest: `POST /api/v1/reports` (NEL / Reporting API) and a `Server-Timing`/`traceresponse` header exposing the request trace id on every response.
+
+### Changed
+
+- **Breaking:** grant DTO field `memberId` → `workspaceMemberId` and `grantedByWorkspaceMemberId` → `createdByWorkspaceMemberId`; `SubjectRef.memberId` → `workspaceMemberId`.
+
+### Removed
+
+- `MCP_TOOL_NAMESPACE_SEPARATOR` and `PublicToolOrigin` exports.
+
+## [0.20.1] - 2026-06-21
+
+### Added
+
+- HKUDS/CLI-Anything internalized as a `cli-catalog` device-runtime builtin (66 CLIs) with a server-side minting gate.
+
+## [0.20.0] - 2026-06-19
+
+### Added
+
+- A multi-backend content store: per-blob backend selection, a local CAS cache, an S3 remote backend (`@aws-sdk/client-s3`) with presigned PUT/GET, and sandbox CAS hydration.
+
+### Changed
+
+- **Breaking:** `resource_access_bindings` merged into `workspace_resource_grants`; wire shape `{app}` → `{resource}`, `appId` → `resourceId`; per-type access sub-resources collapse into `GET|PUT .../workspace-resources/:resourceId/grants`; a new `automation_admin` workspace access key was added.
+
+### Removed
+
+- The `resource_access_bindings` model and its exports (`ResourceAccessBindingResourceType`, `ACCESS_BINDABLE_*`).
+
+## [0.19.0] - 2026-06-18
+
+### Changed
+
+- **Breaking:** the create-invite request DTO drops absolute `expiresAt` for relative `expiresInHours`; a client still sending `expiresAt` has it silently ignored.
+- The canonical `IsoInstantString` primitive and its conversion helpers now live in `@synapse/device-protocol/instant` and are re-exported from `@synapse/shared`.
+- `workspace_app_grants.created_at` tightened to `NOT NULL` (removing 1970-epoch fallbacks); duration columns (`retention_ttl_ms`, `poll_interval_ms`, `ttl_ms`) widened to `BIGINT` with a `>= 0` CHECK.
+
+## [0.18.2] - 2026-06-18
+
+### Added
+
+- Unified logging (a single pino logger with a domain taxonomy) and distributed tracing (OpenTelemetry, Tempo, Loki, Alloy) with a Sentry (self-hosted, DSN-gated) error/performance consumer, BullMQ trace propagation, and a `/api/v1/logs` client-log ingest endpoint authenticated by user session or a short-lived HMAC device token.
+- IM inbound/outbound media completed on the content-addressed pipeline: DingTalk media (inbound + outbound), QQ inbound media to CAS, WeChat inbound media (plus an aes_key encoding fix), and an empty-blob guard before outbound upload.
+
+## [0.18.1] - 2026-06-17
+
+### Changed
+
+- The transport `CanonicalFileRef` is collapsed to a single content-addressed (sha256) shape; outbound sends now read bytes from the CAS for Feishu, QQ, and WeChat, and inbound media is persisted to the CAS for Feishu.
+
+### Fixed
+
+- Connector fixes: Feishu webhook verification, `@all` mention normalization, and inbound video; QQ official OpenAPI v2; DingTalk mention/rich-text/audio handling; WeChat (ilink personal-WeChat) connector realigned to the upstream protocol (session guard, QR login, media CDN).
+
+## [0.18.0] - 2026-06-17
+
+### Changed
+
+- **Breaking:** application REST responses with a body are now wrapped in a `{ data }` envelope (~173 routes); no-body writes stay `204`, and wire/machine-surface endpoints (device handshake, `/api/v1/internal/*`, `/auth/device/*`, `/im/webhooks/*`, `/automation-webhooks/*`, `/install.{sh,ps1}`) deliberately keep bare payloads. Postgres stays snake_case while the TypeScript surface is fully camelCase (via a Kysely `CamelCasePlugin`). The error contract (`{ error, code }`) is deliberately unchanged.
+- Repo-exit JSON decoding now fails closed on malformed stored payloads (previously silently coerced to `{}`) across most modules.
+
+## [0.17.0] - 2026-06-10
+
+### Added
+
+- A unified, MCP-style Task model (`tool_call_task_*` tables) with an orthogonal lifecycle: `lifecycle_status` × `outcome`.
+- The canonical `IsoInstantString` datetime primitive, `datetime/instant.ts` adapters, and the `guard-datetime-boundaries` CI check.
+
+### Changed
+
+- **Breaking:** `POST .../interactions/:id/respond` → `POST .../tasks/:taskId/respond`; the WebSocket feed event `interaction_requested` → `task_requested` and its payload `{interaction}` → `{task}`. Workspace-app root metadata was consolidated.
+
+### Removed
+
+- The `interaction_*` tables, `InteractionRequestSummary` and related exports, and legacy workspace-app write routes.
+
+## [0.16.0] - 2026-06-07
+
+### Added
+
+- A server-computed tool-call presentation layer: display blocks, captured MCP `_meta`, and auto-attached descriptors for the built-in tools.
+- New `@synapse/shared` exports (`resolvePresentation`, `PresentationString`) and presentation fields on `ServerToolCall`, `ToolPlugin`, and the turn-preview/activity DTOs.
+
+## [0.15.0] - 2026-06-07
+
+### Changed
+
+- **Breaking:** the canonical `ToolResultOrigin` union (and `TOOL_RESULT_ORIGIN_KINDS`) was converged onto the routed vocabulary — `mcp_remote|mcp_device|callable_plugin|builtin` → `system|plugin|device|provider_native` — with new per-kind field shapes, and `origin` became a required field on `CanonicalToolResult`/`NormalizedMcpToolResult`.
+- **Breaking:** the `ActorRuntimeToolKind` enum was re-lettered (`callable|mcp_plugin|mcp_device|provider_builtin` → `system|plugin|device`); WebSocket and turn-preview DTO values changed accordingly.
+
+### Removed
+
+- `ExecutableModelToolKind` and `execKindForSource` exports.
+- Dropped `device`-derived catalog/marketplace enum members (`device_derived`, `device_derivation`, `device_projection`, catalog source `device`), the `device` plugin transport, the `actor_in_conversation`/`remote_agent_in_conversation` access-target labels, and `conversationActorContextId`.
+
+## [0.14.1] - 2026-06-07
+
+### Added
+
+- nginx HTTP/3 (QUIC) support.
+
+## [0.14.0] - 2026-06-06
+
+### Added
+
+- Tool provenance and routing (`ToolRef` + `NameRegistry`): a deterministic `toolId`, a wire-name ↔ toolId registry, and an immutable `tool_calls.source_snapshot`.
+
+### Changed
+
+- **Breaking:** tool provenance & routing — routing no longer parses tool names (projection mints deterministic `ToolRef`s + a per-turn `NameRegistry`); `ToolDefinition.source`/`sourceType` were removed from `@synapse/shared` (source now lives on the internal `ProjectedToolDefinition`).
+
+### Removed
+
+- The legacy `tool_calls.plugin_id`/`device_id` columns and the `tool_execution_attempts.plugin_id`/`device_id`/`instance_key` columns (provenance now derives from the parent `tool_calls.source_snapshot`).
+
+## [0.13.0] - 2026-06-06
+
+### Changed
+
+- **Breaking:** the built-in tool execution-kind model was reshaped — the `ToolPlugin.kind` (`action`|`callable`) field was removed and `ToolPlugin.execute` made required; the `ActorRuntimeToolKind` union dropped its `builtin` and `action` members (both `@synapse/shared`).
+
+## [0.12.0] - 2026-06-06
+
+### Added
+
+- A Vercel AI SDK v6 provider layer and a `deepseek` vendor.
+
+### Changed
+
+- **Breaking:** the model data model collapses to `model_bindings` + `model_binding_versions` (replacing `model_profiles`, `model_profile_revisions`, and `model_group_profiles`); `provider_steps` re-keyed to `model_binding_id`/`model_binding_version_id`.
+- **Breaking:** `ResolvedModelConfig` was reshaped (`bindingId`, `providerKind`, `maxOutputTokens`); the shared export `MODEL_PROVIDER_CATALOG` → `MODEL_VENDOR_CATALOG` (`ModelProviderDefinition` → `ModelVendorDefinition`), with a new `ProviderKind` export.
+
+### Removed
+
+- Four hand-rolled LLM adapters, the `ModelProviderAdapter*`/`EngineBranch*` exports, and provider-native branch-state resume.
+
+## [0.11.3] - 2026-06-06
+
+### Fixed
+
+- Multi-client chat broadcast could skip events because per-member `member_seq` was not gap-free under concurrent appends (the client cursor pages by `member_seq > cursor`). `member_seq` is now assigned as `MAX+1` under a per-member advisory transaction lock (`pg_advisory_xact_lock`), guaranteeing a contiguous, commit-ordered sequence.
+
+## [0.11.2] - 2026-06-06
+
+### Added
+
+- A one-click, cross-platform Node installer served at `GET /api/v1/install.sh` and `install.ps1` (sha256-verified, with China/international mirror auto-detection).
+
+## [0.11.1] - 2026-06-05
+
+### Added
+
+- Soft-delete tombstoning with `_live` read views, an offline purge CLI (`db:purge:*`), and an FK-policy CI gate backed by a table-classification manifest.
+- Popup-first OAuth sign-in with cross-platform (web/mobile) error routing, completing the Feishu social-login flow.
+
+### Changed
+
+- Deletion is now tombstoning: `ON DELETE CASCADE` became `RESTRICT` repo-wide. Operator SQL that relied on cascading deletes now raises foreign-key violations, and schema bootstrap requires the `CREATEROLE` privilege.
+
+### Fixed
+
+- OpenAI requests to `gpt-5*` and o-series (o1/o3/o4) reasoning models now send `max_completion_tokens` instead of the rejected legacy `max_tokens`.
+
+## [0.11.0] - 2026-06-04
+
+### Added
+
+- Feishu (Lark) social sign-in, plus a login/register UX overhaul (single-column layout, password-visibility toggle, email autosuggest, caps-lock warning, and specific login-error messages).
+- The server-side actor sandbox is now deployable in both Docker and local modes via new deploy scripts (`deploy-sandbox-docker.sh` / `deploy-sandbox-local.sh`), a `docker-compose.sandbox-local.yml`, and an frps tunnel-edge image built from the official frp release.
+
+### Changed
+
+- **Breaking:** model configuration moved from environment variables to a declarative `config/model-groups.yaml`.
+
+### Removed
+
+- `AI_PROVIDER`, `AI_ENGINE_KIND`, `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, and `AI_MAX_TOKENS`. Chat requires an explicit model-group configuration; a fresh install starts with no model configured.
+
+## [0.10.0] - 2026-06-04
+
+### Added
+
+- Better Auth 1.6.13 for identity (`account`/`session`/`verification` tables) and RFC 8628 device authorization.
+
+### Changed
+
+- **Breaking:** authentication endpoints were reshaped (`/register` → `/sign-up/email`, `/login` → `/sign-in/email`, and others); a new `BETTER_AUTH_SECRET` is required (falling back to `AUTH_SECRET` / `APP_SECRET`).
+
+### Removed
+
+- `users.password_hash`, `auth_sessions`, the six `/qr-login/*` routes, and the config-email super-admin auto-grant.
+
+### Security
+
+- All passwords and sessions are invalidated on upgrade (there is no migration path). The hardcoded session-cookie name was removed.
+
+## [0.9.1] - 2026-06-04
+
+### Added
+
+- Gitleaks secret scanning wired into a pre-commit hook and CI (`secret-scan` workflow), backed by a `.gitleaks.toml` config and a baseline of known allowed matches.
+
+### Changed
+
+- Authorization hardening: exhaustive permission switches and fail-closed handling of unknown permissions.
+
+### Fixed
+
+- The workspace permission evaluator rejected the `manage_relays` key before the admin check, silently collapsing device management to self-ownership for owners, admins, and device-admin key holders.
+
+## [0.9.0] - 2026-06-03
+
+### Added
+
+- Official remote MCP endpoints (AMiner, AMap, Figma) over HTTP and SSE, on the official SDK transports.
+
+### Changed
+
+- **Breaking:** the Mijia (Xiaomi smart-home) plugin moved from an always-on in-process builtin to an env-gated sidecar (`MIJIA_MCP_URL`) behind the `mijia` Compose profile — it is now off by default on the production profile.
+
+### Removed
+
+- The hand-rolled `McpHttpClient`.
+
+## [0.8.1] - 2026-06-03
+
+### Added
+
+- The actor sandbox gains an E2B-SDK-shaped `SandboxBackend` lifecycle abstraction (`create`/`connect`/`kill`/`getHost`) with a local backend and an opt-in Docker-outside-of-Docker backend, a fast-path endpoint, and an fs-helper `fs.hello` freshness handshake.
+
+## [0.8.0] - 2026-06-02
+
+### Added
+
+- A content-addressed file service (`content_blobs`, `file_assets`, `file_spaces`, `file_snapshots`, `file_mounts`) keyed by sha256.
+- A server-side actor sandbox module: per-session lifecycle, a local host provider that spawns device-runtime child processes, working-set materialization over the new file service (`file_snapshots`, `file_mounts` tables), plus sandbox grants, GC, and conflict-notice handling.
+
+### Changed
+
+- **Breaking:** the encryption envelope moved from `enc:` to `enc:v2:` (scrypt KDF) with no re-encryption path; the bare-pg query escape hatch was removed as the data layer converged on Kysely.
+
+### Removed
+
+- The in-process sherpa-onnx-node batch-ASR engine.
+
+### Security
+
+- Fail-fast Zod validation of environment configuration, SSRF hardening (including bracketed IPv6), and a new fail-closed `redactSecrets` secret redactor. A new required `SYNAPSE_REGISTRY_DOMAIN` is added.
+
+## [0.7.1] - 2026-06-01
+
+### Added
+
+- A self-hosted Verdaccio private npm registry for distributing the device runtime and remote-agent daemon; `publishConfig` on ten packages.
+
+## [0.7.0] - 2026-05-31
+
+### Changed
+
+- **Breaking:** migrated all workspaces to Zod 4 (pinned `4.3.6`); a conversation's IM-ness is now derived from its transport binding, reshaping the chat create and add-participant DTOs.
+
+### Removed
+
+- The legacy A2A design (`A2AApp`, `A2AAgentCard`, and related exports), `CONVERSATION_BOUNDARY`/`CONVERSATION_BOUNDARIES`, and `systemRef`.
+
+## [0.6.1] - 2026-05-29
+
+### Added
+
+- A per-agent computer-use (CUA) session-focus subsystem.
+
+## [0.6.0] - 2026-05-29
+
+### Added
+
+- A browser capability via chrome-devtools-mcp, with an operation-aware projection and manual grants.
+
+### Changed
+
+- The device-protocol `RuntimeBrowserPolicySchema` gains an additive operation-level `operations` allowlist (the matcher fail-closes on a missing entry).
+- **Breaking:** the device-protocol `DeviceCapabilitySummarySchema` adds a required `exposure_stable_key` field (plus an additive optional `metadata`).
+
+## [0.5.0] - 2026-05-29
+
+### Added
+
+- Terminal capability v2 (`exec_file`, `powershell`) with a bundled toolchain, and six `device-runtime-bundles-*` platform packages distributed over Git LFS.
+
+### Changed
+
+- **Breaking:** the device-protocol `CommandlinePolicy` wire schema was reshaped. Building the project now requires Git LFS.
+
+## [0.4.0] - 2026-05-29
+
+### Added
+
+- The `@synapse/device-runtime` npm CLI (`synapse-device`), a device filesystem capability (13 tools) backed by a new Rust fs-helper sidecar, and QQ (official OpenAPI v2) and DingTalk (Stream) connectors.
+
+### Changed
+
+- **Breaking:** the device control plane moved to a `GET /api/v1/devices/control-plane` WebSocket endpoint (JSON-RPC 2.0 framing); device identity now uses two keypairs; pairing moved to `POST /api/v1/devices/pairing-sessions/consume`. Building the project now requires a Rust toolchain (for the fs-helper sidecar).
+
+### Removed
+
+- The entire Go `relay/` subsystem (−66,599 lines): the relay CLI, the desktop GUI, the agent, and the FUSE mount; `/ws/relay`; thirteen `relay_*` tables; the relay auto-update manifest; and TLS public-key pinning.
+
+### Security
+
+- A new required `SYNAPSE_DEVICE_TRUSTED_SERVER_KEYS` (unset means every tool call is refused), and a mandatory frp tunnel for tool dispatch.
+
+## [0.3.0] - 2026-05-27
+
+### Added
+
+- A scope dimension on the subject model (`ScopedSubjectTarget`, `scope_subject_id`) and `memory_access_grants` REST endpoints.
+
+### Changed
+
+- **Breaking:** `AccessTarget` and `CapabilityAccessTarget` were reshaped onto `ScopedSubjectTarget`.
+- **Breaking:** memory DTOs reshaped onto the subject model: `MemoryEntry` replaces `spaceType`/`ownerScope`/owner-id fields with `owner`/`scope` (`SubjectRef`) + `namespaceKey`; the `memory_saved`/`memory_updated` feed events swap `memorySpaceType` for `memoryOwner`/`memoryNamespaceKey`; and `RelayAuthorizationGrantSummary.scope` (enum) becomes `subject` + optional `scope` `SubjectRef`s.
+
+### Removed
+
+- Legacy access-target types, `MEMORY_SCOPES`/`MEMORY_SPACE_TYPES`, and `relay_authorization_grants.scope`.
+- The `conversation_actor_context` subject variant — `SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT`, `ACCESS_RESOURCE_TYPE.CONVERSATION_ACTOR_CONTEXT`, and the `conversationActorContextRef` / `isConversationActorContextSubject` exports (the actor-in-conversation case is now `actor` + `scope=conversation`).
+
+## [0.2.0] - 2026-05-25
+
+### Added
+
+- An `access_subjects` registry that unifies the previously polymorphic subject model onto a single `subject_id`.
+- An IM `TransportConnector` abstraction with a connector registry, plus functional Feishu (Lark), Weixin (personal WeChat), and WeCom connectors (Feishu/Weixin were previously 9-line capability stubs), a per-conversation reverse-MCP endpoint, an `AgentDriver` abstraction for the remote-agent daemon, and Docker Compose production deployment (`tls`/`http`/`certbot` profiles).
+
+### Changed
+
+- **Breaking:** conversation and interaction routes moved under `/chat/*` (legacy URLs return 404); WebSocket event names moved to dotted form (`auth_error` → `auth.error`, `server_shutdown` → `server.shutdown`); Docker Compose now hard-fails on eleven additional required environment variables (`APP_BASE_URL`, `SYNAPSE_PUBLIC_DOMAIN`, and others), bringing the required set to fifteen.
+
+### Removed
+
+- The host systemd deployment (units and start scripts); the `@synapse/shared` exports `Message`, `MessageType`, `ConversationSummary`, `SESSION_CHANNELS`, and `ChannelType`; the bare `/files/*` mount; and `sessions.channel_type`.
+
+## [0.1.0] - 2026-05-20
+
+A self-hosted, conversation-centric runtime for digital teammates, where the conversation itself is the collaboration boundary for participants, transcript visibility, actor execution, wakeups, and memory handoff.
+
+### Added
+
+- **Conversation model** — a channel-agnostic conversation graph: `conversations` (kinds group/private/virtual, internal/external boundary), polymorphic `conversation_participants` (workspace_member, actor, remote_agent, external, system) with per-participant read watermarks, and a typed `conversation_items` log (message/event/summary/control; user/assistant/system/tool roles) with shared/private scope, visible/internal surface, event fan-out policies, monotonic per-conversation sequence, reply/cause threading, and multi-part bodies (text/file_ref/json), plus to/cc/visible targeting and mentions.
+- **IM connectors** — a generic five-table transport abstraction (accounts, endpoints, per-conversation bindings, addresses, per-item delivery links) fronting two connectors: Feishu (飞书) bot (webhook + long-connection, direct + group) and Weixin (personal WeChat) via QR pairing (long-connection, direct-only).
+- **Platform-native actors** — workspace-scoped, cloud-run AI teammates with typed roles (secretary/manager/specialist/reviewer/archivist/receptionist/assistant), an actor hierarchy, `can_represent_user`, and full versioned history (`actor_versions`) with provenance attributing each edit to a member, actor, system, or sync source.
+- **Bridged remote agents** — external agentic runtimes (Claude Code, Codex) running on a user's own machine, joined as workspace participants via the `remote-agent-daemon` (a local Node driver connecting outbound over WebSocket, probing installed CLIs, spawning them per turn, and bridging chat through an injected stdio MCP server) with machine pairing/trust, plan-approval collaboration, and group-interaction grants.
+- **Device tools via the Go relay** — a standalone on-device agent (`synapse-relay` CLI, Wails desktop GUI, FUSE mount) that pairs a physical machine and exposes it to the cloud as authorized MCP tools over a versioned WebSocket dispatch protocol, hosting built-in computer-use (CUA), scoped filesystem, bundled Chrome DevTools, and command-line servers.
+- **Workspace governance & permissions** — a two-tier RBAC: platform-level `platform_access_bindings` (super_admin/workspace_admin/model_admin/support/auditor) with env-config super-admin bootstrap, and workspace-level `workspace_members` (admin/member/guest) with eight fine-grained admin capability keys, token-based invites, and a polymorphic `resource_access_bindings` ACL granting resources to workspace/conversation/actor subjects.
+- **Authentication** — a hand-rolled identity stack: bcrypt password login, opaque sha256 bearer sessions (cookie or Authorization header) with client/transport metadata and lifecycle, and a full dual-token QR cross-device login state machine.
+- **Shareable teammates & contacts** — a per-workspace, WeChat-style relationship graph over members, actors, and remote agents: shareable identity profiles with searchable IDs and QR tokens, friend requests with auto/manual approval, and accepted contact-list entries.
+- **Catalog & marketplace** — a publisher → item → version spine over three package kinds (actor_template, skill_package, plugin_package) with categories, version files, and per-kind specs; skill ingestion from GitHub/ClawHub mirror sources into parsed snapshots; and workspace-tenant installed-skill and plugin-installation runtime tables with OAuth-style plugin auth sessions and per-owner connections.
+- **Model groups & LLM providers** — four hand-rolled provider adapters (Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, BigModel/Zhipu GLM) behind a static provider catalog, plus a DB-backed routing subsystem: versioned model profiles, `model_groups` with weighted-random/round-robin/priority-failover strategies and attempt policies, scoped grants, and actor→group assignments; runtime provider/model selected via environment.
+- **MCP tools & plugins** — a four-transport MCP plugin host (builtin, stdio, http, relay) over a seven-kind tool taxonomy, shipping seven builtin plugins (feishu, aminer, amap, github, gitlab, mijia, and the Zhipu z-ai toolkit spanning search, reading, OCR/vision, audio/speech, media generation, and moderation), with runtime-permission approval and mount/reuse scoping.
+- **Memory** — in-process hybrid semantic memory partitioned into five scopes (workspace_shared, conversation_shared, actor_private, participant_private, user_private) across seven item categories, combining lexical (FTS + trigram) and vector recall via a bundled transformers.js `multilingual-e5-small` model (VECTOR(384), HNSW cosine) that embeds locally with no external sidecar, plus recorded recall runs.
+- **Self-hosted deployment** — a single Ubuntu host layout: nginx public entrypoint, systemd for the API and desktop web (`packages/web-next`), Dockerized PostgreSQL (pgvector/pg16) and Redis 7, a tsx-run API image, and a `production` Compose profile for the full containerized stack; ships an Expo mobile app and README/CHANGELOG locales in English, 简体中文, and Español.
+
+[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.26.2...HEAD
+[0.26.2]: https://github.com/zai-org/Synapse/compare/v0.26.1...v0.26.2
+[0.26.1]: https://github.com/zai-org/Synapse/compare/v0.26.0...v0.26.1
+[0.26.0]: https://github.com/zai-org/Synapse/compare/v0.25.5...v0.26.0
+[0.25.5]: https://github.com/zai-org/Synapse/compare/v0.25.4...v0.25.5
+[0.25.4]: https://github.com/zai-org/Synapse/compare/v0.25.3...v0.25.4
+[0.25.3]: https://github.com/zai-org/Synapse/compare/v0.25.2...v0.25.3
+[0.25.2]: https://github.com/zai-org/Synapse/compare/v0.25.1...v0.25.2
+[0.25.1]: https://github.com/zai-org/Synapse/compare/v0.25.0...v0.25.1
+[0.25.0]: https://github.com/zai-org/Synapse/compare/v0.24.1...v0.25.0
+[0.24.1]: https://github.com/zai-org/Synapse/compare/v0.24.0...v0.24.1
+[0.24.0]: https://github.com/zai-org/Synapse/compare/v0.23.1...v0.24.0
+[0.23.1]: https://github.com/zai-org/Synapse/compare/v0.23.0...v0.23.1
+[0.23.0]: https://github.com/zai-org/Synapse/compare/v0.22.2...v0.23.0
+[0.22.2]: https://github.com/zai-org/Synapse/compare/v0.22.1...v0.22.2
+[0.22.1]: https://github.com/zai-org/Synapse/compare/v0.22.0...v0.22.1
+[0.22.0]: https://github.com/zai-org/Synapse/compare/v0.21.2...v0.22.0
+[0.21.2]: https://github.com/zai-org/Synapse/compare/v0.21.1...v0.21.2
+[0.21.1]: https://github.com/zai-org/Synapse/compare/v0.21.0...v0.21.1
+[0.21.0]: https://github.com/zai-org/Synapse/compare/v0.20.1...v0.21.0
+[0.20.1]: https://github.com/zai-org/Synapse/compare/v0.20.0...v0.20.1
+[0.20.0]: https://github.com/zai-org/Synapse/compare/v0.19.0...v0.20.0
+[0.19.0]: https://github.com/zai-org/Synapse/compare/v0.18.2...v0.19.0
+[0.18.2]: https://github.com/zai-org/Synapse/compare/v0.18.1...v0.18.2
+[0.18.1]: https://github.com/zai-org/Synapse/compare/v0.18.0...v0.18.1
+[0.18.0]: https://github.com/zai-org/Synapse/compare/v0.17.0...v0.18.0
+[0.17.0]: https://github.com/zai-org/Synapse/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/zai-org/Synapse/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/zai-org/Synapse/compare/v0.14.1...v0.15.0
+[0.14.1]: https://github.com/zai-org/Synapse/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/zai-org/Synapse/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/zai-org/Synapse/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/zai-org/Synapse/compare/v0.11.3...v0.12.0
+[0.11.3]: https://github.com/zai-org/Synapse/compare/v0.11.2...v0.11.3
+[0.11.2]: https://github.com/zai-org/Synapse/compare/v0.11.1...v0.11.2
+[0.11.1]: https://github.com/zai-org/Synapse/compare/v0.11.0...v0.11.1
+[0.11.0]: https://github.com/zai-org/Synapse/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/zai-org/Synapse/compare/v0.9.1...v0.10.0
+[0.9.1]: https://github.com/zai-org/Synapse/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/zai-org/Synapse/compare/v0.8.1...v0.9.0
+[0.8.1]: https://github.com/zai-org/Synapse/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/zai-org/Synapse/compare/v0.7.1...v0.8.0
+[0.7.1]: https://github.com/zai-org/Synapse/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/zai-org/Synapse/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/zai-org/Synapse/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/zai-org/Synapse/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/zai-org/Synapse/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/zai-org/Synapse/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/zai-org/Synapse/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/zai-org/Synapse/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/zai-org/Synapse/releases/tag/v0.1.0
