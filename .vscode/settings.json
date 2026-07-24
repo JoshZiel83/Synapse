@@ -1,0 +1,29 @@
+{
+  // ---------------------------------------------------------------------------
+  // Synapse config-file JSON Schema mappings — give editors autocomplete +
+  // inline validation on our config files.
+  //
+  //   /schemas/*.schema.json         GENERATED from Zod by `npm run schema:gen`
+  //                                  (single source of truth; do not hand-edit).
+  //   /schemas/vendor/*.schema.json  VENDORED third-party schemas (see that dir's
+  //                                  README for provenance + refresh).
+  //
+  // YAML mappings require the `redhat.vscode-yaml` extension (.vscode/extensions.json
+  // recommends it). Note the DIRECTION difference:
+  //   - yaml.schemas is { schema -> file glob(s) }
+  //   - json.schemas is [ { fileMatch, url } ]  (the reverse)
+  //
+  // All schema paths are LOCAL and workspace-root-relative on purpose — no remote
+  // URLs, so validation works offline and behind restricted networks.
+  // ---------------------------------------------------------------------------
+  "yaml.schemas": {
+    "./schemas/model-groups.schema.json": "packages/api/config/model-groups.yaml*",
+    "./schemas/vendor/compose-spec.schema.json": [
+      "docker-compose*.yml",
+      "**/docker-compose*.yaml"
+    ]
+  }
+
+  // json.schemas mappings are added by later extraction phases (content-storage
+  // backends, device-runtime manifests, cli-prereq overlay) as those schemas land.
+}

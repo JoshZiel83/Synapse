@@ -1,0 +1,6 @@
+{
+  // Recommended so YAML config files (model-groups.yaml, docker-compose*.yml) get
+  // JSON Schema autocomplete + validation from the mappings in settings.json.
+  // JSON files use VS Code's built-in language service and need no extension.
+  "recommendations": ["redhat.vscode-yaml"]
+}

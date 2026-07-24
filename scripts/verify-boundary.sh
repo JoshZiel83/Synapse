@@ -40,6 +40,11 @@ npm run guard:db -w packages/api
 npm run guard:fk-policy -w packages/api
 npm run guard:soft-delete -w packages/api
 npm run guard:layering -w packages/api
+# Config JSON Schemas must stay in sync with their Zod sources. Runs here (not
+# only via api pretest, which CI bypasses) so committed /schemas/*.schema.json
+# can never drift from packages/api/scripts/gen-config-schemas.mts. @synapse/shared
+# is already built above, which the generator imports transitively.
+npm run guard:schemas -w packages/api
 node ./scripts/guard-datetime-boundaries.mjs
 node ./scripts/guard-logging.mjs
 node ./scripts/guard-trace-propagation.mjs

@@ -1,0 +1,224 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "GENERATED from Zod by `npm run schema:gen` — do not hand-edit; drift-checked by `npm run guard:schemas`.",
+  "title": "Synapse model-groups configuration",
+  "description": "Declarative platform model-group config imported by the API (packages/api/config/model-groups.yaml). API keys must be `${ENV_VAR}` references, never literal secrets. Cross-field rules (at most one default group, unique group names, unique item display names) are enforced at import time by Zod and are intentionally not expressed here.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "groups": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "description": {
+            "type": "string"
+          },
+          "routingStrategy": {
+            "type": "string",
+            "enum": [
+              "weighted_random",
+              "priority_failover"
+            ]
+          },
+          "attemptPolicy": {
+            "type": "object",
+            "properties": {
+              "maxAttemptsTotal": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxAttemptsPerBinding": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "timeoutMsPerAttempt": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "continueOn": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "stopOn": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "retryBackoffMs": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "isDefault": {
+            "type": "boolean"
+          },
+          "items": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "displayName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "priority": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "weight": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "providerKind": {
+                  "type": "string",
+                  "enum": [
+                    "anthropic",
+                    "openai",
+                    "openai_compatible"
+                  ]
+                },
+                "vendor": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "apiKey": {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+                },
+                "baseUrl": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "modelName": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maxOutputTokens": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "capabilityTags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "features": {
+                  "type": "object",
+                  "properties": {
+                    "apiStyle": {
+                      "type": "string",
+                      "enum": [
+                        "chat",
+                        "responses"
+                      ]
+                    },
+                    "serverTools": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "web_search",
+                          "web_fetch"
+                        ]
+                      }
+                    },
+                    "multimodal": {
+                      "type": "object",
+                      "properties": {
+                        "supported": {
+                          "type": "boolean"
+                        },
+                        "types": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "image",
+                              "audio",
+                              "video",
+                              "document"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "supported",
+                        "types"
+                      ]
+                    },
+                    "crossTurnToolHistory": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "providerOptions": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                },
+                "requestTimeoutMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "maxRetries": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "displayName",
+                "vendor",
+                "apiKey",
+                "baseUrl",
+                "modelName"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "name",
+          "items"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "groups"
+  ],
+  "additionalProperties": false
+}

@@ -7,6 +7,14 @@
 packages/remote-agent-daemon/src/codex/generated/** linguist-generated=true
 packages/remote-agent-daemon/src/codex/generated/** -diff
 
+# JSON Schemas under /schemas are machine-owned: *.schema.json at the top level
+# are generated from Zod by `npm run schema:gen` (drift-checked by
+# `npm run guard:schemas`); everything under schemas/vendor is upstream
+# third-party. Mark them so GitHub collapses them in review and they don't skew
+# language stats.
+schemas/*.schema.json linguist-generated=true
+schemas/vendor/** linguist-vendored=true
+
 # device-runtime toolchain bundles ship as prebuilt per-platform archives
 # (git/bash/etc. for zero-network first-run). They are large binaries — store
 # them via Git LFS so the repo working history stays pointer-only.
