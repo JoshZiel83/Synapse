@@ -146,7 +146,7 @@ export function isFirstParty(
 function resolveDestinationUrl(span: Span): string | undefined {
   const attributes = (span as Span & { attributes?: Record<string, unknown> })
     .attributes
-  const fromAttributes = attributes?.["url.full"] ?? attributes?.["http.url"]
+  const fromAttributes = attributes?.["url.full"]
   if (typeof fromAttributes === "string") return fromAttributes
   // wrapSamplingDecision (called by instrumentation.ts's SentryWrappedSampler)
   // stashes the URL in traceState even for NOT_RECORD decisions, so under
@@ -174,9 +174,11 @@ const NO_URL_WARN_INTERVAL_MS = 60_000
  * a flags-00 traceparent, so a downstream may re-root instead of inheriting the
  * suppression — a volume concern in an unsampled regime, mitigated by an ops
  * note (docs/trace-propagation-policy.md), not code. Both HTTP instrumentations
- * set `url.full`/`http.url` on recording CLIENT spans pre-inject, and nothing
- * in-repo calls the global propagator's inject outside them, so failing closed
- * on the no-URL case cannot sever a recording first-party hop.
+ * set `url.full` (stable semconv, forced by `OTEL_SEMCONV_STABILITY_OPT_IN=http`
+ * in instrumentation.ts — undici emits `url.full` only, never legacy `http.url`)
+ * on recording CLIENT spans pre-inject, and nothing in-repo calls the global
+ * propagator's inject outside them, so failing closed on the no-URL case cannot
+ * sever a recording first-party hop.
  */
 export class FirstPartyOnlyPropagator implements TextMapPropagator {
   private lastNoUrlWarnAt = 0
