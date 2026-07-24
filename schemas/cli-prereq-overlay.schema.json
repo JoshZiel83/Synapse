@@ -1,0 +1,120 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "GENERATED from Zod by `npm run schema:gen` — do not hand-edit; drift-checked by `npm run guard:schemas`.",
+  "title": "Synapse CLI prereq overlay",
+  "description": "Curated, human-reviewed prerequisite gating for CLI-Anything CLIs (packages/device-runtime/src/builtins/cli-catalog/cli-prereq-overlay.json). Only reviewed:true entries are exposed to the agent.",
+  "type": "object",
+  "properties": {
+    "meta": {
+      "description": "Provenance of the draft this overlay was curated from.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "pin": {
+          "type": "string"
+        },
+        "generator": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "_note": {
+      "description": "Free-form maintainer note.",
+      "type": "string"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "cliName": {
+            "type": "string",
+            "description": "Catalog CLI name this prereq applies to (matches the catalog)."
+          },
+          "entryPoint": {
+            "type": "string",
+            "description": "The bare program the agent runs (e.g. cli-anything-<x>)."
+          },
+          "underlying": {
+            "type": "object",
+            "properties": {
+              "binary": {
+                "description": "Executables that must be on PATH (alias-aware: python→python3/python, node→node/nodejs).",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "service": {
+                "description": "Reachable services required. url null means 'a service is needed but its address is unknown' (unverifiable).",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "platform": {
+                "description": "Allowed platforms (e.g. win32, darwin, linux); empty/omitted = any.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "minVersion": {
+                "description": "Minimum version per binary, as { binary: semver }.",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false,
+            "description": "The real-world prerequisites gating this CLI."
+          },
+          "credential": {
+            "type": "boolean",
+            "description": "Whether the CLI needs a credential/API key to be useful."
+          },
+          "reviewed": {
+            "type": "boolean",
+            "description": "Human-reviewed gate: only reviewed:true entries are exposed to the agent; reviewed:false is safe-hidden until curated."
+          }
+        },
+        "required": [
+          "cliName",
+          "entryPoint",
+          "underlying",
+          "credential",
+          "reviewed"
+        ],
+        "additionalProperties": false
+      },
+      "description": "The curated prereq entries."
+    }
+  },
+  "required": [
+    "entries"
+  ],
+  "additionalProperties": false
+}

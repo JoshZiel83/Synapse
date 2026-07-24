@@ -1,0 +1,127 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "GENERATED from Zod by `npm run schema:gen` — do not hand-edit; drift-checked by `npm run guard:schemas`.",
+  "title": "Synapse device-runtime toolchain manifest",
+  "description": "Per-platform toolchain bundle manifest (node/python/git/…) the device runtime installs from. schemaVersion 1. Objects stay open so helper keys like _TODO/_note in the production template are tolerated.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "programs": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "platforms": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "sha256": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "download": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "license": {
+                      "type": "string"
+                    },
+                    "trustedSource": {
+                      "type": "string",
+                      "enum": [
+                        "nodejs.org-official",
+                        "nodejs.org-ustc",
+                        "nodejs.org-huawei",
+                        "nodejs.org-tencent",
+                        "nodejs.org-aliyun",
+                        "nodejs.org-npmmirror",
+                        "astral-sh-python-build-standalone",
+                        "git-for-windows",
+                        "synapse-published",
+                        "fixture-test"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ]
+                },
+                "archiveFormat": {
+                  "default": "tar.gz",
+                  "type": "string",
+                  "enum": [
+                    "tar.gz",
+                    "zip"
+                  ]
+                },
+                "stripComponents": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 8
+                },
+                "executable": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "binDir": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "requiredFiles": {
+                  "default": [],
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "env": {
+                  "default": {},
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "sha256",
+                "download",
+                "executable",
+                "binDir"
+              ]
+            }
+          }
+        },
+        "required": [
+          "version",
+          "platforms"
+        ]
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "programs"
+  ]
+}

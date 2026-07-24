@@ -31,6 +31,11 @@ import { fileURLToPath } from "node:url"
 
 import { z } from "zod"
 
+import {
+  ToolchainManifestSchema,
+  cliPrereqOverlaySchema,
+} from "@synapse/device-runtime/config-schemas"
+
 import { runtimeTuningSchema } from "../src/config/runtime-tuning-schema.js"
 import { backendsSchema } from "../src/infrastructure/storage/remote/config.js"
 import { modelGroupsFileSchema } from "../src/modules/model-groups/schemas.js"
@@ -98,6 +103,31 @@ const REGISTRY: SchemaEntry[] = [
       "packages/api/config/runtime-tuning.json (or RUNTIME_TUNING_CONFIG_PATH); " +
       "a matching env var (e.g. MEMORY_MMR_LAMBDA) overrides the file value.",
     examples: ["packages/api/config/runtime-tuning.example.json"],
+  },
+  {
+    out: "cli-prereq-overlay.schema.json",
+    schema: cliPrereqOverlaySchema,
+    title: "Synapse CLI prereq overlay",
+    description:
+      "Curated, human-reviewed prerequisite gating for CLI-Anything CLIs " +
+      "(packages/device-runtime/src/builtins/cli-catalog/cli-prereq-overlay.json). " +
+      "Only reviewed:true entries are exposed to the agent.",
+    examples: [
+      "packages/device-runtime/src/builtins/cli-catalog/cli-prereq-overlay.json",
+    ],
+  },
+  {
+    out: "toolchain-manifest.schema.json",
+    schema: ToolchainManifestSchema,
+    title: "Synapse device-runtime toolchain manifest",
+    description:
+      "Per-platform toolchain bundle manifest (node/python/git/…) the device " +
+      "runtime installs from. schemaVersion 1. Objects stay open so helper keys " +
+      "like _TODO/_note in the production template are tolerated.",
+    examples: [
+      "packages/device-runtime/bundles/manifest.json",
+      "packages/device-runtime/bundles/manifest.production.template.json",
+    ],
   },
 ]
 

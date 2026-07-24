@@ -15,6 +15,10 @@
     "./builtin-presentation": {
       "types": "./dist/builtin-presentation/index.d.ts",
       "default": "./dist/builtin-presentation/index.js"
+    },
+    "./config-schemas": {
+      "types": "./dist/config-schemas.d.ts",
+      "default": "./dist/config-schemas.js"
     }
   },
   "bin": {

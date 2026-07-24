@@ -24,6 +24,10 @@ import type {
 import { defaultPathResolver } from "../../terminal/environment.js"
 import catalogJson from "./cli-catalog.generated.json" with { type: "json" }
 import overlayJson from "./cli-prereq-overlay.json" with { type: "json" }
+import { cliPrereqOverlaySchema } from "./overlay-schema.js"
+import type { CliPrereq } from "./overlay-schema.js"
+
+export type { CliPrereq } from "./overlay-schema.js"
 
 export interface NormalizedCli {
   cliName: string
@@ -48,18 +52,8 @@ export interface NormalizedCli {
   offline?: boolean | null
 }
 
-export interface CliPrereq {
-  cliName: string
-  entryPoint: string
-  underlying: {
-    binary?: string[]
-    service?: { url: string | null }[]
-    platform?: string[]
-    minVersion?: Record<string, string>
-  }
-  credential: boolean
-  reviewed: boolean
-}
+// `CliPrereq` is defined by cliPrereqEntrySchema in ./overlay-schema.js (the
+// single source of truth for the shape) and re-exported above.
 
 /** One entry in runtime_exposures.metadata.availableClis, keyed by entryPoint. */
 export interface AvailableCliEntry {
@@ -105,7 +99,15 @@ export interface CliCatalogOptions {
 }
 
 const BUNDLED_CATALOG = (catalogJson as { clis: NormalizedCli[] }).clis
-const BUNDLED_OVERLAY = (overlayJson as { entries: CliPrereq[] }).entries
+// Validated (not `as`-cast) at load: a malformed bundled overlay is a build
+// defect, so fail loudly here rather than silently mis-gating CLIs at runtime.
+// Tolerate (strip) an optional top-level `$schema` self-reference first, like
+// the runtime-tuning file, so a curator adding one doesn't crash the import.
+const overlayDoc: Record<string, unknown> = {
+  ...(overlayJson as Record<string, unknown>),
+}
+delete overlayDoc.$schema
+const BUNDLED_OVERLAY = cliPrereqOverlaySchema.parse(overlayDoc).entries
 
 // Canonical binary aliases — a prereq binary is satisfied if ANY alias is on PATH.
 // Modern distros + our cloud image ship `python3`/`nodejs` (not `python`/`node`),

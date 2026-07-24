@@ -39,6 +39,17 @@
     {
       "fileMatch": ["**/runtime-tuning.json", "**/runtime-tuning.example.json"],
       "url": "./schemas/runtime-tuning.schema.json"
+    },
+    {
+      "fileMatch": [
+        "**/bundles/manifest.json",
+        "**/bundles/manifest.production.template.json"
+      ],
+      "url": "./schemas/toolchain-manifest.schema.json"
+    },
+    {
+      "fileMatch": ["**/cli-catalog/cli-prereq-overlay.json"],
+      "url": "./schemas/cli-prereq-overlay.schema.json"
     }
   ]
 }
