@@ -41,6 +41,7 @@ import {
   parseMcpHostRequestBody,
   type McpHostJsonRpcRequest,
 } from "./mcp-host-codec.js"
+import { DEVICE_RUNTIME_VERSION } from "./version.js"
 
 type ExtractEnvelopeResult =
   | { kind: "missing" }
@@ -416,7 +417,7 @@ export function createInMemoryMcpHost(
             capabilities: { tools: {} },
             serverInfo: {
               name: "@synapse/device-runtime",
-              version: "0.1.0",
+              version: DEVICE_RUNTIME_VERSION,
             },
           },
         }

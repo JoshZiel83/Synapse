@@ -20,14 +20,16 @@ import { isValidTraceparent } from "../../infrastructure/observability/tracepare
  * own epochs for bootstrap / task-resolve wakes), so positional inference of the
  * front is unsound. Reads follow the daemon; the daemon is authoritative.
  *
- * Because reads key on `runningEpoch`, a wake re-fired under a fresh epoch (an
- * at-least-once retry the daemon dedups) is correctness-harmless: its extra
- * bucket is never fronted, so it is never read. Such never-fronted buckets are
- * evicted before any turn the daemon has already run (completed turns first, a
- * still-queued turn last), so retry churn can never displace a turn the daemon
- * has yet to front — no membership dedup is needed (an earlier one was a net
- * regression: `extend` below can seed a successor's origin into the running
- * bucket, which a membership check misreads as an already-dispatched delivery).
+ * Because reads key on `runningEpoch`, only the daemon-confirmed turn is ever
+ * read. A retry of a still-pending delivery reuses its turn's PERSISTED epoch
+ * (`turn_epoch`, stamped on the delivery row at first dispatch), so it re-enters
+ * the SAME bucket via `beginTurn`; `addOrigins` dedups by trace id, so a retry
+ * adds nothing and opens ZERO extra buckets. The only never-fronted buckets are
+ * genuinely-new turns — a successor the daemon has queued behind a running one,
+ * or a fresh delivery it coalesced into a turn keyed on another epoch. The cap
+ * evicts those completed-turn-first, queued-turn-last (see evictOverflow); that
+ * ordering is a pure interleave-correctness guarantee (never drop an un-run turn
+ * ahead of a finished one), not a churn-tolerance mechanism.
  *
  * This fixes F3's reverse-MCP half (the old session-scoped cache linked every
  * tools/call to prior turns' origins because an active session's cache never
@@ -40,15 +42,16 @@ import { isValidTraceparent } from "../../infrastructure/observability/tracepare
  *    tools/call links nothing; the turn's first `extend` (check_messages /
  *    read_history) seeds the running epoch's origins from the live delivery rows.
  *  - `extend` reads EVERY pending delivery of the conversation, not just the
- *    running turn's, because the delivery row carries no epoch. It links
- *    CONSERVATIVELY: if the agent polls check_messages mid-turn while a successor
- *    message is already queued, that successor's origin is also linked onto the
- *    running turn. This over-links (a benign extra correlation) but never
- *    UNDER-links — the successor's own turn still links its origin when the
- *    daemon fronts it — and never mis-routes a read to the wrong turn. Under-
- *    linking would be the worse error: the daemon may coalesce a separately-
- *    dispatched delivery into the running turn, so epoch-filtering the rows would
- *    strip an origin the turn genuinely processed.
+ *    running turn's. The delivery row now carries its dispatch epoch, but extend
+ *    deliberately does NOT filter by it: it links CONSERVATIVELY. If the agent
+ *    polls check_messages mid-turn while a successor message is already queued,
+ *    that successor's origin is also linked onto the running turn. This over-
+ *    links (a benign extra correlation) but never UNDER-links — the successor's
+ *    own turn still links its origin when the daemon fronts it — and never mis-
+ *    routes a read to the wrong turn. Under-linking would be the worse error: the
+ *    daemon may coalesce a separately-dispatched (different-epoch) delivery into
+ *    the running turn, so epoch-filtering the rows would strip an origin the turn
+ *    genuinely processed.
  */
 const TURN_CARRIER_CAP = 20
 // Pure memory bound on retained epoch buckets, > the daemon's 100-deep per-
@@ -64,7 +67,7 @@ export class TurnCarrierCache {
   // Epochs the daemon has confirmed running at least once (via `reconcile`). A
   // fronted-but-superseded bucket is a COMPLETED turn; the cap evicts those
   // before any bucket the daemon has never fronted, so a still-queued turn is
-  // never dropped ahead of stale finished ones (nor ahead of retry churn).
+  // never dropped ahead of stale finished ones.
   private readonly fronted = new Set<string>()
 
   private bucket(epoch: string): Map<string, string> {
@@ -120,17 +123,16 @@ export class TurnCarrierCache {
   }
 
   /**
-   * Attach the dispatched wake's origins to its epoch bucket. Does NOT change
-   * `runningEpoch` — a freshly-dispatched wake's bucket stays inert until the
-   * daemon confirms it via `reconcile`.
+   * Attach the dispatched wake's origins to its epoch bucket (find-or-create,
+   * keyed strictly by epoch). Idempotent per epoch: a retry reuses its turn's
+   * persisted epoch, so it lands in the SAME bucket and `addOrigins` dedups by
+   * trace id. Does NOT change `runningEpoch` — a freshly-dispatched wake's bucket
+   * stays inert until the daemon confirms it via `reconcile`.
    *
-   * No membership dedup: a still-pending delivery re-fired under a fresh minted
-   * epoch just opens another never-fronted bucket that reads never target, so
-   * the churn is memory-only (bounded by the cap's completed-first eviction). A
-   * dedup keyed on "every origin already in the running bucket" is unsound —
-   * `extend` can seed a queued successor's origin into the running bucket, so
-   * that successor's genuine new turn would be misread as a re-delivery and lose
-   * its bucket.
+   * Buckets are keyed by epoch, never by origin membership: the same origin can
+   * legitimately belong to more than one turn's bucket (`extend` over-links a
+   * queued successor's origin onto the running turn), so origin identity is not a
+   * turn key — only the api-minted epoch is.
    */
   beginTurn(
     epoch: string,
@@ -154,15 +156,14 @@ export class TurnCarrierCache {
   }
 
   /**
-   * Reconcile the running epoch against the daemon's `agent:status.turn_epoch`.
+   * Reconcile the running epoch against the daemon's `agent:status.turn_epoch`
+   * (a REQUIRED wire field — always present, value nullable).
    * `string` → that epoch is running (get-or-create its bucket; drop nothing —
    * a still-queued api bucket survives to be read once the daemon fronts it).
    * `null` → daemon idle (reads return empty; buckets retained so a freshly-
-   * dispatched-but-unconfirmed epoch survives a stale idle status). `undefined`
-   * → no-op (malformed/foreign-frame guard; the daemon always sends the field).
+   * dispatched-but-unconfirmed epoch survives a stale idle status).
    */
-  reconcile(confirmedEpoch: string | null | undefined): void {
-    if (confirmedEpoch === undefined) return
+  reconcile(confirmedEpoch: string | null): void {
     if (confirmedEpoch === null) {
       this.runningEpoch = null
       return
@@ -262,7 +263,7 @@ export function beginTurnForConversation(
 export function reconcileTurnForConversation(
   remoteAgentId: string,
   conversationId: string,
-  confirmedEpoch: string | null | undefined
+  confirmedEpoch: string | null
 ): void {
   const set = cachesByConversation.get(
     registryKey(remoteAgentId, conversationId)

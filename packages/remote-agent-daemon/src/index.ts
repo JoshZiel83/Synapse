@@ -967,65 +967,90 @@ class ManagedRemoteAgent {
     }
     for (const [conversationId, items] of byConversation) {
       // Dedup against the pending set (ALL epochs): the api's retry worker
-      // re-fires a still-pending delivery every ~10s (often under a NEW epoch),
-      // and while its turn is in flight we must not raise a duplicate wake. Only
-      // genuinely-new deliveries proceed; a delivery leaves the pending set only
-      // on completion (forgetDeliveries) or when its turn ends / drops (drain +
-      // fail-report), after which the next re-fire is fresh again — one turn per
-      // reschedule, never a double.
+      // re-fires a still-pending delivery every ~10s (under its OWN persisted
+      // turn epoch, reused across retries), and while its turn is in flight we
+      // must not raise a duplicate wake. Only genuinely-new deliveries proceed; a
+      // delivery leaves the pending set only on completion (forgetDeliveries) or
+      // when its turn ends / drops (drain + fail-report), after which the next
+      // re-fire is fresh again — one turn per reschedule, never a double.
       const fresh = items.filter(
         (item) => !this.hasPendingDelivery(conversationId, item.deliveryId)
       )
       if (fresh.length === 0) continue
-      // One epoch per conversation slice — the api mints ONE `turn_epoch` for the
-      // whole (agent, conversation) dispatch. Absent (un-upgraded api during the
-      // daemon-first cutover) ⇒ the daemon self-mints so the turn is still
-      // epoch-scoped end to end.
-      const epoch = items[0]?.turnEpoch ?? randomUUID()
       // Remember EVERY fresh delivery's own carrier (see the deliveryCarriers
       // doc) — within-batch contexts are preserved per delivery, not collapsed
-      // into a last-writer-wins slot.
+      // into a last-writer-wins slot. Done for ALL fresh before the per-epoch
+      // partition below so each group's `scopeFor` resolves its own carriers.
       for (const item of fresh) {
         this.deliveryCarriers.set(item.deliveryId, frameCarrier(item))
       }
-      const deliveryIds = fresh.map((item) => item.deliveryId)
-      // The fresh deliveries routed into this turn ARE its origins — the
-      // callbacks read them via `turns` under THIS epoch (not the whole
-      // conversation's pending set: the F3 collapse the R3 epoch-keying undoes).
-      this.turns.noteDeliveries(conversationId, epoch, deliveryIds)
-      const scope = this.deliveryCarriers.scopeFor(deliveryIds)
-      await runWithCarrier(scope, async () => {
-        this.trackPendingDeliveries(conversationId, epoch, deliveryIds)
-        const hasRuntime = this.runtimes.has(conversationId)
-        try {
-          await this.ensureRuntimeForConversation({
-            conversationId,
-            epoch,
-            // A fresh runtime starts with the bootstrap prompt, which already
-            // instructs the agent to check_messages; piling another wake
-            // prompt on top would duplicate the turn. An existing runtime
-            // needs the wake nudge (queued behind any in-flight turn) to
-            // notice new work.
-            wake: hasRuntime,
-          })
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
+      // Partition the fresh deliveries by their own `turn_epoch`, then open/rejoin
+      // one turn PER epoch — never collapse the frame under a single `fresh[0]`.
+      // A mixed frame can co-batch a genuinely-new delivery with an evicted-but-
+      // still-pending straggler of a DIFFERENT, older turn: `enforcePendingCap`
+      // silently drops the oldest ids from the local dedup set once a single
+      // conversation exceeds its cap, so a straggler slips back past the
+      // `hasPendingDelivery` filter carrying its original (still-running) epoch.
+      // Keying the whole frame on that straggler's epoch would drag the new
+      // delivery into the older turn's pending set, and when that turn completes
+      // `drainEpochDeliveries` would fail-report the new delivery prematurely —
+      // violating R3 drain-isolation (a completing turn must drain only ITS own
+      // origins). Grouping by epoch keeps each delivery under its true turn: the
+      // new one opens/queues its own turn, the straggler rejoins its own (draining
+      // with it, then rescheduled by the api like any of that turn's ids). All new
+      // (NULL-on-api) deliveries of one conversation share the api's slice epoch,
+      // so the common single-epoch frame yields exactly one group — unchanged.
+      const byEpoch = new Map<string, string[]>()
+      for (const item of fresh) {
+        const ids = byEpoch.get(item.turnEpoch) ?? []
+        ids.push(item.deliveryId)
+        byEpoch.set(item.turnEpoch, ids)
+      }
+      for (const [epoch, deliveryIds] of byEpoch) {
+        // The fresh deliveries routed into this turn ARE its origins — the
+        // callbacks read them via `turns` under THIS epoch (not the whole
+        // conversation's pending set: the F3 collapse the R3 epoch-keying undoes).
+        this.turns.noteDeliveries(conversationId, epoch, deliveryIds)
+        const scope = this.deliveryCarriers.scopeFor(deliveryIds)
+        await runWithCarrier(scope, async () => {
+          this.trackPendingDeliveries(conversationId, epoch, deliveryIds)
+          const hasRuntime = this.runtimes.has(conversationId)
+          try {
+            await this.ensureRuntimeForConversation({
+              conversationId,
+              epoch,
+              // A fresh runtime starts with the bootstrap prompt, which already
+              // instructs the agent to check_messages; piling another wake
+              // prompt on top would duplicate the turn. An existing runtime
+              // (including one just bootstrapped by an earlier epoch group in
+              // this same frame) needs the wake nudge (queued behind any
+              // in-flight turn) to notice new work.
+              wake: hasRuntime,
+            })
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error)
+            log(
+              "error",
+              `remote-agent:${this.params.remoteAgentId}`,
+              "Routing deliveries to conversation runtime failed; reporting back to server",
+              { conversationId, count: deliveryIds.length, error: message }
+            )
+            await this.reportDeliveryFailure(
+              deliveryIds,
+              message,
+              conversationId
+            )
+            return
+          }
           log(
-            "error",
+            "debug",
             `remote-agent:${this.params.remoteAgentId}`,
-            "Routing deliveries to conversation runtime failed; reporting back to server",
-            { conversationId, count: fresh.length, error: message }
+            "Routed deliveries to conversation runtime",
+            { conversationId, count: deliveryIds.length }
           )
-          await this.reportDeliveryFailure(deliveryIds, message, conversationId)
-          return
-        }
-        log(
-          "debug",
-          `remote-agent:${this.params.remoteAgentId}`,
-          "Routed deliveries to conversation runtime",
-          { conversationId, count: fresh.length }
-        )
-      })
+        })
+      }
     }
   }
 

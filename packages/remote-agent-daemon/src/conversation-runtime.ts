@@ -356,7 +356,11 @@ export class ConversationRuntime {
    * A turn's terminal arrived — dispatch the next queued wake, or go idle. Called
    * only from the turn_completed handler (gate armed). Dispatching into a session
    * that died between the terminal and here is safe: drainEvents' finally strands
-   * the just-set epoch via failGateOnDeath.
+   * the just-set epoch via failGateOnDeath. The `.catch` covers the narrower case
+   * where the send itself rejects but the drain loop stays alive (so its finally
+   * never runs) — without it the turn would wedge turnInFlight with no terminal
+   * ever arriving. failGateOnDeath is idempotent, so racing drainEvents' finally
+   * strands the epoch exactly once.
    */
   private advanceGate() {
     const next = this.pendingTurns.shift()
@@ -374,7 +378,7 @@ export class ConversationRuntime {
       this.failGateOnDeath()
       return
     }
-    void session.send(next.prompt)
+    void session.send(next.prompt).catch(() => this.failGateOnDeath())
   }
 
   private pushPendingTurn(epoch: string, prompt: string) {

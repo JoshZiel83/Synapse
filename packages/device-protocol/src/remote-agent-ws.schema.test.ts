@@ -57,6 +57,7 @@ test("RemoteAgentStatusMessageSchema accepts snake_case lifecycle status", () =>
     session_id: "session-1",
     last_error: "",
     run_key: "run-1",
+    turn_epoch: "epoch-1",
     capabilities: {
       supports_request_user_input: true,
       supports_plan_mode: true,

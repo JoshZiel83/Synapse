@@ -637,6 +637,7 @@ export async function loadPendingRemoteAgentDeliveriesRepo(
     itemId: string
     conversationId: string
     originTraceparent: string | null
+    turnEpoch: string | null
   }>(
     executor,
     `
@@ -646,7 +647,8 @@ export async function loadPendingRemoteAgentDeliveriesRepo(
         binding.machine_id AS "machineId",
         delivery.item_id AS "itemId",
         delivery.conversation_id AS "conversationId",
-        delivery.origin_traceparent AS "originTraceparent"
+        delivery.origin_traceparent AS "originTraceparent",
+        delivery.turn_epoch AS "turnEpoch"
       FROM remote_agent_message_deliveries delivery
       INNER JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = delivery.remote_agent_id
@@ -728,6 +730,35 @@ export async function scheduleDeliveryRetryRepo(
       .where("id", "=", row.id)
       .execute()
   }
+}
+
+/**
+ * Stamp freshly-minted turn epochs onto never-dispatched delivery rows, BEFORE
+ * the daemon push. Writes ONLY rows still NULL (`turn_epoch IS NULL`), so it is
+ * idempotent and can never overwrite the epoch a delivery was first dispatched
+ * under — a concurrent notify racing the same row is a no-op for the loser.
+ * Paired UNNEST arrays carry one epoch per row in a single statement. Like
+ * `scheduleDeliveryRetryRepo`, it does not touch `updated_at` (no trigger on
+ * this table; the column moves only on the paths that already set it).
+ */
+export async function persistDeliveryTurnEpochsRepo(
+  rows: Array<{ deliveryId: string; epoch: string }>,
+  executor: Executor = db
+) {
+  if (rows.length === 0) return
+  await runOn(
+    executor,
+    `
+      UPDATE remote_agent_message_deliveries AS d
+      SET turn_epoch = v.epoch
+      FROM (
+        SELECT UNNEST($1::uuid[]) AS id, UNNEST($2::text[]) AS epoch
+      ) AS v
+      WHERE d.id = v.id
+        AND d.turn_epoch IS NULL
+    `,
+    [rows.map((row) => row.deliveryId), rows.map((row) => row.epoch)]
+  )
 }
 
 export async function listOwnedPendingDeliveryIdsRepo(
@@ -1774,6 +1805,10 @@ export async function insertDeliveryForParticipantRepo(
         // or retry-worker send (neither of which has an active request span) can
         // still carry the originating trace to the daemon. NULL when tracing off.
         originTraceparent: activeTraceparent() ?? null,
+        // No turn epoch yet — a delivery is minted before it is ever dispatched.
+        // The first `notifyPendingRemoteAgentDeliveries` that sends it stamps a
+        // fresh epoch here (a new turn); every retry thereafter reuses it.
+        turnEpoch: null,
         createdAt: sql`NOW()`,
       })
       .onConflict((oc) => oc.columns(["remoteAgentId", "itemId"]).doNothing())

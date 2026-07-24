@@ -87,6 +87,7 @@ test("parseRemoteAgentMachineMessage maps snake_case status capabilities", () =>
       session_id: "session-1",
       last_error: "",
       run_key: "run-1",
+      turn_epoch: "epoch-1",
       capabilities: {
         supports_request_user_input: true,
         supports_plan_mode: true,
@@ -114,7 +115,7 @@ test("parseRemoteAgentMachineMessage maps snake_case status capabilities", () =>
       supportsCodexAppServer: true,
       supportsStructuredIo: false,
     },
-    turnEpoch: undefined,
+    turnEpoch: "epoch-1",
     traceparent: undefined,
     tracestate: undefined,
   })
@@ -188,6 +189,7 @@ test("serializeRemoteAgentApiToDaemonMessage emits snake_case deliveries", () =>
         deliveryId: "delivery-1",
         conversationId: "conversation-1",
         itemId: "item-1",
+        turnEpoch: "epoch-1",
       },
     ],
   })
@@ -200,6 +202,7 @@ test("serializeRemoteAgentApiToDaemonMessage emits snake_case deliveries", () =>
         delivery_id: "delivery-1",
         conversation_id: "conversation-1",
         item_id: "item-1",
+        turn_epoch: "epoch-1",
       },
     ],
   })
@@ -282,6 +285,7 @@ test("serializeRemoteAgentApiToDaemonMessage carries the trace carrier pair on l
             deliveryId: "delivery-1",
             conversationId: "conversation-1",
             itemId: "item-1",
+            turnEpoch: "epoch-1",
             traceparent: TP,
             tracestate: TS,
           },
@@ -296,6 +300,7 @@ test("serializeRemoteAgentApiToDaemonMessage carries the trace carrier pair on l
           delivery_id: "delivery-1",
           conversation_id: "conversation-1",
           item_id: "item-1",
+          turn_epoch: "epoch-1",
           traceparent: TP,
           tracestate: TS,
         },

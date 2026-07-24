@@ -113,7 +113,8 @@ export function normalizeStoredChatWorkspaceQueueState(
   workspaceId: string,
   value: unknown
 ): ChatWorkspaceQueueState {
-  // Delegate to the canonical normalizer (handles v1→v2 migration + tombstones).
+  // Delegate to the canonical normalizer: clean break — only the current queue
+  // version is accepted, any earlier persisted snapshot is wiped wholesale.
   return normalizeChatWorkspaceQueueState(workspaceId, value)
 }
 

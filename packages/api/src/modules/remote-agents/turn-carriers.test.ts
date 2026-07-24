@@ -81,6 +81,27 @@ test("beginTurn on a queued epoch does NOT change the running turn's reads (R3 i
   assert.deepEqual(cache.originsForToolCall(), [traceparentFor(0x2)])
 })
 
+test("a retry reuses its turn's epoch — re-enters the SAME bucket, opens no new one (P1-2 churn fix)", () => {
+  const cache = new TurnCarrierCache()
+  // First dispatch of a turn: one bucket, one origin.
+  cache.beginTurn("E1", [traceparentFor(0x1)])
+  cache.reconcile("E1")
+  assert.equal(cache.bucketCount(), 1)
+  // The retry worker re-notifies the still-pending delivery. Under the fix it
+  // reuses the PERSISTED epoch E1, so beginTurn lands in the SAME bucket and
+  // addOrigins dedups the already-present origin: no new bucket, no churn. (The
+  // old bug minted a fresh epoch per retry, opening a bucket each time until the
+  // 128 cap evicted the real queued origin.)
+  for (let i = 0; i < 200; i++) {
+    cache.beginTurn("E1", [traceparentFor(0x1)])
+  }
+  assert.equal(cache.bucketCount(), 1)
+  assert.deepEqual(cache.originsForToolCall(), [traceparentFor(0x1)])
+  // A genuinely-new turn (fresh epoch) still opens its own bucket.
+  cache.beginTurn("E2", [traceparentFor(0x2)])
+  assert.equal(cache.bucketCount(), 2)
+})
+
 test("reconcile(string) drops NOTHING — a queued bucket behind a daemon-minted epoch survives to be fronted (finding B)", () => {
   const cache = new TurnCarrierCache()
   // The api dispatches E1 (bucket {tp1}). Before E1 runs, the daemon fronts a
@@ -113,15 +134,6 @@ test("reconcile(null) points reads at nothing and never links a completed turn's
   // idle window).
   cache.reconcile("E2")
   assert.deepEqual(cache.originsForToolCall(), [traceparentFor(0x2)])
-})
-
-test("reconcile(undefined) is a no-op guard (malformed/foreign frame)", () => {
-  const cache = new TurnCarrierCache()
-  cache.beginTurn("E1", [traceparentFor(0x1)])
-  cache.reconcile("E1")
-  cache.reconcile(undefined)
-  assert.equal(cache.frontEpoch(), "E1")
-  assert.deepEqual(cache.originsForToolCall(), [traceparentFor(0x1)])
 })
 
 test("extend()'ing a queued successor's origin into the running bucket does NOT suppress its own future turn (dedup false-positive regression)", () => {

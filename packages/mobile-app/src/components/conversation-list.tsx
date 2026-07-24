@@ -3,14 +3,13 @@ import { StyleSheet, View, type RefreshControlProps } from "react-native"
 import { FlashList } from "@shopify/flash-list"
 
 import { ConversationItem } from "@/components/conversation-item"
-import type { PendingChatRead } from "@/lib/chat-data"
 import { theme } from "@/theme/tokens"
-import type { ChatConversationView } from "@shared"
+import type { ChatConversationView, PendingConversationRead } from "@shared"
 
 interface ConversationListProps {
   conversations: ChatConversationView[]
   workspaceMemberId?: string | null
-  pendingReads?: Record<string, PendingChatRead>
+  pendingReads?: Record<string, PendingConversationRead>
   onPressConversation: (conversation: ChatConversationView) => void
   maxItems?: number
   showDividers?: boolean

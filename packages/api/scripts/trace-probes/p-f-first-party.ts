@@ -44,6 +44,16 @@ import {
   buildFirstPartyAllowlist,
 } from "../../src/infrastructure/observability/first-party-propagator.js"
 
+// Mirror production (src/instrumentation.ts:221): HttpInstrumentation reads this
+// in its CONSTRUCTOR, so it MUST be set before `new HttpInstrumentation()` below.
+// Without it instrumentation-http emits legacy `http.url` instead of the stable
+// `url.full` that FirstPartyOnlyPropagator.resolveDestinationUrl actually reads —
+// the probe would then diverge from prod (the spy could see a URL via the legacy
+// attr while the real propagator resolves nothing and fails closed, silently
+// under-testing the http egress path). `||=` not `??=`: the OTel env spec treats
+// empty-string as unset (compose `${VAR:-}` passthroughs materialize exactly it).
+process.env.OTEL_SEMCONV_STABILITY_OPT_IN ||= "http"
+
 let pass = 0
 let fail = 0
 function check(label: string, cond: boolean, detail?: unknown): void {
@@ -72,7 +82,10 @@ function spy(inner: TextMapPropagator): TextMapPropagator {
           span as unknown as { attributes?: Record<string, unknown> }
         ).attributes
         observations.push({
-          url: attributes?.["url.full"] ?? attributes?.["http.url"],
+          // Reads EXACTLY what FirstPartyOnlyPropagator.resolveDestinationUrl
+          // reads (stable `url.full` only) — the semconv opt-in above forces
+          // both instrumentations to set it, so no legacy `http.url` fallback.
+          url: attributes?.["url.full"],
           recording: span.isRecording(),
         })
       }

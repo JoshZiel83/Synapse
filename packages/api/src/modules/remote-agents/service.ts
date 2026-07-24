@@ -535,7 +535,9 @@ async function notifyPendingRemoteAgentDeliveries(params: {
       deliveryId: string
       conversationId: string
       itemId: string
-      turnEpoch?: string
+      // The epoch already persisted on the delivery row: null until first
+      // dispatch, then the durable turn identity reused on every retry.
+      persistedEpoch: string | null
       traceparent?: string
     }>
   >()
@@ -547,6 +549,7 @@ async function notifyPendingRemoteAgentDeliveries(params: {
       deliveryId: row.deliveryId,
       conversationId: row.conversationId,
       itemId: row.itemId,
+      persistedEpoch: row.turnEpoch,
       // Per-delivery originating trace, persisted at enqueue → correct even on
       // the reconnect-replay / retry-worker legs that have no active span here.
       traceparent: row.originTraceparent ?? undefined,
@@ -574,14 +577,18 @@ async function notifyPendingRemoteAgentDeliveries(params: {
     // idempotent, so re-sending the prefix on every batch is cheap and
     // robust.
     await sendAgentStartPrefix(connection, pendingForSend, machineId)
-    // Mint ONE turn epoch per (agent, conversation) BEFORE the send and stamp it
-    // on every delivery of that conversation: the daemon coalesces a
-    // conversation's deliveries into ONE turn and reads `items[0].turn_epoch`, so
-    // all of a conversation's deliveries in this batch MUST carry the same epoch.
-    // The SAME epoch keys the api-side turn-carrier bucket opened after the send,
-    // so a tools/call in the woken turn links THIS wake's delivery origins once
-    // the daemon confirms the epoch running (F3 reverse-MCP half + R3 interleave).
-    const wakeByConversation = new Map<
+    // Assign each delivery its turn epoch, then dispatch. A delivery already
+    // stamped (a retry) REUSES its persisted epoch, so it re-enters the SAME
+    // api-side turn-carrier bucket and the SAME daemon turn — zero churn. A
+    // never-dispatched (NULL) delivery gets a FRESH epoch = a new turn; all NULL
+    // deliveries of one conversation in this batch share ONE fresh epoch, so the
+    // daemon coalesces them into a single turn. The daemon partitions each frame's
+    // fresh deliveries BY turn_epoch and opens or re-enters one turn per epoch, so
+    // a batch can safely carry MULTIPLE epochs for one conversation (retries of
+    // in-flight turns + one fresh turn) — each epoch opens or re-enters its own
+    // turn-carrier bucket after the send, and no epoch's drain touches another's.
+    const freshEpochByConversation = new Map<string, string>()
+    const turnGroups = new Map<
       string,
       {
         remoteAgentId: string
@@ -590,47 +597,86 @@ async function notifyPendingRemoteAgentDeliveries(params: {
         traceparents: Array<string | undefined>
       }
     >()
+    const newlyStamped: Array<{ deliveryId: string; epoch: string }> = []
+    const dispatch: Array<{
+      remoteAgentId: string
+      deliveryId: string
+      conversationId: string
+      itemId: string
+      turnEpoch: string
+      traceparent?: string
+    }> = []
     for (const delivery of pendingForSend) {
-      const key = `${delivery.remoteAgentId}:${delivery.conversationId}`
-      let slice = wakeByConversation.get(key)
-      if (!slice) {
-        slice = {
+      const conversationKey = `${delivery.remoteAgentId}:${delivery.conversationId}`
+      let epoch: string
+      if (delivery.persistedEpoch !== null) {
+        epoch = delivery.persistedEpoch
+      } else {
+        let fresh = freshEpochByConversation.get(conversationKey)
+        if (!fresh) {
+          fresh = crypto.randomUUID()
+          freshEpochByConversation.set(conversationKey, fresh)
+        }
+        epoch = fresh
+        newlyStamped.push({ deliveryId: delivery.deliveryId, epoch })
+      }
+      dispatch.push({
+        remoteAgentId: delivery.remoteAgentId,
+        deliveryId: delivery.deliveryId,
+        conversationId: delivery.conversationId,
+        itemId: delivery.itemId,
+        turnEpoch: epoch,
+        traceparent: delivery.traceparent,
+      })
+      const groupKey = `${conversationKey}:${epoch}`
+      let group = turnGroups.get(groupKey)
+      if (!group) {
+        group = {
           remoteAgentId: delivery.remoteAgentId,
           conversationId: delivery.conversationId,
-          epoch: crypto.randomUUID(),
+          epoch,
           traceparents: [],
         }
-        wakeByConversation.set(key, slice)
+        turnGroups.set(groupKey, group)
       }
-      delivery.turnEpoch = slice.epoch
-      slice.traceparents.push(delivery.traceparent)
+      group.traceparents.push(delivery.traceparent)
+    }
+    // Persist freshly-minted epochs BEFORE the send. This closes the P1-2 churn
+    // window at its root: once a delivery's epoch is durable, every subsequent
+    // retry (even one racing a crash between here and the send) reuses it instead
+    // of minting anew. Awaited and un-caught — a persist failure leaves the rows
+    // NULL and pending, so the next retry simply re-mints; we never push a
+    // delivery under an epoch not yet on its row.
+    if (newlyStamped.length > 0) {
+      await repo.persistDeliveryTurnEpochsRepo(newlyStamped)
     }
     const sent = safeSend(connection, {
       type: "agent:deliver",
-      deliveries: pendingForSend,
+      deliveries: dispatch,
     })
     if (sent) {
       markInFlightDeliveries(
         machineId,
-        pendingForSend.map((delivery) => delivery.deliveryId),
+        dispatch.map((delivery) => delivery.deliveryId),
         now
       )
-      // Open the reverse-MCP turn epoch on any live session of each dispatched
-      // (agent, conversation). No-op when no reverse-MCP session is connected —
-      // its first tools/call `extend`s from the live delivery rows once the
-      // daemon confirms the turn.
-      for (const slice of wakeByConversation.values()) {
+      // Open (or re-enter) the reverse-MCP turn-carrier bucket for each distinct
+      // epoch on any live session of the conversation. A retry group re-enters its
+      // existing bucket (addOrigins dedups); a fresh group opens a new one. No-op
+      // when no reverse-MCP session is connected — its first tools/call `extend`s
+      // from the live delivery rows once the daemon confirms the turn.
+      for (const group of turnGroups.values()) {
         beginTurnForConversation(
-          slice.remoteAgentId,
-          slice.conversationId,
-          slice.epoch,
-          slice.traceparents
+          group.remoteAgentId,
+          group.conversationId,
+          group.epoch,
+          group.traceparents
         )
       }
     } else {
       await scheduleDeliveryRetry(
         machineId,
-        pendingForSend.map((delivery) => delivery.deliveryId),
+        dispatch.map((delivery) => delivery.deliveryId),
         "WebSocket push failed"
       )
     }
@@ -1291,6 +1337,9 @@ export async function createRemoteAgentUserInputTask(params: {
     conversationId: params.conversationId,
     taskId: task.id,
     runKey: params.runKey,
+    // api-synthetic transition (not a daemon frame): no daemon turn epoch to
+    // assert, and updateRemoteAgentRuntimeStatus never reads it.
+    turnEpoch: null,
   })
   return { task }
 }
@@ -1346,6 +1395,9 @@ export async function createRemoteAgentPlanApprovalTask(params: {
     conversationId: params.conversationId,
     taskId: task.id,
     runKey: params.runKey,
+    // api-synthetic transition (not a daemon frame): no daemon turn epoch to
+    // assert, and updateRemoteAgentRuntimeStatus never reads it.
+    turnEpoch: null,
   })
   return { task }
 }

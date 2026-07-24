@@ -686,8 +686,8 @@ export const RemoteAgentStatusMessageSchema = z.strictObject({
   // The daemon's CURRENT front (running) turn epoch for this conversation, used
   // by the api to reconcile its turn-carrier front (level-triggered, every
   // status frame): a non-empty string while a turn is open, `null` when fully
-  // idle, ABSENT only from an un-upgraded daemon predating this field.
-  turn_epoch: z.string().min(1).nullable().optional(),
+  // idle.
+  turn_epoch: z.string().min(1).nullable(),
   ...wireTraceContextFields,
 })
 export type RemoteAgentStatusMessage = z.infer<
@@ -808,11 +808,12 @@ export const RemoteAgentApiDeliveryWireSchema = z.strictObject({
   conversation_id: z.string().min(1),
   item_id: z.string().min(1),
   // The api-minted turn epoch for the (agent, conversation) slice this delivery
-  // wakes. Stamped once at dispatch; identical across all deliveries of one
-  // slice; the daemon keys its per-turn FIFO buckets on it. Per-delivery (not
-  // per-frame): one agent:deliver batch fans in deliveries from many
-  // conversation slices, each carrying its own epoch.
-  turn_epoch: z.string().min(1).optional(),
+  // wakes. Stamped once at first dispatch and persisted on the delivery row, so
+  // a retry reuses it (identical across all deliveries of one slice); the daemon
+  // keys its per-turn FIFO buckets on it. Per-delivery (not per-frame): one
+  // agent:deliver batch fans in deliveries from many conversation slices, each
+  // carrying its own epoch.
+  turn_epoch: z.string().min(1),
   // Per-delivery W3C trace context (the enqueuing request's trace; traceparent
   // persisted on the delivery row, tracestate live-path only). Per-delivery,
   // NOT per-frame: one agent:deliver batch fans in deliveries from many

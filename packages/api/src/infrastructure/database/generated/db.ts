@@ -1948,6 +1948,7 @@ export interface RemoteAgentMessageDeliveries {
   originTraceparent: string | null;
   remoteAgentId: string;
   status: Generated<RemoteAgentMessageDeliveriesStatus>;
+  turnEpoch: string | null;
   updatedAt: Generated<Date>;
 }
 

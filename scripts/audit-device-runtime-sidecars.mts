@@ -1,26 +1,36 @@
 #!/usr/bin/env tsx
-// Audits the device-runtime sidecar contract end-to-end. Three sides
-// must agree; this script is the single CI gate that catches drift on
+// Audits the device-runtime sidecar CONTRACT end-to-end — the parts
+// specific to the six platform bundles that can drift independently of
+// the version numbers. This is the single gate that catches drift on
 // any of them:
 //
-//   1. Version pins — every sidecar package.json version matches
-//      @synapse/device-runtime's version, the optionalDependencies
-//      pin is exact, and package-lock.json records the same exact
-//      version (so `npm ci` resolves the pinned sidecar, not a
-//      newer one with archives bound to a newer manifest sha).
+//   1. Per-sidecar manifest hygiene — each sidecar is declared as an
+//      optionalDependency of @synapse/device-runtime, is `private: true`
+//      (so a direct `npm publish -w <sidecar>` is refused by npm itself),
+//      and declares publishConfig.os/cpu matching its platformKey with
+//      NO top-level os/cpu (which would trip npm 9 EBADPLATFORM on the
+//      dev install). The publish wrapper
+//      (scripts/publish-device-runtime-sidecars.sh) hoists os/cpu to
+//      top-level when publishing.
 //
-//   2. publishConfig.os/cpu — every sidecar declares the (os, cpu)
-//      its platformKey implies; top-level os/cpu is forbidden
-//      (would trip npm 9 EBADPLATFORM on the dev install). The
-//      publish wrapper (scripts/publish-device-runtime-sidecars.sh)
-//      hoists these to top-level when publishing.
-//
-//   3. Shared ↔ manifest ↔ sidecar archive parity — BUNDLE_ELIGIBLE_
+//   2. Shared ↔ manifest ↔ sidecar archive parity — BUNDLE_ELIGIBLE_
 //      PROGRAMS ⊆ BUNDLE_PROGRAM_PLATFORM_KEYS, every PLATFORM_KEYS
 //      entry has a real manifest row, every manifest row has a
 //      committed sidecar archive matching BOTH content sha256 AND
-//      one of the runtime probe filenames (`<sha>.<ext>` or
-//      `<sha>`).
+//      one of the runtime probe filenames (`<sha>.<ext>` or `<sha>`).
+//
+//   3. Publish-script + helper-binary distribution invariants — the
+//      publish wrapper enumerates exactly the committed sidecar dirs, and
+//      the Go/Rust helper binaries stay OUT of the npm channel (F9c).
+//
+// NOT this script's job: version COHESION. The six bundles are DECOUPLED
+// from the @synapse release cohort — they pin to their own independent
+// version and publish on a separate cadence — so coupling a sidecar's
+// version to device-runtime's would be wrong (it would 404 the pin and
+// strip every sidecar on install). Cohort lockstep, exact bundle pins
+// (optionalDependency == the bundle's OWN version), and package-lock sync
+// are all enforced by scripts/guard-workspace-versions.mjs, which IS
+// wired into verify-boundary.sh.
 //
 // Run via `npm run audit:device-runtime-sidecars` from the repo root.
 // Exits 1 on any drift with a punch list, 0 when everything lines up.
@@ -45,7 +55,6 @@ import {
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const MAIN_PKG = join(REPO_ROOT, "packages", "device-runtime", "package.json")
-const LOCKFILE = join(REPO_ROOT, "package-lock.json")
 const MANIFEST = join(
   REPO_ROOT,
   "packages",
@@ -77,7 +86,6 @@ const MANIFEST = join(
 // dir. Pulling all four into the union means orphans get caught.
 const manifest = JSON.parse(readFileSync(MANIFEST, "utf-8"))
 const main = JSON.parse(readFileSync(MAIN_PKG, "utf-8"))
-const expectedVersion = main.version as string
 const optionalDeps = (main.optionalDependencies ?? {}) as Record<string, string>
 
 function extractKeyFromDepName(depName: string): string | null {
@@ -143,20 +151,19 @@ for (const key of SIDECAR_PLATFORM_KEYS) {
   )
 }
 
-// (1) version pins
+// (1) per-sidecar manifest hygiene — declared-as-optionalDependency +
+// `private: true` + publishConfig os/cpu. Version pinning/cohesion is
+// guard-workspace-versions' job (bundles are DECOUPLED from the cohort);
+// here the optionalDependency entry is checked only for PRESENCE — a
+// sidecar dir that exists but isn't wired into optionalDependencies would
+// never install on a consumer.
 for (const key of SIDECAR_PLATFORM_KEYS) {
   const pkgName = `@synapse/device-runtime-bundles-${key}`
-  const declaredRange = optionalDeps[pkgName]
-  if (!declaredRange) {
+  if (!optionalDeps[pkgName]) {
     errors.push(
       `${pkgName}: not in @synapse/device-runtime optionalDependencies`
     )
     continue
-  }
-  if (declaredRange !== expectedVersion) {
-    errors.push(
-      `${pkgName}: optionalDependency pinned to "${declaredRange}" but @synapse/device-runtime is "${expectedVersion}". Pin to "${expectedVersion}" so npm can't install a mismatched sidecar (which would have archives of a different vintage than the manifest expects).`
-    )
   }
   const sidecarPkgPath = join(
     REPO_ROOT,
@@ -169,11 +176,6 @@ for (const key of SIDECAR_PLATFORM_KEYS) {
     continue
   }
   const sidecarPkg = JSON.parse(readFileSync(sidecarPkgPath, "utf-8"))
-  if (sidecarPkg.version !== expectedVersion) {
-    errors.push(
-      `${pkgName}: sidecar package.json version is "${sidecarPkg.version}" but main pkg is "${expectedVersion}". Bump in lockstep.`
-    )
-  }
   // Sidecars MUST be `private: true` in source. This is the npm-enforced
   // block against a direct `npm publish -w <sidecar>` — unlike the
   // prepublishOnly guard (sidecar-publish-guard.mjs), `private: true`
@@ -222,38 +224,6 @@ for (const key of SIDECAR_PLATFORM_KEYS) {
     errors.push(
       `${pkgName}: top-level "cpu" is set — would trip npm 9 EBADPLATFORM during dev install. Move to publishConfig.cpu.`
     )
-  }
-}
-
-// (1b) lockfile parity — package-lock.json must reflect the pinned
-// optionalDependencies so committed state matches what npm resolves on
-// install. The earlier shape pinned package.json to "0.1.0" but left
-// the lockfile recording "*", silently allowing a sidecar bump to be
-// picked up at install time (defeating the version coupling
-// promised by the manifest sha contract). The audit now refuses to
-// pass if the lockfile is out of date — run `npm install` to
-// regenerate before committing.
-if (!existsSync(LOCKFILE)) {
-  errors.push(
-    `package-lock.json missing at ${LOCKFILE} — run \`npm install\` to generate it.`
-  )
-} else {
-  const lock = JSON.parse(readFileSync(LOCKFILE, "utf-8"))
-  // npm v9+ lockfile shape: packages["packages/device-runtime"].optionalDependencies
-  const lockDevicePkg =
-    lock.packages?.["packages/device-runtime"]?.optionalDependencies ?? {}
-  for (const key of SIDECAR_PLATFORM_KEYS) {
-    const pkgName = `@synapse/device-runtime-bundles-${key}`
-    const lockRange = lockDevicePkg[pkgName]
-    if (lockRange === undefined) {
-      errors.push(
-        `${pkgName}: missing from package-lock.json packages["packages/device-runtime"].optionalDependencies. Run \`npm install\` to regenerate.`
-      )
-    } else if (lockRange !== expectedVersion) {
-      errors.push(
-        `${pkgName}: package-lock.json records "${lockRange}" but main pkg pins "${expectedVersion}". Run \`npm install\` after bumping versions so the lockfile reflects the source.`
-      )
-    }
   }
 }
 
@@ -490,7 +460,7 @@ for (const program of Object.keys(manifest.programs ?? {})) {
 
 if (errors.length === 0) {
   console.log(
-    `device-runtime sidecar audit passed: ${SIDECAR_PLATFORM_KEYS.length} sidecars pinned to ${expectedVersion}; shared ↔ manifest ↔ archive parity intact (filename + sha256); helper binaries confirmed out of the npm channel (F9c).`
+    `device-runtime sidecar audit passed: ${SIDECAR_PLATFORM_KEYS.length} sidecars — private + publishConfig os/cpu hygiene, shared ↔ manifest ↔ archive parity (filename + sha256), publish-script enumeration, helper binaries out of the npm channel (F9c). Version cohesion is guard-workspace-versions' job.`
   )
   process.exit(0)
 }

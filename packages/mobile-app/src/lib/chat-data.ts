@@ -44,12 +44,14 @@ export {
 
 export type LocalChatDeliveryStatus = "sending" | "retrying"
 
-// Mobile's persisted queue piggy-backs on the shared chat-queue shapes
-// so any change to PendingConversationRead / PendingOutboxMessage in
-// shared lands on both clients without manual sync. The local aliases
-// keep the historical naming used throughout the mobile codebase.
-export type PendingChatRead = PendingConversationRead
-export type PendingChatOutboxMessage = Omit<PendingOutboxMessage, "status"> & {
+// Mobile's persisted queue piggy-backs on the shared chat-queue shapes so any
+// change to PendingConversationRead / PendingOutboxMessage in shared lands on
+// both clients without manual sync. Reads use the shared type verbatim; the
+// outbox narrows `status` to the mobile-local delivery states.
+export type PendingConversationOutboxMessage = Omit<
+  PendingOutboxMessage,
+  "status"
+> & {
   status: LocalChatDeliveryStatus
 }
 
@@ -72,8 +74,8 @@ export interface ChatWorkspaceSnapshot {
   conversations: ChatConversationView[]
   itemsByConversationId: Record<string, ChatConversationItem[]>
   metaByConversationId: Record<string, ChatConversationMeta>
-  pendingReads: Record<string, PendingChatRead>
-  outbox: Record<string, PendingChatOutboxMessage>
+  pendingReads: Record<string, PendingConversationRead>
+  outbox: Record<string, PendingConversationOutboxMessage>
   /** conversationId -> { conversationId, removedSeq }. See ConversationTombstone. */
   tombstones: Record<string, ConversationTombstone>
 }
@@ -95,8 +97,8 @@ export interface ChatWorkspaceQueueState {
   clientInstanceId?: string
   inboxCursor: number
   lastBootstrappedAt?: Timestamp
-  pendingReads: Record<string, PendingChatRead>
-  outbox: Record<string, PendingChatOutboxMessage>
+  pendingReads: Record<string, PendingConversationRead>
+  outbox: Record<string, PendingConversationOutboxMessage>
   tombstones: Record<string, ConversationTombstone>
 }
 
@@ -163,14 +165,14 @@ function normalizeTombstones(
 function normalizePendingReads(
   value: unknown,
   validConversationIds?: Set<string>
-): Record<string, PendingChatRead> {
+): Record<string, PendingConversationRead> {
   if (!value || typeof value !== "object") {
     return {}
   }
 
   return Object.fromEntries(
     Object.values(value as Record<string, unknown>)
-      .filter((entry): entry is PendingChatRead =>
+      .filter((entry): entry is PendingConversationRead =>
         Boolean(
           entry &&
           typeof entry === "object" &&
@@ -198,14 +200,14 @@ function normalizePendingReads(
 function normalizeOutbox(
   value: unknown,
   validConversationIds?: Set<string>
-): Record<string, PendingChatOutboxMessage> {
+): Record<string, PendingConversationOutboxMessage> {
   if (!value || typeof value !== "object") {
     return {}
   }
 
   return Object.fromEntries(
     Object.values(value as Record<string, unknown>)
-      .filter((entry): entry is PendingChatOutboxMessage =>
+      .filter((entry): entry is PendingConversationOutboxMessage =>
         Boolean(
           entry &&
           typeof entry === "object" &&
@@ -700,7 +702,7 @@ export function upsertConversationWithTombstoneGuard(
 
 export function toPendingReadAdjustedUnreadCount(
   conversation: ChatConversationView,
-  pendingRead?: PendingChatRead
+  pendingRead?: PendingConversationRead
 ) {
   if (!pendingRead) {
     return conversation.unreadCount
@@ -715,7 +717,7 @@ export function toPendingReadAdjustedUnreadCount(
 }
 
 export function buildOptimisticChatItem(
-  outbox: PendingChatOutboxMessage,
+  outbox: PendingConversationOutboxMessage,
   conversation: ChatConversationView | undefined,
   workspaceMemberId?: string | null
 ): MobileChatItem {

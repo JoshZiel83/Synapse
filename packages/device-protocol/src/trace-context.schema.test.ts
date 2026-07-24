@@ -90,6 +90,7 @@ test("the four daemon→api machine messages carry the fragment inside strictObj
     type: "agent:status",
     remote_agent_id: "ra-1",
     state: "idle",
+    turn_epoch: null,
     traceparent: VALID_TRACEPARENT,
   })
   assert.equal(status.traceparent, VALID_TRACEPARENT)
@@ -100,6 +101,7 @@ test("strictObject + .catch(undefined): malformed trace field is DROPPED from ou
     type: "agent:status",
     remote_agent_id: "ra-1",
     state: "idle",
+    turn_epoch: null,
     traceparent: "garbage",
   })
   assert.equal(parsed.traceparent, undefined)
@@ -111,6 +113,7 @@ test("strictObject + .catch(undefined): malformed trace field is DROPPED from ou
       type: "agent:status",
       remote_agent_id: "ra-1",
       state: "idle",
+      turn_epoch: null,
       unknown_key: 1,
     })
   )
@@ -140,6 +143,7 @@ test("api→daemon messages pair tracestate with every traceparent (adjudication
     delivery_id: "d-1",
     conversation_id: CONVERSATION_ID,
     item_id: "i-1",
+    turn_epoch: "epoch-1",
     traceparent: VALID_TRACEPARENT,
     tracestate: VALID_TRACESTATE,
   })
@@ -221,6 +225,7 @@ test("api→daemon start/delivery schemas now GATE a malformed tracestate to abs
       delivery_id: "d-1",
       conversation_id: CONVERSATION_ID,
       item_id: "i-1",
+      turn_epoch: "epoch-1",
       traceparent: VALID_TRACEPARENT,
       tracestate: bad,
     })

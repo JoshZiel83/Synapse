@@ -20,7 +20,7 @@ import {
   upsertChatConversation,
   upsertChatConversations,
   type ChatWorkspaceSnapshot,
-  type PendingChatOutboxMessage,
+  type PendingConversationOutboxMessage,
 } from "@/lib/chat-data"
 import { createChatPersistence } from "@/lib/chat-persistence"
 import { isChatServiceWorkerActive } from "@/lib/chat-web-service-worker"
@@ -718,7 +718,7 @@ export class ChatRuntime {
     // header. No Sentry client ⇒ carrier undefined, no field persisted.
     // retryMessage deliberately reuses this (the carrier is the message's
     // creation context, not the attempt's).
-    const outboxEntry: PendingChatOutboxMessage = withClientSpan(
+    const outboxEntry: PendingConversationOutboxMessage = withClientSpan(
       "chat.outbox.enqueue",
       "app.chat.enqueue",
       (carrier) => ({

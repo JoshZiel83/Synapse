@@ -26,6 +26,7 @@ import { createBrowserBuiltin } from "./builtins/browser.js"
 import { createChromeDevtoolsMcpBuiltin } from "./builtins/chrome-devtools-mcp.js"
 import { createFrpTunnelAdapter } from "./tunnel/frp.js"
 import { createNoopTunnelAdapter } from "./tunnel/noop.js"
+import { DEVICE_RUNTIME_CLIENT_VERSION } from "./version.js"
 import {
   defaultPrestageDirs,
   installBundles,
@@ -169,7 +170,7 @@ async function main() {
         pairingCode: code,
         mode: "local_qr",
         title: getFlag(args.flags, "title", "My Device"),
-        clientVersion: "0.1.0-device-runtime-v3",
+        clientVersion: DEVICE_RUNTIME_CLIENT_VERSION,
       })
       console.log(JSON.stringify(result, null, 2))
       return
@@ -681,7 +682,7 @@ async function main() {
       const handle = await runDeviceRuntime({
         serverOrigin,
         broker,
-        clientVersion: "0.1.0-device-runtime-v3",
+        clientVersion: DEVICE_RUNTIME_CLIENT_VERSION,
         initialCatalog: providers,
         trustedServerKeys,
         tunnel,
@@ -735,7 +736,7 @@ async function main() {
         serverOrigin,
         broker,
         deviceId,
-        clientVersion: "0.1.0-device-runtime-v3",
+        clientVersion: DEVICE_RUNTIME_CLIENT_VERSION,
       })
       console.log(JSON.stringify(result, null, 2))
       return
@@ -766,7 +767,7 @@ async function main() {
         serverOrigin,
         broker,
         bootstrapToken: token,
-        clientVersion: "0.1.0-device-runtime-v3",
+        clientVersion: DEVICE_RUNTIME_CLIENT_VERSION,
       })
       console.log(JSON.stringify(result, null, 2))
       return

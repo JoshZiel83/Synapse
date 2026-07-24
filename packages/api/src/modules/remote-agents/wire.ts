@@ -66,9 +66,9 @@ export type RemoteAgentMachineMessage =
       capabilities?: RemoteAgentRuntimeCapabilityRecord
       // The daemon's current front (running) turn epoch for this conversation:
       // string while a turn is open, null when the conversation is fully idle.
-      // Optional only as a malformed-frame guard (the daemon always sends the
-      // field); drives the api turn-carrier reconcile (§6c).
-      turnEpoch?: string | null
+      // Required-present (the daemon always sends it); drives the api turn-carrier
+      // reconcile (§6c).
+      turnEpoch: string | null
     } & RemoteAgentMachineMessageTraceContext)
 
 export type RemoteAgentApiToDaemonMessage =
@@ -104,7 +104,10 @@ export type RemoteAgentApiToDaemonMessage =
         deliveryId: string
         conversationId: string
         itemId: string
-        turnEpoch?: string
+        // The api-minted turn epoch, stamped once on the delivery row at first
+        // dispatch and reused on every retry; a delivery is only ever sent once
+        // it has one, so it is always present on the wire.
+        turnEpoch: string
         traceparent?: string
         tracestate?: string
       }>

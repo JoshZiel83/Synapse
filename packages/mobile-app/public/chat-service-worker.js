@@ -1725,9 +1725,6 @@
   }
 
   // src/lib/chat-web-queue-storage.ts
-  var CHAT_WEB_QUEUE_DB_NAME = CHAT_QUEUE_DB_NAME;
-  var CHAT_WEB_QUEUE_DB_VERSION = CHAT_QUEUE_DB_VERSION;
-  var CHAT_WEB_QUEUE_STATE_STORE = CHAT_QUEUE_STATE_STORE;
   var CHAT_WEB_WORKER_DB_NAME = "synapse-chat-worker";
   var CHAT_WEB_WORKER_DB_VERSION = 1;
   var CHAT_WEB_WORKER_AUTH_CONTEXT_STORE = "auth_context";
@@ -1736,12 +1733,12 @@
   function getQueueDatabase() {
     if (!queueDbPromise) {
       queueDbPromise = openDB(
-        CHAT_WEB_QUEUE_DB_NAME,
-        CHAT_WEB_QUEUE_DB_VERSION,
+        CHAT_QUEUE_DB_NAME,
+        CHAT_QUEUE_DB_VERSION,
         {
           upgrade(database) {
-            if (!database.objectStoreNames.contains(CHAT_WEB_QUEUE_STATE_STORE)) {
-              database.createObjectStore(CHAT_WEB_QUEUE_STATE_STORE, {
+            if (!database.objectStoreNames.contains(CHAT_QUEUE_STATE_STORE)) {
+              database.createObjectStore(CHAT_QUEUE_STATE_STORE, {
                 keyPath: "workspaceId"
               });
             }
@@ -1779,7 +1776,7 @@
   }
   async function loadStoredChatWorkspaceQueueState(workspaceId) {
     const database = await getQueueDatabase();
-    const row = await database.get(CHAT_WEB_QUEUE_STATE_STORE, workspaceId);
+    const row = await database.get(CHAT_QUEUE_STATE_STORE, workspaceId);
     if (!row?.payload) {
       return null;
     }
@@ -1787,7 +1784,7 @@
   }
   async function saveStoredChatWorkspaceQueueState(queueState) {
     const database = await getQueueDatabase();
-    await database.put(CHAT_WEB_QUEUE_STATE_STORE, {
+    await database.put(CHAT_QUEUE_STATE_STORE, {
       workspaceId: queueState.workspaceId,
       payload: normalizeStoredChatWorkspaceQueueState(
         queueState.workspaceId,

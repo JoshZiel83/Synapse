@@ -11,6 +11,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { createDeviceLogger } from "./logger.js"
+import { DEVICE_RUNTIME_VERSION } from "./version.js"
 
 // Unified device-runtime logger (structured NDJSON to stderr); see logger.ts.
 const sidecarLog = createDeviceLogger("mcp-stdio-sidecar")
@@ -178,7 +179,7 @@ export async function startMcpStdioSidecar(
   })
 
   const client = new Client(
-    { name: "synapse-device-runtime", version: "0.1.0" },
+    { name: "synapse-device-runtime", version: DEVICE_RUNTIME_VERSION },
     { capabilities: {} }
   )
 

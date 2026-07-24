@@ -1,12 +1,9 @@
 import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import { Avatar } from "@/components/ui"
-import {
-  getConversationAvatarSpec,
-  type PendingChatRead,
-} from "@/lib/chat-data"
+import { getConversationAvatarSpec } from "@/lib/chat-data"
 import { theme } from "@/theme/tokens"
-import type { ChatConversationView } from "@shared"
+import type { ChatConversationView, PendingConversationRead } from "@shared"
 import { formatChatTimestamp } from "@shared/datetime"
 
 function formatMessageTime(value?: string) {
@@ -22,7 +19,7 @@ export function ConversationItem({
 }: {
   conversation: ChatConversationView
   workspaceMemberId?: string | null
-  pendingRead?: PendingChatRead
+  pendingRead?: PendingConversationRead
   onPress: () => void
   showDivider?: boolean
 }) {

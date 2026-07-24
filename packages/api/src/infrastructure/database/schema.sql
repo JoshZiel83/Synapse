@@ -2014,6 +2014,13 @@ CREATE TABLE remote_agent_message_deliveries (
   -- daemon carrying its ORIGINATING trace, so the remote-agent turn correlates
   -- back to the user request that caused it. NULL when tracing was off at enqueue.
   origin_traceparent TEXT,
+  -- The api-minted turn epoch this delivery was FIRST dispatched under — the
+  -- durable identity of the remote-agent turn it belongs to. NULL until the
+  -- first dispatch, then stamped once and REUSED on every retry so a re-notified
+  -- delivery re-enters the same api-side turn-carrier bucket instead of churning
+  -- a fresh never-fronted one (the eviction that dropped a queued origin). A new
+  -- (still-NULL) delivery gets a fresh epoch = a new turn. Not a FK.
+  turn_epoch TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(remote_agent_id, item_id)
