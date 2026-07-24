@@ -35,6 +35,10 @@
         "**/content-storage-backends.example.json"
       ],
       "url": "./schemas/content-storage-backends.schema.json"
+    },
+    {
+      "fileMatch": ["**/runtime-tuning.json", "**/runtime-tuning.example.json"],
+      "url": "./schemas/runtime-tuning.schema.json"
     }
   ]
 }

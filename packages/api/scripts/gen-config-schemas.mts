@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url"
 
 import { z } from "zod"
 
+import { runtimeTuningSchema } from "../src/config/runtime-tuning-schema.js"
 import { backendsSchema } from "../src/infrastructure/storage/remote/config.js"
 import { modelGroupsFileSchema } from "../src/modules/model-groups/schemas.js"
 
@@ -86,6 +87,17 @@ const REGISTRY: SchemaEntry[] = [
       "env string. Prefer supplying credentials out-of-band via CONTENT_STORAGE_CREDS_<ID> " +
       "rather than inline in this file.",
     examples: ["packages/api/config/content-storage-backends.example.json"],
+  },
+  {
+    out: "runtime-tuning.schema.json",
+    schema: runtimeTuningSchema,
+    title: "Synapse runtime tuning",
+    description:
+      "Non-secret memory-recall and realtime-outbox tuning knobs. Optional: any " +
+      "knob left unset keeps its built-in default. Loaded from " +
+      "packages/api/config/runtime-tuning.json (or RUNTIME_TUNING_CONFIG_PATH); " +
+      "a matching env var (e.g. MEMORY_MMR_LAMBDA) overrides the file value.",
+    examples: ["packages/api/config/runtime-tuning.example.json"],
   },
 ]
 

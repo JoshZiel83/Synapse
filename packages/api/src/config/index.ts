@@ -1,6 +1,10 @@
 // Load .env FIRST (before the logger or this schema read process.env). This is
 // a side-effect import and is intentionally placed above the others.
 import "../infrastructure/env-bootstrap.js"
+// Then apply runtime-tuning.json (set-if-absent), so a knob's precedence is
+// real-env > .env > runtime-tuning.json > the defaults below. Must sit AFTER
+// env-bootstrap and BEFORE this schema reads process.env.
+import "../infrastructure/runtime-tuning-bootstrap.js"
 import { z } from "zod"
 
 import { createLogger } from "../infrastructure/logger/index.js"

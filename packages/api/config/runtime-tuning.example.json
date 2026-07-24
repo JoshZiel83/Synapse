@@ -1,0 +1,9 @@
+{
+  "memory": {
+    "mmrLambda": 0.8,
+    "summaryDecayHalfLifeDays": 30
+  },
+  "realtimeOutbox": {
+    "batchSize": 100
+  }
+}

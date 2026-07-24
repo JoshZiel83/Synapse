@@ -58,6 +58,11 @@ packages/api/config/model-groups.yaml
 # real file out of git; commit only the .example template.
 packages/api/config/content-storage-backends.json
 !packages/api/config/content-storage-backends.example.json
+
+# Runtime-tuning overrides are per-deployment — keep the real file out of git;
+# commit only the .example template.
+packages/api/config/runtime-tuning.json
+!packages/api/config/runtime-tuning.example.json
 .worktrees/
 
 # Python bytecode caches (mcp-plugins sidecars, scripts).
