@@ -68,8 +68,9 @@ function getBoolFlag(
  * Look for synapse-device-cua-helper alongside the runtime install. Returns
  * the first existing path; undefined if none found. Covers two common layouts:
  *   1. Monorepo dev: <repo>/sidecars/cua/synapse-device-cua-helper
- *   2. Packaged release: <bin-dir>/synapse-device-cua-helper next to the
- *      `synapse-device` JS bundle.
+ *   2. Container image / operator-placed: <bin-dir>/synapse-device-cua-helper
+ *      flat next to the `synapse-device` JS bundle. The npm tarball ships NO
+ *      helper binary by design (F9c); a container image or operator co-locates it.
  */
 function autoDiscoverCuaHelperPath(): string | undefined {
   return resolveSidecarPath({
@@ -94,8 +95,9 @@ function autoDiscoverFsHelperPath(): string | undefined {
 /**
  * Candidate roots for a sidecar dir, anchored on this file's location:
  *   - <repo>/sidecars/<dir> at the two monorepo depths (src vs dist), and
- *   - the bin directory itself (packaged release: binary flat next to the JS
- *     bundle), so a bare-name suffix resolves alongside the install.
+ *   - the bin directory itself (container image / operator-placed: binary flat
+ *     next to the JS bundle — the npm tarball ships none by design, F9c), so a
+ *     bare-name suffix resolves alongside the install.
  */
 function sidecarRoots(sidecarDir: string): string[] {
   const here = dirname(fileURLToPath(import.meta.url))
