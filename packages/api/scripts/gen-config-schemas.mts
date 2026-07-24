@@ -21,6 +21,9 @@
  *   - Cross-field rules declared with Zod `.superRefine()` are, by design, NOT
  *     representable in JSON Schema and are silently dropped here. They stay
  *     enforced at runtime by Zod. Editor validation is shape / enum / type only.
+ *   - String formats (e.g. z.string().url() → `format:"uri"`) are emitted, but
+ *     Zod and JSON-Schema format-checkers accept slightly different edge inputs.
+ *     Zod (the runtime + Gate B) is the authority; editor format flags are advisory.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -28,6 +31,7 @@ import { fileURLToPath } from "node:url"
 
 import { z } from "zod"
 
+import { backendsSchema } from "../src/infrastructure/storage/remote/config.js"
 import { modelGroupsFileSchema } from "../src/modules/model-groups/schemas.js"
 
 const REPO_ROOT = join(
@@ -47,6 +51,13 @@ interface SchemaEntry {
   title: string
   /** Longer description surfaced as hover text at the document root. */
   description: string
+  /**
+   * Optional committed JSON example/config files that MUST validate against
+   * `schema`. Checked with the Zod source (not ajv) so it stays exact and needs
+   * no extra dependency — a repo-owned "Gate B" that fails if an example drifts
+   * from the schema. Paths are repo-root-relative.
+   */
+  examples?: string[]
 }
 
 /**
@@ -64,6 +75,17 @@ const REGISTRY: SchemaEntry[] = [
       "references, never literal secrets. Cross-field rules (at most one default " +
       "group, unique group names, unique item display names) are enforced at " +
       "import time by Zod and are intentionally not expressed here.",
+  },
+  {
+    out: "content-storage-backends.schema.json",
+    schema: backendsSchema,
+    title: "Synapse content-storage backend registry",
+    description:
+      "Remote content-storage backends (S3 / R2 / MinIO), consumed by the API " +
+      "via CONTENT_STORAGE_BACKENDS_FILE (a JSON file) or the CONTENT_STORAGE_BACKENDS " +
+      "env string. Prefer supplying credentials out-of-band via CONTENT_STORAGE_CREDS_<ID> " +
+      "rather than inline in this file.",
+    examples: ["packages/api/config/content-storage-backends.example.json"],
   },
 ]
 
@@ -91,9 +113,36 @@ function generate(entry: SchemaEntry): string {
   return JSON.stringify(doc, null, 2) + "\n"
 }
 
+/** Validate each committed example against its Zod source (repo-owned Gate B). */
+function checkExamples(entry: SchemaEntry): string[] {
+  const failures: string[] = []
+  for (const rel of entry.examples ?? []) {
+    const abs = join(REPO_ROOT, rel)
+    if (!existsSync(abs)) {
+      failures.push(`${rel}: missing (expected an example for ${entry.out})`)
+      continue
+    }
+    let data: unknown
+    try {
+      data = JSON.parse(readFileSync(abs, "utf8"))
+    } catch (err) {
+      failures.push(`${rel}: not valid JSON — ${(err as Error).message}`)
+      continue
+    }
+    const parsed = entry.schema.safeParse(data)
+    if (!parsed.success) {
+      failures.push(
+        `${rel}: does not satisfy ${entry.out} — ${parsed.error.message}`
+      )
+    }
+  }
+  return failures
+}
+
 function main(): void {
   const check = process.argv.includes("--check")
   const drifted: string[] = []
+  const exampleFailures: string[] = []
 
   for (const entry of REGISTRY) {
     const target = join(SCHEMAS_DIR, entry.out)
@@ -107,17 +156,30 @@ function main(): void {
       // eslint-disable-next-line no-console
       console.log(`generated schemas/${entry.out}`)
     }
+
+    // Examples are validated in BOTH modes: they must always match the schema.
+    exampleFailures.push(...checkExamples(entry))
   }
 
+  let failed = false
   if (check && drifted.length > 0) {
+    failed = true
     // eslint-disable-next-line no-console
     console.error(
       `config schema drift detected in: ${drifted.join(", ")}\n` +
         "The committed /schemas/*.schema.json are out of sync with their Zod " +
         "sources. Run `npm run schema:gen` and commit the result."
     )
-    process.exit(1)
   }
+  if (exampleFailures.length > 0) {
+    failed = true
+    // eslint-disable-next-line no-console
+    console.error(
+      "committed config example(s) do not match their schema:\n" +
+        exampleFailures.map((f) => `  - ${f}`).join("\n")
+    )
+  }
+  if (failed) process.exit(1)
 }
 
 main()

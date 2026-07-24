@@ -22,8 +22,19 @@
       "docker-compose*.yml",
       "**/docker-compose*.yaml"
     ]
-  }
+  },
 
-  // json.schemas mappings are added by later extraction phases (content-storage
-  // backends, device-runtime manifests, cli-prereq overlay) as those schemas land.
+  // json.schemas is [ { fileMatch, url } ] — the reverse direction of yaml.schemas.
+  // fileMatch is intentionally the config filename(s) only (not the *.schema.json
+  // itself), so the schema is applied to the operator's content-storage config
+  // wherever they place it, and to the committed example.
+  "json.schemas": [
+    {
+      "fileMatch": [
+        "**/content-storage-backends.json",
+        "**/content-storage-backends.example.json"
+      ],
+      "url": "./schemas/content-storage-backends.schema.json"
+    }
+  ]
 }

@@ -1,0 +1,17 @@
+[
+  {
+    "id": "r2-primary",
+    "kind": "s3",
+    "bucket": "synapse-content",
+    "region": "auto",
+    "endpoint": "https://your-account-id.r2.cloudflarestorage.com"
+  },
+  {
+    "id": "minio-local",
+    "kind": "s3",
+    "bucket": "synapse",
+    "region": "us-east-1",
+    "endpoint": "http://minio:9000",
+    "forcePathStyle": true
+  }
+]

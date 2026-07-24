@@ -53,6 +53,11 @@ infra/verdaccio/htpasswd
 # out of git; commit only the .example template).
 packages/api/config/model-groups.yaml
 !packages/api/config/model-groups.yaml.example
+
+# Content-storage backend registry may hold inline S3/R2/MinIO creds — keep the
+# real file out of git; commit only the .example template.
+packages/api/config/content-storage-backends.json
+!packages/api/config/content-storage-backends.example.json
 .worktrees/
 
 # Python bytecode caches (mcp-plugins sidecars, scripts).

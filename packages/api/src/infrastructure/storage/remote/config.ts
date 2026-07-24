@@ -1,42 +1,90 @@
 // Backend config registry (plan §6.2/§7#4): a deployment-config map
-// `BackendId → ContentStore`, loaded from env. NOT in the DB, NOT per-blob
+// `BackendId → ContentStore`, loaded from a JSON file (CONTENT_STORAGE_BACKENDS_FILE)
+// or the inline env string (CONTENT_STORAGE_BACKENDS). NOT in the DB, NOT per-blob
 // JSONB — bucket/region/endpoint/credentials live here; per blob the only
 // stored fact is `content_blobs.backend` (the BackendId) + key = f(sha).
 //
-// Fail-closed: malformed `CONTENT_STORAGE_BACKENDS` throws on load (the write
-// boundary in content-store.ts already rejects unknown BackendIds).
+// Fail-closed: a malformed registry (or both sources set) throws on load (the
+// write boundary in content-store.ts already rejects unknown BackendIds).
+
+import { readFileSync } from "node:fs"
+import { isAbsolute, resolve } from "node:path"
 
 import { z } from "zod"
 import type { BackendId, ContentStore } from "../content-store.js"
 import { S3ContentStore } from "./s3-store.js"
 
-/**
- * One backend definition. Today only the S3-compatible family (`kind:"s3"`,
- * covering AWS S3 / Cloudflare R2 / MinIO) is implemented; the discriminated
- * union leaves room to add `kind:"gcs"`/`"azblob"` later behind the same
- * ContentStore interface (plan §4.3).
- */
-const s3BackendDefSchema = z.object({
-  id: z.string().min(1),
-  kind: z.literal("s3"),
-  bucket: z.string().min(1),
-  region: z.string().min(1),
-  endpoint: z.string().url().optional(),
-  forcePathStyle: z.boolean().optional(),
-  /**
-   * Optional inline credentials. PREFER leaving these unset and supplying
-   * credentials via the standard AWS provider chain (env / instance role) or
-   * the per-backend env override below; inline secrets in CONTENT_STORAGE_BACKENDS
-   * are accepted for self-hosted/test setups but should not carry prod secrets.
-   */
-  accessKeyId: z.string().min(1).optional(),
-  secretAccessKey: z.string().min(1).optional(),
-  sessionToken: z.string().min(1).optional(),
+// The `.describe()` text on each field flows into the generated JSON Schema
+// (schemas/content-storage-backends.schema.json) and surfaces as editor hover
+// docs. Keep it operator-facing and English.
+//
+// strictObject (not object) so a misspelled key like `forcePathSytle` fails
+// loudly at load AND makes z.toJSONSchema emit `additionalProperties:false`, so
+// the editor flags the typo instead of silently dropping it (a mistyped
+// forcePathStyle would otherwise break MinIO addressing at request time).
+const s3BackendDefSchema = z.strictObject({
+  id: z
+    .string()
+    .min(1)
+    .describe(
+      "Stable backend id referenced by content_blobs.backend and CONTENT_STORAGE_WRITE_DEFAULT. Cannot be 'local_cas' (reserved)."
+    ),
+  kind: z
+    .literal("s3")
+    .describe(
+      "Backend family. 's3' covers the S3-compatible family: AWS S3, Cloudflare R2, MinIO."
+    ),
+  bucket: z.string().min(1).describe("Bucket name."),
+  region: z
+    .string()
+    .min(1)
+    .describe("Region (e.g. 'us-east-1'; use 'auto' for Cloudflare R2)."),
+  endpoint: z
+    .string()
+    .url()
+    .optional()
+    .describe(
+      "Custom S3 endpoint URL for non-AWS providers (R2, MinIO). Omit for AWS S3."
+    ),
+  forcePathStyle: z
+    .boolean()
+    .optional()
+    .describe(
+      "Use path-style addressing (bucket in the URL path) instead of virtual-hosted style. Required by MinIO and some self-hosted gateways."
+    ),
+  accessKeyId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Inline access key. PREFER leaving credentials out of this file and supplying them via the per-backend env override CONTENT_STORAGE_CREDS_<ID> or the AWS provider chain. Do not commit production secrets."
+    ),
+  secretAccessKey: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Inline secret key. See accessKeyId — prefer CONTENT_STORAGE_CREDS_<ID> and never commit production secrets."
+    ),
+  sessionToken: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Optional inline STS session token, paired with inline creds."),
 })
 
 const backendDefSchema = z.discriminatedUnion("kind", [s3BackendDefSchema])
 
-const backendsSchema = z.array(backendDefSchema)
+/**
+ * The content-storage backend registry: an ordered list of remote backend
+ * definitions. Today only the S3-compatible family (`kind:"s3"`) is
+ * implemented; the discriminated union leaves room to add `kind:"gcs"` /
+ * `"azblob"` later behind the same ContentStore interface (plan §4.3).
+ *
+ * Exported so scripts/gen-config-schemas.mts can generate the JSON Schema and
+ * validate the committed example against this same source of truth.
+ */
+export const backendsSchema = z.array(backendDefSchema)
 
 export type BackendDef = z.infer<typeof backendDefSchema>
 
@@ -103,28 +151,78 @@ function buildStore(def: BackendDef): ContentStore {
 }
 
 /**
- * Build the registry of CONFIGURED REMOTE backends from env. Does NOT include
- * local_cas (content-store.ts always registers that). Returns an empty map when
- * `CONTENT_STORAGE_BACKENDS` is unset — the default single-implementation
- * (local-only) deployment. Throws (fail-closed) on malformed config.
+ * Read the raw backend-registry document from its configured source, or
+ * `undefined` when unconfigured (the default local-only deployment).
+ *
+ * Two mutually-exclusive sources, so operators can pick file-based config
+ * (editor autocomplete + validation via schemas/content-storage-backends.schema.json)
+ * or the legacy inline env string, but never silently blend the two:
+ *   - `CONTENT_STORAGE_BACKENDS_FILE` — path to a JSON file (absolute, or
+ *     resolved against process.cwd()). The recommended source.
+ *   - `CONTENT_STORAGE_BACKENDS` — the JSON document inline as an env string
+ *     (12-factor / container friendly; unchanged legacy behavior).
+ * Setting both is a fail-closed error rather than an ambiguous precedence.
  */
-export function loadBackendRegistry(): Map<BackendId, ContentStore> {
-  const raw = process.env.CONTENT_STORAGE_BACKENDS
-  const stores = new Map<BackendId, ContentStore>()
-  if (!raw || raw.trim() === "") return stores
+function readBackendsDocument(): unknown | undefined {
+  const filePath = process.env.CONTENT_STORAGE_BACKENDS_FILE?.trim()
+  const inline = process.env.CONTENT_STORAGE_BACKENDS
+  const hasInline = !!inline && inline.trim() !== ""
 
-  let json: unknown
-  try {
-    json = JSON.parse(raw)
-  } catch (err) {
+  if (filePath && hasInline) {
     throw new Error(
-      `content-storage: CONTENT_STORAGE_BACKENDS is not valid JSON: ${(err as Error).message}`
+      "content-storage: set only ONE of CONTENT_STORAGE_BACKENDS_FILE or CONTENT_STORAGE_BACKENDS, not both"
     )
   }
+
+  if (filePath) {
+    const abs = isAbsolute(filePath)
+      ? filePath
+      : resolve(process.cwd(), filePath)
+    let text: string
+    try {
+      text = readFileSync(abs, "utf8")
+    } catch (err) {
+      throw new Error(
+        `content-storage: cannot read CONTENT_STORAGE_BACKENDS_FILE at ${abs}: ${(err as Error).message}`
+      )
+    }
+    try {
+      return JSON.parse(text)
+    } catch (err) {
+      throw new Error(
+        `content-storage: ${abs} is not valid JSON: ${(err as Error).message}`
+      )
+    }
+  }
+
+  if (hasInline) {
+    try {
+      return JSON.parse(inline as string)
+    } catch (err) {
+      throw new Error(
+        `content-storage: CONTENT_STORAGE_BACKENDS is not valid JSON: ${(err as Error).message}`
+      )
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * Build the registry of CONFIGURED REMOTE backends. Does NOT include local_cas
+ * (content-store.ts always registers that). Returns an empty map when neither
+ * source is set — the default single-implementation (local-only) deployment.
+ * Throws (fail-closed) on malformed config. Sources: see readBackendsDocument.
+ */
+export function loadBackendRegistry(): Map<BackendId, ContentStore> {
+  const stores = new Map<BackendId, ContentStore>()
+  const json = readBackendsDocument()
+  if (json === undefined) return stores
+
   const parsed = backendsSchema.safeParse(json)
   if (!parsed.success) {
     throw new Error(
-      `content-storage: malformed CONTENT_STORAGE_BACKENDS: ${parsed.error.message}`
+      `content-storage: malformed backend registry (CONTENT_STORAGE_BACKENDS[_FILE]): ${parsed.error.message}`
     )
   }
 
