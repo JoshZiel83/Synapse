@@ -21,38 +21,38 @@
 
 ## [0.28.0] - 2026-07-24
 
-分布式追踪 round-3 正确性修复（提交 `c068aef3`、`9b5a30c8`、`92645a74`）：为跨交错会话唤醒的 reverse-MCP 工具调用提供以 turn 为作用域的 trace 关联（F-r3-2）。它改变了 remote-agent daemon 的 wire 契约，需要一次**协同重新部署**——硬构建顺序与重建容器后的核对清单见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的 rollout 运行手册，R3 的 daemon 先行上线顺序见 §7.4。本次无数据库 schema 变更，故无需 `db:rebuild`。
+分布式追踪 round-3 正确性修复（提交 `c068aef3`、`9b5a30c8`、`92645a74`）：为跨交错会话唤醒的 reverse-MCP 工具调用提供以 turn 为作用域的 trace 关联（F-r3-2）。它改变了 remote-agent daemon 的 wire 契约，需要一次**协同重新部署**——镜像的硬构建顺序与重建容器后的核对清单见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的上线运行手册，R3 的 daemon 先行上线顺序见 §7.4。本次无数据库 schema 变更，故无需 `db:rebuild`。
 
-这也是各包 manifest 首次离开 `0.1.0`：`@synapse/device-protocol`、`@synapse/shared`、`@synapse/device-runtime`、`@synapse/device-sdk`、`@synapse/api` 与 `@synapse/remote-agent-daemon` 这组包一同升到 `0.28.0`，其中四个运行时包发布到私有包注册表。平台运行时 bundle 与它们解耦，各自保持原有版本。
+这也是各包 manifest 首次离开 `0.1.0` 的版本：`@synapse/device-protocol`、`@synapse/shared`、`@synapse/device-runtime`、`@synapse/device-sdk`、`@synapse/api` 与 `@synapse/remote-agent-daemon` 这组协同变更的包同步升到 `0.28.0`，其中四个运行时包发布到私有包注册表。平台运行时 bundle 与它们解耦，各自保持原有版本。
 
 ### 变更
 
-- **破坏性变更：** remote-agent daemon 的 wire 在 `agent:deliver`（api→daemon）与 `agent:status`（daemon→api）两个方向上新增可选的 `turn_epoch`。两个帧都按 `z.strictObject` 校验，因此此改动之前构建的一端会整体拒收该帧，而非忽略这个新字段。发布到 registry 仍按依赖顺序——`@synapse/device-protocol` → `shared` → `device-runtime` → `remote-agent-daemon` 最后（`deploy.md` §5b）；而在跑的部署改为 **daemon 先行**上线：破坏落在 `agent:deliver` 上，先升级 daemon 再重建 api，投递路径全程不拒帧（旧 api 本就不带这个字段），偏斜窗口内只剩 daemon 的 `agent:status` 帧被尚未升级的 api 丢弃（turn 关联降级，但不丢投递）。反序（api 先行）会让每个带该字段的 `agent:deliver` 被整帧拒收，改为 churn 投递（仍是 at-least-once，不丢数据）。R3 的上线顺序见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7.4。
-- 可发布的 @synapse 包现在是一组协同重新部署、锁定到同一精确版本的集合；新增的 `guard:versions` 门控（在 `verify:boundary` 中运行）强制这组包版本同步递增、组内互相精确 pin、平台 bundle 保持解耦，以及 package-lock 同步。
+- **破坏性变更：** remote-agent daemon 的 wire 在 `agent:deliver`（api→daemon）与 `agent:status`（daemon→api）两个方向上新增可选的 `turn_epoch`。两个帧都按 `z.strictObject` 校验，因此此改动之前构建的一端会整帧拒收，而非忽略这个新字段。向包注册表发布仍按依赖顺序进行——`@synapse/device-protocol` → `shared` → `device-runtime` → `remote-agent-daemon` 最后（`deploy.md` §5b）——但正在运行的部署要按 **daemon 先行**的顺序上线：由于受严格校验的新字段落在 `agent:deliver` 上，先于 api 升级 daemon 可保投递路径不受影响（旧 api 本就不带这个字段），新旧版本并存的窗口期内只剩 daemon 的 `agent:status` 帧会被尚未升级的 api 丢弃（turn 关联降级，但绝不丢投递）。反过来的顺序则会让每个带该字段的 `agent:deliver` 被整帧拒收，使投递陷入反复重试（仍是 at-least-once——不丢数据）。R3 的上线顺序见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7.4。
+- 可发布的 @synapse 包现在是一组锁定到同一精确版本的协同重新部署集合；新增的 `guard:versions` 门控（在 `verify:boundary` 中运行）强制执行整组统一的版本号、组内互相精确锁定、平台 bundle 保持解耦，以及 package-lock 同步。
 
 ### 修复
 
-- 交错的会话唤醒不再串 trace（F-r3-2）：某个 turn 上迟到的 reverse-MCP `tools/call` 会归属到该 turn 自己的投递来源，而不会算到一个刚被唤醒的后继 turn 上。daemon 现在以一个权威的 per-turn epoch 为准，并加了一道 turn 门（每个会话同一时刻只跑一个 turn；抢跑的唤醒按派发顺序排队，逐个放行）；api 侧 reverse-MCP 的 span link 以 daemon 确认的运行中 epoch 为 key；turn 结束时精确清空该 epoch 的待处理集合。另有一个陈旧机器连接的回收器，负责收尾操作系统始终未 FIN 的套接字，且每个 driver 每个 turn 至多发出一次终止信号，使这道门不会重复推进。
+- 交错的会话唤醒不再串 trace（F-r3-2）：某个 turn 上迟到的 reverse-MCP `tools/call` 会归属到该 turn 自己的投递来源，绝不会归到并发唤醒的后继 turn 名下。daemon 现在在一道 turn 门控之后持有权威的 per-turn epoch（每个会话同一时刻只跑一个 turn；抢跑的唤醒按调度顺序排队，逐个放行），api 侧 reverse-MCP 的 span link 以 daemon 确认的运行中 epoch 为键，turn 结束时则精确清空该 epoch 的待处理集合。另有一个陈旧机器连接的回收器，负责收尾操作系统从未关闭的套接字；且每个驱动每个 turn 至多发出一次终止信号，使这道门控绝无可能重复推进。
 
 ## [0.27.0] - 2026-07-23
 
-分布式追踪 round-2 正确性修复（提交 `defdece3`、`f6c456b5`、`cd615060`、`79ddc845`），外加公网边缘加固。它们改变了 wire、队列与遥测契约，需要一次**协同重新部署**——精确步骤（硬构建顺序、`--force-recreate`、以及重建容器后的核对清单）见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的 rollout 运行手册。本次无数据库 schema 变更，故无需 `db:rebuild`。
+分布式追踪 round-2 正确性修复（提交 `defdece3`、`f6c456b5`、`cd615060`、`79d8ddc845`），外加公网边缘加固。对运维者而言，重点是一次**协同重新部署**：本次发布改变了 wire、队列与遥测契约，精确步骤——镜像的硬构建顺序、`--force-recreate`、以及重建容器后的核对清单——见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的上线运行手册。本次无数据库 schema 变更，故无需 `db:rebuild`。
 
 ### 变更
 
-- **破坏性变更：** 离线聊天发件箱存储的队列状态在 **Web 与移动端两侧**作为干净断裂升到了新版本（移动端快照 v2→v3；共享 `StoredChatQueueState` v4→v5，含 service worker）。旧构建遗留的「已排队但未发送」消息在升级时被丢弃；客户端在首次加载时重建发件箱。已发送的消息与服务端数据均不受影响。
-- Remote-agent daemon 的 wire 协议：新增 `agent:deliveries:completed` 帧（api→daemon）用于回收 daemon 的待投递集合，daemon 帧上的 trace 字段统一门控在 `wireTraceContextFields` 之下（经 schema 校验；畸形值按缺失处理）。此改动之前构建的 daemon 会静默忽略新帧，直到重新构建并发布（`deploy.md` §5b）——受影响的投递保持 pending 并重新通知，因此不丢数据。`AgentSession.setMcpServers` 已从驱动接口移除，并新增一条 CI guard 强制 api↔daemon 两侧帧对齐。（`fail-deliveries` 帧体重塑已随 v0.26.0 发布。）
-- `@fastify/otel` 升级到 0.20.1 并设 `instrumentHooks:false`：每个请求现在只产生一个 SERVER span，逐请求的生命周期 hook span 消失——按 `fastify.type=hook` 查询的仪表盘或告警会失去这部分数据。第一方出站传播器现在无条件 fail-closed（不再向第三方发出 flags-`00` 的 `traceparent`，也不再发出继承而来的厂商 `tracestate`）；`OTEL_SERVICE_NAME`/`OTEL_RESOURCE_ATTRIBUTES` 现在能正确覆盖内置的 service name（此前优先级是反的）。
-- 收紧入站 `tracestate` 处理：`MAX_TRACESTATE_LENGTH` 从 1024 下调到 512（对齐 `@opentelemetry/core` 2.8.0 实际强制的值），键文法则放宽到 W3C Level-2 超集；头部超过 512 字符、成员多于 32 个、键重复、值超长或成员畸形时，现在整体丢弃，而不再部分抢救。
-- 依赖打补丁从 `patch-package` 迁移到第一方的 `scripts/apply-patches.mjs` 应用器（postinstall 及 api/web/mobile-web 的 Dockerfile）；通过 npm 安装的设备运行时不含 Go/Rust helper 二进制，现在会优雅降级并在启动时给出警告。
+- **破坏性变更：** 旧构建遗留的「已排队但未发送」聊天消息会在升级时被丢弃。离线聊天发件箱存储的队列状态在 **Web 与移动端两侧**作为一次性直接切换（不做兼容）升到了新版本（移动端快照 v2→v3；共享 `StoredChatQueueState` v4→v5，含 service worker）；客户端在首次加载时重建发件箱。已发送的消息与服务端数据均不受影响。
+- Remote-agent daemon 应重新构建并重新发布（`deploy.md` §5b）：新增的 `agent:deliveries:completed` 帧（api→daemon）用于回收 daemon 的待投递集合，daemon 帧上的 trace 字段门控在 `wireTraceContextFields` 之下（经 schema 校验；畸形值按缺失处理）。此改动之前构建的 daemon 会静默忽略这个新帧，直到重新发布为止——受影响的投递保持待投递状态并重新通知，因此不丢数据。`AgentSession.setMcpServers` 已从驱动接口移除，并新增一条 CI guard 强制 api↔daemon 两侧帧对齐。（`fail-deliveries` 请求体重塑已随 v0.26.0 发布。）
+- 按 `fastify.type=hook` 查询 span 的仪表盘或告警会失去这部分数据：`@fastify/otel` 升级到 0.20.1 并设 `instrumentHooks:false` 后，每个请求现在只产生一个 SERVER span，逐请求的生命周期 hook span 不复存在。第一方出站传播器现在无条件 fail-closed（不再向第三方发出 flags-`00` 的 `traceparent`，也不再发出继承而来的厂商 `tracestate`）；`OTEL_SERVICE_NAME`/`OTEL_RESOURCE_ATTRIBUTES` 现在能正确覆盖内置的 service name（此前的优先级是反的）。
+- 收紧入站 `tracestate` 处理：`MAX_TRACESTATE_LENGTH` 从 1024 下调到 512（即 `@opentelemetry/core` 2.8.0 实际强制的值），键的文法则放宽到 W3C Level-2 超集。头部超过 512 字符、成员多于 32 个、键重复、值超长或成员畸形时，现在整体丢弃，而不再部分保留。
+- 依赖打补丁从 `patch-package` 迁移到第一方的 `scripts/apply-patches.mjs` 应用器（postinstall 及 api/web/mobile-web 的 Dockerfile）；从 npm 安装的设备运行时不含 Go/Rust helper 二进制，现在会优雅降级并在启动时给出警告。
 
 ### 新增
 
-- 公网边缘限流，作用于两个 public nginx 模板——`/api/` 与 `/ws` 上 `limit_req`，`/ws` 上另加 `limit_conn`（返回 `429` 而非 `503`；一次正常的页面加载绝不触发），IPv6 在 TLS 边缘按 `/64` 取 key（njs）。另含不可伪造的 `x-synapse-trace-ingress` Ring-0 marker、供 keyed ratio 采样器使用的可选 `SYNAPSE_TRACE_SAMPLING_SALT`、显式的 Tempo `overrides.defaults` 上限，以及 `SYNAPSE_SERVER_TIMING_TRACE=on` 与 ratio 采样器并存时的启动警告。阈值与旋钮见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §6 与 §1。
-- Web 与移动端的客户端 trace 关联：carrier 现在来自真实的 SDK span（不再伪造 span id），并在 WebSocket 认证/订阅帧前后加上短小的客户端 span。
-- Go cua-helper 与 Rust fs-helper 逐 RPC 发出 SERVER span，带 JSON-RPC semconv 属性。
-- trace carrier 的生命周期改为以 turn 为作用域，api（`TurnCarrierCache`）与 daemon（turn-epoch）两侧皆然，修复了 reverse-MCP 的 span 归属；新增 `OTEL_TRACES_EXPORTER` 三态开关（未设置/`otlp`/`none`）与对 `OTEL_TRACES_SAMPLER` 不区分大小写的归一化；`@synapse/shared` 新增 tracestate 辅助函数（`sanitizeTracestateHeader`、`isValidTracestateHeader` 及文法常量）——均为纯增量。
-- 本追溯性三语更新日志（English、简体中文、Español），以 50 个附注 tag 重建 v0.1.0–v0.26.2 的发布历史。
+- 公网边缘限流，作用于两个 public nginx 模板——`/api/` 与 `/ws` 上启用 `limit_req`，`/ws` 上另加 `limit_conn`（返回 `429` 而非 `503`；一次正常的页面加载绝不会触发），IPv6 在 TLS 边缘以 `/64` 前缀为键（njs）。另含不可伪造的 `x-synapse-trace-ingress` Ring-0 标记、供键控比例采样器使用的可选 `SYNAPSE_TRACE_SAMPLING_SALT`、显式的 Tempo `overrides.defaults` 上限，以及 `SYNAPSE_SERVER_TIMING_TRACE=on` 与比例采样器并存时的启动警告。阈值与可调参数见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §6 与 §1。
+- Web 与移动端的客户端 trace 关联：trace carrier 现在来自真实的 SDK span（消除了伪造的 span id），并在 WebSocket 认证/订阅帧前后加上短小的客户端 span。
+- Go cua-helper 与 Rust fs-helper 逐 RPC 发出带 JSON-RPC semconv 属性的 SERVER span。
+- 以 turn 为作用域的 trace-carrier 生命周期，api（`TurnCarrierCache`）与 daemon（turn-epoch）两侧皆然，修复了 reverse-MCP 的 span 归属；新增 `OTEL_TRACES_EXPORTER` 三态开关（未设置/`otlp`/`none`）与对 `OTEL_TRACES_SAMPLER` 不区分大小写的归一化；`@synapse/shared` 新增 tracestate 辅助函数（`sanitizeTracestateHeader`、`isValidTracestateHeader` 及文法常量）——均为纯新增。
+- 本追溯性三语更新日志（English、简体中文、Español），以 50 个附注标签重建 v0.1.0–v0.26.2 的发布历史。
 - CI：跨语言测试首次纳入门控（cua sidecar 的 `go test`、fs-helper 的 `cargo test`），trace 传播 guard 新增帧对齐与 turn 作用域规则。
 
 ### 修复
@@ -63,7 +63,7 @@
 
 ### 修复
 
-- Remote-agent daemon：fan-in 的投递失败上报不再继承环境中已有的投递 trace；API 会新建一个根 span 关联所有来源，修复了混合来源的关联问题。
+- Remote-agent daemon：fan-in 的投递失败上报不再继承环境中已有的投递 trace；API 会签发一个全新的根 span 来关联所有来源，修复了混合来源的关联问题。
 
 ## [0.26.1] - 2026-07-17
 
@@ -75,17 +75,17 @@
 
 ### 新增
 
-- Trace 消费方：daemon fan-in 关联、dispatch carrier、BullMQ producer span，以及贯通各 Python sidecar 的 OpenTelemetry。`resolution_traceparent` 会被持久化，因此重放的 resolution frame 能保留 resolver 的 trace。
+- Trace 消费方：daemon fan-in 关联、dispatch carrier、BullMQ producer span，以及贯通各 Python sidecar 的 OpenTelemetry。`resolution_traceparent` 会被持久化，因此重放的 resolution 帧能保留 resolver 的 trace。
 
 ### 变更
 
-- **破坏性变更：** 调整了 `POST /api/v1/internal/remote-agents/:remoteAgentId/fail-deliveries` 请求体的结构。
+- **破坏性变更：** 重塑了 `POST /api/v1/internal/remote-agents/:remoteAgentId/fail-deliveries` 请求体的结构。
 
 ## [0.25.5] - 2026-07-17
 
 ### 新增
 
-- 设备协议信封的 trace-carrier schema，以及逐消息的 WebSocket tracing。trace 字段具备容错性——畸形或超大的值会按缺失处理，而不会拒绝整条消息。
+- 设备协议信封的 trace-carrier schema，以及逐消息的 WebSocket 追踪。trace 字段具备容错性——畸形或超大的值会按缺失处理，而不会拒收整条消息。
 
 ## [0.25.4] - 2026-07-16
 
@@ -97,7 +97,7 @@
 
 ### 新增
 
-- 共享 tracing 基础设施：第一方的 trace-carrier 契约与 propagator，以及一个 `@fastify/otel` patch。
+- 共享的追踪基础设施：第一方的 trace-carrier 契约与传播器，以及一个 `@fastify/otel` 补丁。
 
 ## [0.25.2] - 2026-07-15
 
@@ -192,7 +192,7 @@
 
 ### 新增
 
-- 无后端的 `web-next-design` UI sandbox（类型化的 mock `ApiClient`），用于设计迭代。
+- 无后端的 `web-next-design` UI sandbox（类型化的模拟 `ApiClient`），用于设计迭代。
 
 ### 变更
 
@@ -216,7 +216,7 @@
 
 ### 新增
 
-- Firecrawl（托管的远程 MCP），以及 Notion、Xiaohongshu（小红书）、Bilibili 的 MCP sidecar——全部由环境变量开关控制；这三个 sidecar 共享一个新的 `_mcp_base` Python 框架，既有的 Mijia 插件也一并迁移到其上。
+- Firecrawl（托管的远程 MCP），以及 Notion、Xiaohongshu（小红书）、Bilibili 的 MCP sidecar——全部由环境变量门控；这三个 sidecar 共享一个新的 `_mcp_base` Python 框架，既有的 Mijia 插件也一并迁移到其上。
 
 ## [0.21.0] - 2026-06-21
 
@@ -238,13 +238,13 @@
 
 ### 新增
 
-- 将 HKUDS/CLI-Anything 内化为 `cli-catalog` device-runtime builtin（66 个 CLI），并配以服务端 minting 门控。
+- 将 HKUDS/CLI-Anything 内化为 `cli-catalog` device-runtime builtin（66 个 CLI），并配以服务端签发门控。
 
 ## [0.20.0] - 2026-06-19
 
 ### 新增
 
-- 多后端内容存储：逐 blob 选择后端、本地 CAS 缓存、S3 远程后端（`@aws-sdk/client-s3`，支持预签名 PUT/GET），以及 sandbox CAS hydration。
+- 多后端内容存储：逐 blob 选择后端、本地 CAS 缓存、S3 远程后端（`@aws-sdk/client-s3`，支持预签名 PUT/GET），以及 sandbox 的 CAS 预载。
 
 ### 变更
 
@@ -258,22 +258,22 @@
 
 ### 变更
 
-- **破坏性变更：** create-invite 请求 DTO 弃用绝对时间 `expiresAt`，改用相对时长 `expiresInHours`；客户端若仍发送 `expiresAt`，该字段会被静默忽略。
-- 规范的 `IsoInstantString` 原语及其转换 helper 迁移至 `@synapse/device-protocol/instant`，并经 `@synapse/shared` 再导出。
+- **破坏性变更：** create-invite 请求 DTO 移除绝对时间 `expiresAt`，改用相对时长 `expiresInHours`；客户端若仍发送 `expiresAt`，该字段会被静默忽略。
+- 规范的 `IsoInstantString` 原语及其转换辅助函数迁移至 `@synapse/device-protocol/instant`，并经 `@synapse/shared` 再导出。
 - `workspace_app_grants.created_at` 收紧为 `NOT NULL`（去掉了 1970-epoch 回退）；时长列（`retention_ttl_ms`、`poll_interval_ms`、`ttl_ms`）扩展为 `BIGINT`，并加上 `>= 0` 的 CHECK 约束。
 
 ## [0.18.2] - 2026-06-18
 
 ### 新增
 
-- 统一日志（单一 pino logger + 领域分类法）与分布式 tracing（OpenTelemetry、Tempo、Loki、Alloy），并配套 Sentry（自托管、DSN 门控）作为错误/性能消费方，含 BullMQ trace 传播，以及 `/api/v1/logs` 客户端日志接入端点，认证方式为用户 session 或短时效的 HMAC 设备令牌。
-- IM 入站/出站媒体在内容寻址流水线上打通：DingTalk 媒体（入站 + 出站）、QQ 入站媒体写入 CAS、WeChat 入站媒体（并修复一处 aes_key 编码问题），以及出站上传前的空 blob 防护。
+- 统一日志与分布式追踪：单一 pino logger 配领域分类法，OpenTelemetry 搭配 Tempo、Loki 与 Alloy，自托管、DSN 门控的 Sentry 作为错误/性能消费方，BullMQ trace 传播，以及 `/api/v1/logs` 客户端日志接入端点（以用户 session 或短时效的 HMAC 设备令牌认证）。
+- IM 入站与出站媒体在内容寻址流水线上打通：DingTalk 媒体（入站 + 出站）、QQ 入站媒体写入 CAS、WeChat 入站媒体（并修复一处 aes_key 编码问题），以及出站上传前的空 blob 防护。
 
 ## [0.18.1] - 2026-06-17
 
 ### 变更
 
-- wire 格式的 `CanonicalFileRef` 收敛为单一的内容寻址（sha256）形态；Feishu、QQ、WeChat 的出站发送改为从 CAS 读取字节，Feishu 的入站媒体则持久化到 CAS。
+- 传输层的 `CanonicalFileRef` 收敛为单一的内容寻址（sha256）形态；Feishu、QQ、WeChat 的出站发送改为从 CAS 读取字节，Feishu 的入站媒体则持久化到 CAS。
 
 ### 修复
 
@@ -283,7 +283,7 @@
 
 ### 变更
 
-- **破坏性变更：** 带响应体的应用 REST 响应改为统一包裹进 `{ data }` 信封（约 173 条路由）；无响应体的写操作仍为 `204`，而 wire/机器接口端点（设备握手、`/api/v1/internal/*`、`/auth/device/*`、`/im/webhooks/*`、`/automation-webhooks/*`、`/install.{sh,ps1}`）有意保持裸载荷。Postgres 保持 snake_case，TypeScript 接口则通过 Kysely `CamelCasePlugin` 全面使用 camelCase。错误契约（`{ error, code }`）有意保持不变。
+- **破坏性变更：** 带响应体的应用 REST 响应改为统一包裹进 `{ data }` 信封（约 173 条路由）；无响应体的写操作仍为 `204`，而 wire/机器接口端点（设备握手、`/api/v1/internal/*`、`/auth/device/*`、`/im/webhooks/*`、`/automation-webhooks/*`、`/install.{sh,ps1}`）有意保持裸载荷。Postgres 保持 snake_case，TypeScript 侧则通过 Kysely `CamelCasePlugin` 全面使用 camelCase。错误契约（`{ error, code }`）有意保持不变。
 - repo-exit 的 JSON 解码改为对畸形的存储载荷 fail-closed（此前会静默强制转为 `{}`），覆盖大多数模块。
 
 ## [0.17.0] - 2026-06-10
@@ -312,19 +312,19 @@
 
 ### 变更
 
-- **破坏性变更：** 规范的 `ToolResultOrigin` 联合类型（及 `TOOL_RESULT_ORIGIN_KINDS`）收敛到路由词表——`mcp_remote|mcp_device|callable_plugin|builtin` → `system|plugin|device|provider_native`——各 kind 的字段形态随之更新，`origin` 也改为 `CanonicalToolResult`/`NormalizedMcpToolResult` 上的必填字段。
-- **破坏性变更：** `ActorRuntimeToolKind` 枚举取值重新命名（`callable|mcp_plugin|mcp_device|provider_builtin` → `system|plugin|device`）；WebSocket 与 turn-preview DTO 的取值随之改变。
+- **破坏性变更：** 规范的 `ToolResultOrigin` 联合类型（及 `TOOL_RESULT_ORIGIN_KINDS`）统一并入路由词表——`mcp_remote|mcp_device|callable_plugin|builtin` → `system|plugin|device|provider_native`——并为各 kind 引入新的字段形态，`origin` 也改为 `CanonicalToolResult`/`NormalizedMcpToolResult` 上的必填字段。
+- **破坏性变更：** `ActorRuntimeToolKind` 枚举取值重新映射（`callable|mcp_plugin|mcp_device|provider_builtin` → `system|plugin|device`）；WebSocket 与 turn-preview DTO 的取值随之改变。
 
 ### 移除
 
 - `ExecutableModelToolKind` 与 `execKindForSource` 导出。
-- 删除了从 `device` 派生的 catalog/marketplace 枚举成员（`device_derived`、`device_derivation`、`device_projection`，以及 catalog source `device`）、`device` 插件传输、`actor_in_conversation`/`remote_agent_in_conversation` 访问目标标签，以及 `conversationActorContextId`。
+- 从 `device` 派生的 catalog/marketplace 枚举成员（`device_derived`、`device_derivation`、`device_projection`，以及 catalog source `device`）、`device` 插件传输、`actor_in_conversation`/`remote_agent_in_conversation` 访问目标标签，以及 `conversationActorContextId`。
 
 ## [0.14.1] - 2026-06-07
 
 ### 新增
 
-- nginx HTTP/3（QUIC）支持。
+- nginx 新增 HTTP/3（QUIC）支持。
 
 ## [0.14.0] - 2026-06-06
 
@@ -371,13 +371,13 @@
 
 ### 新增
 
-- 一键式、跨平台的 Node 安装器，通过 `GET /api/v1/install.sh` 与 `install.ps1` 提供（sha256 校验，自动探测中国/国际镜像）。
+- 一键式、跨平台的 Node 安装器，通过 `GET /api/v1/install.sh` 与 `install.ps1` 提供（sha256 校验，自动探测中国/国际镜像源）。
 
 ## [0.11.1] - 2026-06-05
 
 ### 新增
 
-- 软删除墓碑机制，配套 `_live` 读视图、离线清除 CLI（`db:purge:*`），以及由表分类清单支撑的 FK-policy CI 门禁。
+- 软删除墓碑机制，配套 `_live` 读视图、离线清除 CLI（`db:purge:*`），以及由表分类清单支撑的 FK-policy CI 门控。
 - 弹窗优先的 OAuth 登录，支持跨平台（web/mobile）错误路由，补全了 Feishu 社交登录流程。
 
 ### 变更
@@ -439,7 +439,7 @@
 
 ### 新增
 
-- 官方远程 MCP 端点（AMiner、AMap、Figma），基于 HTTP 与 SSE、走官方 SDK 传输。
+- 官方远程 MCP 端点（AMiner、AMap、Figma），基于 HTTP 与 SSE，使用官方 SDK 的传输实现。
 
 ### 变更
 
@@ -464,7 +464,7 @@
 
 ### 变更
 
-- **破坏性变更：** 加密信封从 `enc:` 迁移到 `enc:v2:`（scrypt KDF），且不提供重新加密路径；随着数据层收敛到 Kysely，绕过它直接执行裸 pg 查询的通道也一并移除。
+- **破坏性变更：** 加密信封从 `enc:` 迁移到 `enc:v2:`（scrypt KDF），且不提供重新加密路径；随着数据层统一到 Kysely，绕过它直接执行裸 pg 查询的通道也一并移除。
 
 ### 移除
 
@@ -478,7 +478,7 @@
 
 ### 新增
 
-- 一个自托管的 Verdaccio 私有 npm registry，用于分发 device runtime 与 remote-agent daemon；并为十个包添加了 `publishConfig`。
+- 一个自托管的 Verdaccio 私有 npm 注册表，用于分发 device runtime 与 remote-agent daemon；并为十个包添加了 `publishConfig`。
 
 ## [0.7.0] - 2026-05-31
 
@@ -494,7 +494,7 @@
 
 ### 新增
 
-- 一个逐 agent 的 computer-use（CUA）会话焦点子系统。
+- 一个逐 agent 的 computer-use（CUA）session 焦点子系统。
 
 ## [0.6.0] - 2026-05-29
 
@@ -504,8 +504,8 @@
 
 ### 变更
 
-- 设备协议的 `RuntimeBrowserPolicySchema` 新增一个向后兼容的 operation 级 `operations` 允许列表（匹配器在缺项时 fail-closed）。
-- **破坏性变更：** 设备协议的 `DeviceCapabilitySummarySchema` 新增一个必填的 `exposure_stable_key` 字段（外加一个向后兼容的可选 `metadata`）。
+- 设备协议的 `RuntimeBrowserPolicySchema` 新增 operation 级 `operations` 允许列表（匹配器在缺项时 fail-closed）。
+- **破坏性变更：** 设备协议的 `DeviceCapabilitySummarySchema` 新增一个必填的 `exposure_stable_key` 字段（另新增可选的 `metadata`）。
 
 ## [0.5.0] - 2026-05-29
 
@@ -560,7 +560,7 @@
 
 ### 变更
 
-- **破坏性变更：** 会话与 interaction 路由迁移到 `/chat/*` 之下（旧 URL 返回 404）；WebSocket 事件名改为点分形式（`auth_error` → `auth.error`、`server_shutdown` → `server.shutdown`）；Docker Compose 新增十一个必填环境变量（`APP_BASE_URL`、`SYNAPSE_PUBLIC_DOMAIN` 等），缺失时直接启动失败，必填集由此扩大到十五个。
+- **破坏性变更：** 会话与交互路由迁移到 `/chat/*` 之下（旧 URL 返回 404）；WebSocket 事件名改为点分形式（`auth_error` → `auth.error`、`server_shutdown` → `server.shutdown`）；Docker Compose 新增十一个必填环境变量（`APP_BASE_URL`、`SYNAPSE_PUBLIC_DOMAIN` 等），缺失时直接启动失败，必填集由此扩大到十五个。
 
 ### 移除
 
@@ -568,25 +568,26 @@
 
 ## [0.1.0] - 2026-05-20
 
-一个面向数字同事的自托管、以会话为中心的运行时——会话本身即协作边界，统一承载参与者、transcript 可见性、actor 执行、唤醒与记忆交接。
+首个发布版本。Synapse 是一个面向数字同事的自托管、以会话为中心的运行时：AI actor 与桥接的编码 agent 加入你的 workspace，在会话里与你协作，而且从你已在使用的 IM 应用即可触达。会话本身即协作边界——参与者、transcript 可见性、actor 执行、唤醒与记忆交接均由它治理。
 
 ### 新增
 
-- **会话模型** — 一个与渠道无关的会话图：`conversations`（kind 为 group/private/virtual，含 internal/external 边界）、多态的 `conversation_participants`（workspace_member、actor、remote_agent、external、system），带逐参与者的已读水位线，以及一个类型化的 `conversation_items` 日志（message/event/summary/control；user/assistant/system/tool 角色），支持 shared/private scope、visible/internal surface、事件 fan-out 策略、逐会话单调递增序列、reply/cause 串联，以及多段式消息体（text/file_ref/json），另有 to/cc/visible 定向与 mention。
-- **IM 连接器** — 一个通用的五表传输抽象（accounts、endpoints、逐会话 binding、addresses、逐 item 的投递链接），统一对接两个连接器：Feishu（飞书）机器人（webhook + 长连接，direct + group），以及通过扫码配对接入的 Weixin（个人微信）（长连接，仅 direct）。
+- **会话模型** — 所有协作都发生在一个与渠道无关的会话图中：`conversations`（kind 为 group/private/virtual，含 internal/external 边界）、多态的 `conversation_participants`（workspace_member、actor、remote_agent、external、system），带逐参与者的已读水位线，以及一个类型化的 `conversation_items` 日志（message/event/summary/control；user/assistant/system/tool 角色），承载 shared/private scope、visible/internal surface、事件 fan-out 策略、逐会话单调递增的序列、reply/cause 串联、多段式消息体（text/file_ref/json），以及 to/cc/visible 定向与提及。
+- **IM 连接器** — 在你已在使用的 IM 应用里与同事聊天：一个 Feishu（飞书）机器人（webhook + 长连接，direct + group），以及通过扫码配对接入的 Weixin（个人微信）（长连接，仅 direct），二者由一个通用的五表传输抽象（accounts、endpoints、逐会话绑定、addresses、逐 item 的投递链接）统一承接。
 - **平台原生 actor** — workspace 范围、云端运行的 AI 同事，带类型化角色（secretary/manager/specialist/reviewer/archivist/receptionist/assistant）、一套 actor 层级、`can_represent_user`，以及完整的版本化历史（`actor_versions`），其溯源信息会将每次编辑归因到某个 member、actor、system 或 sync 来源。
-- **桥接的 remote agent** — 运行在用户自己机器上的外部 agentic 运行时（Claude Code、Codex），通过 `remote-agent-daemon` 作为 workspace 参与者加入（一个本地 Node 驱动，经 WebSocket 向外建连，探测已安装的 CLI，逐 turn 拉起它们，并通过注入的 stdio MCP server 桥接聊天），配套机器配对/信任、plan 审批协作，以及群内交互授权。
-- **经由 Go relay 的设备工具** — 一个独立的设备端 agent（`synapse-relay` CLI、Wails 桌面 GUI、FUSE 挂载），它配对一台物理机器，并通过带版本的 WebSocket 调度协议将其作为已授权的 MCP 工具暴露给云端，内置 computer-use(CUA)、范围受限的文件系统、随附的 Chrome DevTools 以及命令行服务器。
-- **workspace 治理与权限** — 一套两级 RBAC：平台级的 `platform_access_bindings`（super_admin/workspace_admin/model_admin/support/auditor），支持通过环境变量配置来引导超级管理员；以及 workspace 级的 `workspace_members`（admin/member/guest），带八个细粒度的管理能力键、基于 token 的邀请，以及一个多态的 `resource_access_bindings` ACL——将资源授予 workspace/conversation/actor 主体。
-- **认证** — 一套手写的身份栈：bcrypt 密码登录，不透明的 sha256 bearer session（cookie 或 Authorization 头），带客户端/传输元数据与生命周期，以及一个完整的双 token 扫码跨设备登录状态机。
-- **可分享的同事与联系人** — 一个逐 workspace、WeChat 风格的关系图，覆盖 member、actor 与 remote agent：可分享的身份 profile（带可搜索 ID 与二维码 token）、带自动/手动审批的好友请求，以及已接受的联系人列表条目。
-- **catalog 与 marketplace** — 一条 publisher → item → version 的主干链路，覆盖三种 package kind（actor_template、skill_package、plugin_package），带分类、版本文件与逐 kind 的 spec；从 GitHub/ClawHub 镜像源摄取 skill 并解析为快照；以及 workspace 租户的已安装 skill 与 plugin-installation 运行时表，配 OAuth 风格的 plugin 认证 session 与逐 owner 的连接。
-- **模型组与 LLM 提供方** — 四个手写的提供方适配器（Anthropic Messages、OpenAI Chat Completions、OpenAI Responses、BigModel/Zhipu GLM），统一挂在一个静态的提供方目录之下，另加一个由数据库支撑的路由子系统：版本化的 model profile、带 weighted-random/round-robin/priority-failover 策略与 attempt 策略的 `model_groups`、范围受限的授权，以及 actor→组的指派；运行时的提供方/模型通过环境变量选择。
-- **MCP 工具与插件** — 一个四传输的 MCP 插件宿主（builtin、stdio、http、relay），架于一套七 kind 的工具分类法之上，随附七个 builtin 插件（feishu、aminer、amap、github、gitlab、mijia，以及 Zhipu z-ai 工具包——涵盖搜索、阅读、OCR/视觉、音频/语音、媒体生成与内容审核），带运行时权限审批和 mount/reuse 范围限定。
-- **Memory** — 进程内的混合语义记忆，划分为五个 scope（workspace_shared、conversation_shared、actor_private、participant_private、user_private），横跨七个 item 分类，结合词法(FTS + trigram)与向量召回——经由一个内置的 transformers.js `multilingual-e5-small` 模型（VECTOR(384)、HNSW cosine）在本地做 embedding、无需外部 sidecar，并留存每次召回的运行记录。
-- **自托管部署** — 一套单台 Ubuntu 宿主机的部署布局：nginx 公网入口、面向 API 与桌面 web（`packages/web-next`）的 systemd、容器化的 PostgreSQL（pgvector/pg16）与 Redis 7、一个以 tsx 运行的 API 镜像，以及一个用于整套容器化栈的 `production` Compose profile；并随附一个 Expo 移动端 app，以及 English、简体中文、Español 三种语言的 README/CHANGELOG。
+- **桥接的 remote agent** — 带上你自己的编码 agent：运行在用户自己机器上的外部 agentic 运行时（Claude Code、Codex）经由 `remote-agent-daemon` 以参与者身份加入 workspace——它是一个本地 Node 驱动，经 WebSocket 向外建连，探测已安装的 CLI，逐 turn 拉起它们，并通过注入的 stdio MCP server 桥接聊天——配套机器配对/信任、plan 审批协作，以及群内交互授权。
+- **经由 Go relay 的设备工具** — 让 agent 受控地访问一台物理机器：一个独立的设备端 agent（`synapse-relay` CLI、Wails 桌面 GUI、FUSE 挂载）负责配对机器，并通过带版本的 WebSocket 调度协议将其作为已授权的 MCP 工具暴露给云端，内置 computer-use（CUA）、范围受限的文件系统、随附的 Chrome DevTools 以及命令行服务器。
+- **workspace 治理与权限** — 一套两级 RBAC：平台级的 `platform_access_bindings`（super_admin/workspace_admin/model_admin/support/auditor），支持通过环境变量配置来引导超级管理员；以及 workspace 级的 `workspace_members`（admin/member/guest），带八个细粒度的管理能力键、基于令牌的邀请，以及一个多态的 `resource_access_bindings` ACL——将资源授予 workspace/conversation/actor 主体。
+- **认证** — 一套手写的身份栈：bcrypt 密码登录，不透明的 sha256 bearer session（cookie 或 Authorization 头），带客户端/传输元数据与生命周期，以及一个完整的双令牌扫码跨设备登录状态机。
+- **可分享的同事与联系人** — 一个逐 workspace、WeChat 风格的关系图，覆盖 member、actor 与 remote agent：可分享的身份 profile（带可搜索 ID 与二维码令牌）、带自动/手动审批的好友请求，以及已接受的联系人列表条目。
+- **catalog 与 marketplace** — 安装并分享打包好的能力：一条 publisher → item → version 的主干链路，覆盖三种 package kind（actor_template、skill_package、plugin_package），带分类、版本文件与逐 kind 的 spec；从 GitHub/ClawHub 镜像源摄取 skill 并解析为快照；以及 workspace 租户的已安装 skill 与 plugin-installation 运行时表，配 OAuth 风格的 plugin 认证 session 与逐 owner 的连接。
+- **模型组与 LLM 提供方** — 四个手写的提供方适配器（Anthropic Messages、OpenAI Chat Completions、OpenAI Responses、BigModel/Zhipu GLM），统一挂在一个静态的提供方目录之下，另加由数据库支撑的路由子系统：版本化的 model profile、带 weighted-random/round-robin/priority-failover 策略与 attempt 策略的 `model_groups`、范围受限的授权，以及 actor→组的指派；运行时的提供方/模型通过环境变量选择。
+- **MCP 工具与插件** — 一个四传输的 MCP 插件宿主（builtin、stdio、http、relay），架于一套七 kind 的工具分类法之上，随附七个 builtin 插件（feishu、aminer、amap、github、gitlab、mijia，以及 Zhipu z-ai 工具包——涵盖搜索、阅读、OCR/视觉、音频/语音、媒体生成与内容审核），带运行时权限审批和挂载/复用范围限定。
+- **Memory** — 同事拥有记忆：进程内的混合语义记忆，划分为五个 scope（workspace_shared、conversation_shared、actor_private、participant_private、user_private），横跨七个 item 分类，结合词法（FTS + trigram）与向量召回——经由一个内置的 transformers.js `multilingual-e5-small` 模型（VECTOR(384)、HNSW cosine）在本地做 embedding、无需外部 sidecar，并留存每次召回的运行记录。
+- **自托管部署** — 可运行在单台 Ubuntu 宿主机上：nginx 公网入口、面向 API 与桌面 web（`packages/web-next`）的 systemd、容器化的 PostgreSQL（pgvector/pg16）与 Redis 7、一个以 tsx 运行的 API 镜像，以及一个用于整套容器化栈的 `production` Compose profile；并随附一个 Expo 移动端 app，以及 English、简体中文、Español 三种语言的 README/CHANGELOG。
 
-[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/zai-org/Synapse/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/zai-org/Synapse/compare/v0.26.2...v0.27.0
 [0.26.2]: https://github.com/zai-org/Synapse/compare/v0.26.1...v0.26.2
 [0.26.1]: https://github.com/zai-org/Synapse/compare/v0.26.0...v0.26.1

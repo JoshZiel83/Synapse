@@ -9,21 +9,22 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 > [!WARNING]
 > Synapse is still in an early design and implementation phase (pre-1.0). Under SemVer's
-> 0.x rules any release may include breaking changes, and backward compatibility for old
-> data is not guaranteed — breaking changes are handled by rebuilding the database
+> 0.x rules, any release may include breaking changes, and backward compatibility for
+> existing data is not guaranteed — breaking changes are handled by rebuilding the database
 > (`npm run db:rebuild`) and redeploying, not by migrations (see [`deploy.md`](./deploy.md)).
-> In `0.x`, a **minor** bump (`0.Y.0`) marks a consumer-facing break (REST/WebSocket routes
-> and DTOs, the device-protocol wire contract, `@synapse/shared` exports, authentication, or
-> a removed capability) and a **patch** (`0.y.Z`) is backward compatible. The tagged versions
-> below through `0.27.0` retroactively reconstruct the history of the `dev` line, during
-> which the package manifests stayed at `0.1.0`; `0.28.0` is the first release published to
-> the package registry, and from it onward the manifests carry the released version.
+> Within `0.x`, a **minor** bump (`0.Y.0`) signals a consumer-facing break (REST/WebSocket
+> routes and DTOs, the device-protocol wire contract, `@synapse/shared` exports,
+> authentication, or a removed capability), while a **patch** (`0.y.Z`) is backward
+> compatible. The tagged versions below, through `0.27.0`, retroactively reconstruct the
+> history of the `dev` line, during which the package manifests stayed at `0.1.0`; `0.28.0`
+> is the first release published to the package registry, and from it onward the manifests
+> carry the released version.
 
 ## [Unreleased]
 
 ## [0.28.0] - 2026-07-24
 
-Distributed-tracing round-3 correctness fix (commits `c068aef3`, `9b5a30c8`, `92645a74`): turn-scoped trace correlation for reverse-MCP tool calls across interleaved conversation wakes (F-r3-2). It changes the remote-agent daemon wire contract and requires a **coordinated redeploy** — the hard build order and post-recreate checks are the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7, with the R3 daemon-first cutover order in §7.4. No database schema changed, so this release needs no `db:rebuild`.
+Distributed-tracing round-3 correctness fix (commits `c068aef3`, `9b5a30c8`, `92645a74`): turn-scoped trace correlation for reverse-MCP tool calls across interleaved conversation wakes (F-r3-2). It changes the remote-agent daemon wire contract and requires a **coordinated redeploy** — the strict image build order and post-recreate checks are covered by the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7, with the R3 daemon-first cutover order in §7.4. No database schema changed, so this release needs no `db:rebuild`.
 
 This is also the first release in which the package manifests leave `0.1.0`: the coordinated set — `@synapse/device-protocol`, `@synapse/shared`, `@synapse/device-runtime`, `@synapse/device-sdk`, `@synapse/api`, and `@synapse/remote-agent-daemon` — is bumped in lockstep to `0.28.0`, and the four runtime packages are published to the private package registry. The platform runtime bundles stay decoupled at their own version.
 
@@ -38,22 +39,21 @@ This is also the first release in which the package manifests leave `0.1.0`: the
 
 ## [0.27.0] - 2026-07-23
 
-Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `cd615060`, `79ddc845`) plus public-edge hardening. They change wire, queue, and telemetry contracts and require a **coordinated redeploy** — the exact procedure (hard build order, `--force-recreate`, and a post-recreate verification checklist) is the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No database schema changed, so this release needs no `db:rebuild`.
+Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `cd615060`, `79ddc845`) plus public-edge hardening. For operators, the headline is a **coordinated redeploy**: this release changes wire, queue, and telemetry contracts, and the exact procedure — a strict image build order, `--force-recreate`, and a post-recreate verification checklist — is the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No database schema changed, so this release needs no `db:rebuild`.
 
 ### Changed
 
-- **Breaking:** the offline chat outbox's stored queue state was version-bumped as a clean break on **both web and mobile** (mobile snapshot v2→v3; shared `StoredChatQueueState` v4→v5, including the service worker). Messages left queued-but-unsent by a previous build are dropped on upgrade; clients rebuild the outbox on first load. Already-sent messages and server-side data are unaffected.
-- Remote-agent daemon wire: a new `agent:deliveries:completed` frame (api→daemon) reclaims the daemon's pending-delivery set, and daemon-frame trace fields are gated `wireTraceContextFields` (schema-validated; malformed values degrade to absent). A daemon built before this change silently ignores the new frame until it is rebuilt and republished (`deploy.md` §5b) — affected deliveries stay pending and re-notify, so nothing is lost. `AgentSession.setMcpServers` was removed from the driver interface, and a CI guard now enforces api↔daemon frame parity. (The `fail-deliveries` body reshape shipped in v0.26.0.)
-- `@fastify/otel` 0.20.1 with `instrumentHooks:false`: each request now produces a single SERVER span and the per-request lifecycle-hook spans are gone — dashboards or alerts querying `fastify.type=hook` lose that data. The first-party egress propagator now fails closed unconditionally (no flags-`00` `traceparent` nor inherited vendor `tracestate` to third parties), and `OTEL_SERVICE_NAME`/`OTEL_RESOURCE_ATTRIBUTES` now correctly override the built-in service name (the previous precedence was inverted).
-- Inbound `tracestate` handling tightened: `MAX_TRACESTATE_LENGTH` reconciled down from 1024 to 512 (the value `@opentelemetry/core` 2.8.0 enforces), with the key grammar widened to the W3C Level-2 superset; a header longer than 512 characters, with more than 32 members, duplicate keys, over-long values, or malformed members is now dropped as a whole rather than partially salvaged.
-- Dependency patching moved from `patch-package` to a first-party `scripts/apply-patches.mjs` applier (postinstall and the api/web/mobile-web Dockerfiles); an npm-installed device runtime ships without the Go/Rust helper binaries and now degrades gracefully with a startup warning.
+- **Breaking:** chat messages left queued-but-unsent by a previous build are dropped on upgrade. The offline chat outbox's stored queue state was version-bumped as a clean break on **both web and mobile** (mobile snapshot v2→v3; shared `StoredChatQueueState` v4→v5, including the service worker); clients rebuild the outbox on first load. Already-sent messages and server-side data are unaffected.
+- Remote-agent daemons should be rebuilt and republished (`deploy.md` §5b): a new `agent:deliveries:completed` frame (api→daemon) reclaims the daemon's pending-delivery set, and daemon-frame trace fields are gated behind `wireTraceContextFields` (schema-validated; malformed values degrade to absent). A daemon built before this change silently ignores the new frame until it is republished — affected deliveries stay pending and re-notify, so nothing is lost. `AgentSession.setMcpServers` was removed from the driver interface, and a CI guard now enforces api↔daemon frame parity. (The `fail-deliveries` body reshape shipped in v0.26.0.)
+- Dashboards or alerts querying `fastify.type=hook` spans lose that data: with `@fastify/otel` 0.20.1 and `instrumentHooks:false`, each request now produces a single SERVER span, and the per-request lifecycle-hook spans are gone. The first-party egress propagator now fails closed unconditionally (no flags-`00` `traceparent` nor inherited vendor `tracestate` to third parties), and `OTEL_SERVICE_NAME`/`OTEL_RESOURCE_ATTRIBUTES` now correctly override the built-in service name (the previous precedence was inverted).
+- Inbound `tracestate` handling tightened: `MAX_TRACESTATE_LENGTH` reconciled down from 1024 to 512 (the value `@opentelemetry/core` 2.8.0 enforces), with the key grammar widened to the W3C Level-2 superset. A header longer than 512 characters, with more than 32 members, duplicate keys, over-long values, or malformed members is now dropped as a whole rather than partially salvaged.
+- Dependency patching moved from `patch-package` to a first-party `scripts/apply-patches.mjs` applier (postinstall and the api/web/mobile-web Dockerfiles). A device runtime installed from npm ships without the Go/Rust helper binaries and now degrades gracefully with a startup warning.
 
 ### Added
 
-- Public-edge rate limiting on the two public nginx templates — `limit_req` on `/api/` and `/ws` plus `limit_conn` on `/ws` (`429`, not `503`; a normal page load never trips it), IPv6 keyed per `/64` at the TLS edge (njs). Also the unspoofable `x-synapse-trace-ingress` Ring-0 marker, an optional `SYNAPSE_TRACE_SAMPLING_SALT` for the keyed ratio sampler, explicit Tempo `overrides.defaults` bounds, and a startup warning when `SYNAPSE_SERVER_TIMING_TRACE=on` coexists with a ratio sampler. Thresholds and knobs: [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §6 and §1.
-- Client-side trace correlation on web and mobile: carriers now come from real SDK spans (fabricated span ids eliminated), with short client spans around WebSocket auth/subscribe frames.
-- The Go cua-helper and the Rust fs-helper emit per-RPC SERVER spans with JSON-RPC semconv attributes.
-- Turn-scoped trace-carrier lifetimes on both the api (`TurnCarrierCache`) and the daemon (turn-epoch), fixing reverse-MCP span attribution; a new `OTEL_TRACES_EXPORTER` tri-state switch (unset/`otlp`/`none`) and case-insensitive `OTEL_TRACES_SAMPLER` normalization; new `@synapse/shared` tracestate helpers (`sanitizeTracestateHeader`, `isValidTracestateHeader`, grammar constants) — all additive.
+- Public-edge rate limiting on the two public nginx templates — `limit_req` on `/api/` and `/ws` plus `limit_conn` on `/ws` (returning `429`, not `503`; a normal page load never trips it), IPv6 keyed per `/64` at the TLS edge (njs). Also the unspoofable `x-synapse-trace-ingress` Ring-0 marker, an optional `SYNAPSE_TRACE_SAMPLING_SALT` for the keyed ratio sampler, explicit Tempo `overrides.defaults` bounds, and a startup warning when `SYNAPSE_SERVER_TIMING_TRACE=on` coexists with a ratio sampler. Thresholds and knobs: [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §6 and §1.
+- Client and native-sidecar trace coverage: on web and mobile, trace carriers now come from real SDK spans (fabricated span ids eliminated), with short client spans around WebSocket auth/subscribe frames; the Go cua-helper and the Rust fs-helper emit per-RPC SERVER spans with JSON-RPC semconv attributes.
+- Turn-scoped trace-carrier lifetimes on both the api (`TurnCarrierCache`) and the daemon (turn-epoch), fixing reverse-MCP span attribution; a new `OTEL_TRACES_EXPORTER` tri-state switch (unset/`otlp`/`none`) and case-insensitive `OTEL_TRACES_SAMPLER` normalization; and new `@synapse/shared` tracestate helpers (`sanitizeTracestateHeader`, `isValidTracestateHeader`, grammar constants) — all additive.
 - This retroactive trilingual changelog (English, 简体中文, Español), reconstructing the release history v0.1.0–v0.26.2 with 50 annotated tags.
 - CI: cross-language tests are gated for the first time (`go test` for the cua sidecar, `cargo test` for fs-helper), and the trace-propagation guard gained frame-parity and turn-scope rules.
 
@@ -105,12 +105,12 @@ Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `
 
 ### Removed
 
-- Reserved-but-inert `pty` capability machinery (the `pty` builtin-kind enum member, its policy, and the grant-creation reject path). Creating a pty grant always failed with HTTP 400 (`pty_not_supported`); it was never a routable capability.
+- The reserved-but-inert `pty` capability machinery: the `pty` builtin-kind enum member, its policy, and the grant-creation reject path. Creating a pty grant had always failed with HTTP 400 (`pty_not_supported`); it was never a routable capability.
 
 ### Fixed
 
-- The API Docker image builds again, resolving a 14-day breakage caused by an unguarded `cp -r` of an assets path that had been deleted by the icon refactor.
-- Two off-box sandbox symlink escapes: an arbitrary host write via a base-snapshot symlink, and a read-side host-file exfiltration through `envd`'s stat-follows-symlink behavior.
+- The API Docker image builds again, ending a 14-day breakage caused by an unguarded `cp -r` of an assets path the icon refactor had deleted.
+- Two off-box sandbox symlink escapes: an arbitrary host write through a base-snapshot symlink, and read-side host-file exfiltration through `envd`'s stat-follows-symlink behavior.
 - A data-free convergence livelock in the off-box teardown path.
 
 ## [0.25.1] - 2026-07-13
@@ -240,7 +240,7 @@ Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `
 
 ### Added
 
-- HKUDS/CLI-Anything internalized as a `cli-catalog` device-runtime builtin (66 CLIs) with a server-side minting gate.
+- HKUDS/CLI-Anything is internalized as a `cli-catalog` device-runtime builtin (66 CLIs), with a server-side gate on grant issuance.
 
 ## [0.20.0] - 2026-06-19
 
@@ -268,8 +268,8 @@ Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `
 
 ### Added
 
-- Unified logging (a single pino logger with a domain taxonomy) and distributed tracing (OpenTelemetry, Tempo, Loki, Alloy) with a Sentry (self-hosted, DSN-gated) error/performance consumer, BullMQ trace propagation, and a `/api/v1/logs` client-log ingest endpoint authenticated by user session or a short-lived HMAC device token.
-- IM inbound/outbound media completed on the content-addressed pipeline: DingTalk media (inbound + outbound), QQ inbound media to CAS, WeChat inbound media (plus an aes_key encoding fix), and an empty-blob guard before outbound upload.
+- Unified logging and distributed tracing: a single pino logger with a domain taxonomy, OpenTelemetry with Tempo, Loki, and Alloy, a self-hosted, DSN-gated Sentry error/performance consumer, BullMQ trace propagation, and a `/api/v1/logs` client-log ingest endpoint authenticated by a user session or a short-lived HMAC device token.
+- IM inbound and outbound media completed on the content-addressed pipeline: DingTalk media (inbound + outbound), QQ inbound media into the CAS, WeChat inbound media (plus an aes_key encoding fix), and an empty-blob guard before outbound upload.
 
 ## [0.18.1] - 2026-06-17
 
@@ -314,13 +314,13 @@ Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `
 
 ### Changed
 
-- **Breaking:** the canonical `ToolResultOrigin` union (and `TOOL_RESULT_ORIGIN_KINDS`) was converged onto the routed vocabulary — `mcp_remote|mcp_device|callable_plugin|builtin` → `system|plugin|device|provider_native` — with new per-kind field shapes, and `origin` became a required field on `CanonicalToolResult`/`NormalizedMcpToolResult`.
-- **Breaking:** the `ActorRuntimeToolKind` enum was re-lettered (`callable|mcp_plugin|mcp_device|provider_builtin` → `system|plugin|device`); WebSocket and turn-preview DTO values changed accordingly.
+- **Breaking:** the canonical `ToolResultOrigin` union (and `TOOL_RESULT_ORIGIN_KINDS`) was consolidated into the routed vocabulary — `mcp_remote|mcp_device|callable_plugin|builtin` → `system|plugin|device|provider_native` — with new per-kind field shapes, and `origin` became a required field on `CanonicalToolResult`/`NormalizedMcpToolResult`.
+- **Breaking:** the `ActorRuntimeToolKind` enum values were remapped (`callable|mcp_plugin|mcp_device|provider_builtin` → `system|plugin|device`); WebSocket and turn-preview DTO values changed accordingly.
 
 ### Removed
 
-- `ExecutableModelToolKind` and `execKindForSource` exports.
-- Dropped `device`-derived catalog/marketplace enum members (`device_derived`, `device_derivation`, `device_projection`, catalog source `device`), the `device` plugin transport, the `actor_in_conversation`/`remote_agent_in_conversation` access-target labels, and `conversationActorContextId`.
+- The `ExecutableModelToolKind` and `execKindForSource` exports.
+- The `device`-derived catalog/marketplace enum members (`device_derived`, `device_derivation`, `device_projection`, catalog source `device`), the `device` plugin transport, the `actor_in_conversation`/`remote_agent_in_conversation` access-target labels, and `conversationActorContextId`.
 
 ## [0.14.1] - 2026-06-07
 
@@ -466,7 +466,7 @@ Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `
 
 ### Changed
 
-- **Breaking:** the encryption envelope moved from `enc:` to `enc:v2:` (scrypt KDF) with no re-encryption path; the bare-pg query escape hatch was removed as the data layer converged on Kysely.
+- **Breaking:** the encryption envelope moved from `enc:` to `enc:v2:` (scrypt KDF) with no re-encryption path; the bare-pg query escape hatch was removed as the data layer was unified on Kysely.
 
 ### Removed
 
@@ -486,7 +486,7 @@ Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `
 
 ### Changed
 
-- **Breaking:** migrated all workspaces to Zod 4 (pinned `4.3.6`); a conversation's IM-ness is now derived from its transport binding, reshaping the chat create and add-participant DTOs.
+- **Breaking:** all workspaces migrated to Zod 4 (pinned `4.3.6`); whether a conversation is an IM conversation is now derived from its transport binding, reshaping the chat-create and add-participant DTOs.
 
 ### Removed
 
@@ -506,7 +506,7 @@ Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `
 
 ### Changed
 
-- The device-protocol `RuntimeBrowserPolicySchema` gains an additive operation-level `operations` allowlist (the matcher fail-closes on a missing entry).
+- The device-protocol `RuntimeBrowserPolicySchema` gains an additive operation-level `operations` allowlist (the matcher fails closed on a missing entry).
 - **Breaking:** the device-protocol `DeviceCapabilitySummarySchema` adds a required `exposure_stable_key` field (plus an additive optional `metadata`).
 
 ## [0.5.0] - 2026-05-29
@@ -570,25 +570,26 @@ Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `
 
 ## [0.1.0] - 2026-05-20
 
-A self-hosted, conversation-centric runtime for digital teammates, where the conversation itself is the collaboration boundary for participants, transcript visibility, actor execution, wakeups, and memory handoff.
+The first release. Synapse is a self-hosted, conversation-centric runtime for digital teammates: AI actors and bridged coding agents join your workspaces and collaborate with you inside conversations, reachable from the IM apps you already use. The conversation itself is the collaboration boundary — it governs participants, transcript visibility, actor execution, wakeups, and memory handoff.
 
 ### Added
 
-- **Conversation model** — a channel-agnostic conversation graph: `conversations` (kinds group/private/virtual, internal/external boundary), polymorphic `conversation_participants` (workspace_member, actor, remote_agent, external, system) with per-participant read watermarks, and a typed `conversation_items` log (message/event/summary/control; user/assistant/system/tool roles) with shared/private scope, visible/internal surface, event fan-out policies, monotonic per-conversation sequence, reply/cause threading, and multi-part bodies (text/file_ref/json), plus to/cc/visible targeting and mentions.
-- **IM connectors** — a generic five-table transport abstraction (accounts, endpoints, per-conversation bindings, addresses, per-item delivery links) fronting two connectors: Feishu (飞书) bot (webhook + long-connection, direct + group) and Weixin (personal WeChat) via QR pairing (long-connection, direct-only).
-- **Platform-native actors** — workspace-scoped, cloud-run AI teammates with typed roles (secretary/manager/specialist/reviewer/archivist/receptionist/assistant), an actor hierarchy, `can_represent_user`, and full versioned history (`actor_versions`) with provenance attributing each edit to a member, actor, system, or sync source.
-- **Bridged remote agents** — external agentic runtimes (Claude Code, Codex) running on a user's own machine, joined as workspace participants via the `remote-agent-daemon` (a local Node driver connecting outbound over WebSocket, probing installed CLIs, spawning them per turn, and bridging chat through an injected stdio MCP server) with machine pairing/trust, plan-approval collaboration, and group-interaction grants.
-- **Device tools via the Go relay** — a standalone on-device agent (`synapse-relay` CLI, Wails desktop GUI, FUSE mount) that pairs a physical machine and exposes it to the cloud as authorized MCP tools over a versioned WebSocket dispatch protocol, hosting built-in computer-use (CUA), scoped filesystem, bundled Chrome DevTools, and command-line servers.
-- **Workspace governance & permissions** — a two-tier RBAC: platform-level `platform_access_bindings` (super_admin/workspace_admin/model_admin/support/auditor) with env-config super-admin bootstrap, and workspace-level `workspace_members` (admin/member/guest) with eight fine-grained admin capability keys, token-based invites, and a polymorphic `resource_access_bindings` ACL granting resources to workspace/conversation/actor subjects.
+- **Conversation model** — all collaboration happens in a channel-agnostic conversation graph: `conversations` (kinds group/private/virtual, an internal/external boundary), polymorphic `conversation_participants` (workspace_member, actor, remote_agent, external, system) with per-participant read watermarks, and a typed `conversation_items` log (message/event/summary/control; user/assistant/system/tool roles) carrying shared/private scope, visible/internal surface, event fan-out policies, a monotonic per-conversation sequence, reply/cause threading, multi-part bodies (text/file_ref/json), and to/cc/visible targeting with mentions.
+- **IM connectors** — chat with your teammates from the IM apps you already use: a Feishu (飞书) bot (webhook + long-connection, direct + group) and Weixin (personal WeChat) via QR pairing (long-connection, direct-only), fronted by a generic five-table transport abstraction (accounts, endpoints, per-conversation bindings, addresses, per-item delivery links).
+- **Platform-native actors** — workspace-scoped, cloud-run AI teammates with typed roles (secretary/manager/specialist/reviewer/archivist/receptionist/assistant), an actor hierarchy, `can_represent_user`, and fully versioned history (`actor_versions`) whose provenance attributes each edit to a member, actor, system, or sync source.
+- **Bridged remote agents** — bring your own coding agents: external agentic runtimes (Claude Code, Codex) running on a user's own machine join workspaces as participants via the `remote-agent-daemon`, a local Node driver that connects outbound over WebSocket, probes installed CLIs, spawns them per turn, and bridges chat through an injected stdio MCP server — with machine pairing/trust, plan-approval collaboration, and group-interaction grants.
+- **Device tools via the Go relay** — give agents controlled access to a physical machine: a standalone on-device agent (`synapse-relay` CLI, a Wails desktop GUI, a FUSE mount) pairs the machine and exposes it to the cloud as authorized MCP tools over a versioned WebSocket dispatch protocol, hosting built-in computer-use (CUA), scoped-filesystem, bundled Chrome DevTools, and command-line servers.
+- **Workspace governance & permissions** — two-tier RBAC: platform-level `platform_access_bindings` (super_admin/workspace_admin/model_admin/support/auditor) with env-config super-admin bootstrap, and workspace-level `workspace_members` (admin/member/guest) with eight fine-grained admin capability keys, token-based invites, and a polymorphic `resource_access_bindings` ACL that grants resources to workspace/conversation/actor subjects.
 - **Authentication** — a hand-rolled identity stack: bcrypt password login, opaque sha256 bearer sessions (cookie or Authorization header) with client/transport metadata and lifecycle, and a full dual-token QR cross-device login state machine.
 - **Shareable teammates & contacts** — a per-workspace, WeChat-style relationship graph over members, actors, and remote agents: shareable identity profiles with searchable IDs and QR tokens, friend requests with auto/manual approval, and accepted contact-list entries.
-- **Catalog & marketplace** — a publisher → item → version spine over three package kinds (actor_template, skill_package, plugin_package) with categories, version files, and per-kind specs; skill ingestion from GitHub/ClawHub mirror sources into parsed snapshots; and workspace-tenant installed-skill and plugin-installation runtime tables with OAuth-style plugin auth sessions and per-owner connections.
-- **Model groups & LLM providers** — four hand-rolled provider adapters (Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, BigModel/Zhipu GLM) behind a static provider catalog, plus a DB-backed routing subsystem: versioned model profiles, `model_groups` with weighted-random/round-robin/priority-failover strategies and attempt policies, scoped grants, and actor→group assignments; runtime provider/model selected via environment.
+- **Catalog & marketplace** — install and share packaged capabilities: a publisher → item → version spine over three package kinds (actor_template, skill_package, plugin_package) with categories, version files, and per-kind specs; skill ingestion from GitHub/ClawHub mirror sources into parsed snapshots; and workspace-tenant installed-skill and plugin-installation runtime tables with OAuth-style plugin auth sessions and per-owner connections.
+- **Model groups & LLM providers** — four hand-rolled provider adapters (Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, BigModel/Zhipu GLM) behind a static provider catalog, plus DB-backed routing: versioned model profiles, `model_groups` with weighted-random/round-robin/priority-failover strategies and attempt policies, scoped grants, and actor→group assignments; the runtime provider/model is selected via environment.
 - **MCP tools & plugins** — a four-transport MCP plugin host (builtin, stdio, http, relay) over a seven-kind tool taxonomy, shipping seven builtin plugins (feishu, aminer, amap, github, gitlab, mijia, and the Zhipu z-ai toolkit spanning search, reading, OCR/vision, audio/speech, media generation, and moderation), with runtime-permission approval and mount/reuse scoping.
-- **Memory** — in-process hybrid semantic memory partitioned into five scopes (workspace_shared, conversation_shared, actor_private, participant_private, user_private) across seven item categories, combining lexical (FTS + trigram) and vector recall via a bundled transformers.js `multilingual-e5-small` model (VECTOR(384), HNSW cosine) that embeds locally with no external sidecar, plus recorded recall runs.
-- **Self-hosted deployment** — a single Ubuntu host layout: nginx public entrypoint, systemd for the API and desktop web (`packages/web-next`), Dockerized PostgreSQL (pgvector/pg16) and Redis 7, a tsx-run API image, and a `production` Compose profile for the full containerized stack; ships an Expo mobile app and README/CHANGELOG locales in English, 简体中文, and Español.
+- **Memory** — teammates remember: in-process hybrid semantic memory partitioned into five scopes (workspace_shared, conversation_shared, actor_private, participant_private, user_private) across seven item categories, combining lexical (FTS + trigram) and vector recall via a bundled transformers.js `multilingual-e5-small` model (VECTOR(384), HNSW cosine) that embeds locally with no external sidecar, plus recorded recall runs.
+- **Self-hosted deployment** — runs on a single Ubuntu host: an nginx public entrypoint, systemd for the API and desktop web (`packages/web-next`), Dockerized PostgreSQL (pgvector/pg16) and Redis 7, a tsx-run API image, and a `production` Compose profile for the full containerized stack. Ships an Expo mobile app and README/CHANGELOG locales in English, 简体中文, and Español.
 
-[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/zai-org/Synapse/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/zai-org/Synapse/compare/v0.26.2...v0.27.0
 [0.26.2]: https://github.com/zai-org/Synapse/compare/v0.26.1...v0.26.2
 [0.26.1]: https://github.com/zai-org/Synapse/compare/v0.26.0...v0.26.1
