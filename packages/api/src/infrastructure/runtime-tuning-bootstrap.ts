@@ -6,6 +6,12 @@ import {
   runtimeTuningEnvOverrides,
   runtimeTuningSchema,
 } from "../config/runtime-tuning-schema.js"
+import { createLogger } from "./logger/index.js"
+
+// The shared logger is config-free and reads LOG_LEVEL directly (it imports
+// env-bootstrap itself), so it is safe to use this early — the same "config"
+// scope config/index.ts logs under.
+const log = createLogger("config")
 
 /**
  * Side-effect module: apply an optional runtime-tuning.json to process.env.
@@ -24,8 +30,6 @@ import {
  * The file itself is validated against runtimeTuningSchema (strict) so a
  * misspelled knob fails loudly instead of being silently ignored. Fail-closed on
  * a malformed file — consistent with config/index.ts refusing to boot on bad env.
- *
- * Runs before the logger is configured, so notices go to console.
  */
 function resolveTuningPath(): string {
   const override = process.env.RUNTIME_TUNING_CONFIG_PATH?.trim()
@@ -46,13 +50,12 @@ function resolveTuningPath(): string {
 }
 
 /**
- * Fail closed, matching config/index.ts's loadEnvOrExit style: a clean, no-stack
- * message then a bare exit (this runs pre-telemetry, on the same import path the
- * db/tool scripts use, so a V8 stack trace would just be noise).
+ * Fail closed, matching config/index.ts's loadEnvOrExit style: a clean fatal log
+ * then a bare exit (this runs on the same import path the db/tool scripts use, so
+ * a V8 stack trace would just be noise).
  */
 function fail(message: string): never {
-  // eslint-disable-next-line no-console
-  console.error(message)
+  log.fatal(message)
   process.exit(1)
 }
 
@@ -93,8 +96,7 @@ function applyRuntimeTuning(): void {
     // and letting an empty var request the central schema's default. Surface the
     // shadow so a file edit that has no effect is visible.
     if (process.env[env] !== undefined) {
-      // eslint-disable-next-line no-console
-      console.warn(
+      log.warn(
         `runtime-tuning: ${env} is already set (environment or .env); the value for this knob in ${path} is ignored`
       )
       continue
