@@ -76,3 +76,6 @@ __pycache__/
 # sidecars/xhs-mcp/UPSTREAM.md) into this path. The upstream license MUST be
 # resolved before shipping xhs.
 sidecars/xhs-mcp/vendor/xiaohongshu-mcp/
+
+# Local working docs — relocated out of the published tree (see .docs).
+.docs/
