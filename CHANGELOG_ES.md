@@ -23,9 +23,46 @@ proyecto procura seguir el [Versionado Semántico](https://semver.org/lang/es/sp
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-07-25
+
+La configuración gana una superficie basada en archivos y validada por esquema, y los documentos de trabajo salen del repositorio publicado. No cambió ningún contrato del protocolo ni ningún esquema de base de datos, así que esta versión no necesita `db:rebuild`.
+
+### Añadido
+
+- Un pipeline de generación Zod→JSON-Schema: `npm run schema:gen` emite `/schemas/*.schema.json` (draft-07) a partir de las definiciones de Zod; un control `guard:schemas` en `verify:boundary` hace fallar la CI cuando un esquema ya versionado en el repositorio se desvía de su fuente; y una configuración de `.vscode`, la primera del repositorio, conecta los esquemas con la edición de YAML/JSON, con los esquemas de terceros incorporados bajo `schemas/vendor/`.
+- `CONTENT_STORAGE_BACKENDS_FILE`: el registro de backends de almacenamiento de contenido puede cargarse ahora desde un archivo JSON. Es mutuamente excluyente con la variable de entorno en línea `CONTENT_STORAGE_BACKENDS`: definir ambas es un error de arranque.
+- `runtime-tuning.json` (ruta mediante `RUNTIME_TUNING_CONFIG_PATH`): trece parámetros ajustables para la recuperación de memoria y el buzón de salida en tiempo real, validados por esquema al arrancar.
+- El `cli-prereq-overlay.json` empaquetado con el device runtime se valida ahora de verdad al cargarse — era una conversión de tipos sin comprobar, y un overlay malformado aplicaba en silencio un control incorrecto a las CLI —, además de un esquema para el manifiesto de la cadena de herramientas.
+
+### Cambiado
+
+- Las entradas s3 de `CONTENT_STORAGE_BACKENDS` se validan de forma estricta: las claves desconocidas o mal escritas, que antes se ignoraban en silencio, ahora hacen fallar el arranque con un error. Las configuraciones correctas no se ven afectadas.
+- El despacho del siguiente turno del daemon pasa por la ruta estructurada `detach()` para satisfacer la verificación de trazas (sin cambios de comportamiento).
+
+### Eliminado
+
+- Seis documentos heredados de diseño y de prompts salieron del árbol versionado; los documentos de trabajo viven ahora en el directorio `.docs/`, local e ignorado por git, y ya no se publican con el repositorio.
+
+## [0.29.0] - 2026-07-24
+
+Cierre de la ronda 3 del trazado distribuido: el campo de correlación `turn_epoch`, introducido como opcional en la v0.28.0, pasa a ser obligatorio en el protocolo del daemon de agentes remotos, y las épocas de turno de las entregas se persisten ahora para que los reintentos permanezcan en su turno original. Esta versión cambia el esquema de la base de datos (una columna nueva que admite nulos), así que requiere un `db:rebuild`, y ambos pares del protocolo deben estar ya en la v0.28.0.
+
+### Cambiado
+
+- **Cambio incompatible:** `turn_epoch` es ahora obligatorio en el protocolo del daemon en ambas direcciones — en `agent:status` (daemon→api; el valor puede seguir siendo nulo cuando el daemon está inactivo) y en cada entrada de entrega de `agent:deliver` (api→daemon). Desaparecen la tolerancia al campo opcional, la rama de la api que reconciliaba ante un valor sin definir y la época de respaldo que el daemon generaba por su cuenta, y los esquemas exportados de `@synapse/device-protocol` cambiaron de forma en consecuencia. Los pares anteriores a la v0.28.0 quedan excluidos en modo cerrado — sus tramas se descartan en silencio: un daemon antiguo sigue apareciendo como en línea pero su estado nunca se actualiza, y las entregas de una api antigua se quedan atascadas en reintentos. Una flota en v0.28.0 interopera sin problemas, así que conviene actualizar los pares a la v0.28.0 antes de desplegar esta versión.
+- Las cadenas de versión que el device runtime informa de sí mismo tienen ahora una única fuente en `version.ts` (los valores no cambian — se desacoplan deliberadamente de la versión del paquete npm, de modo que un incremento de versión de publicación nunca pueda cambiar en silencio una cadena visible en el protocolo).
+- Las constantes de la cola de chat sin conexión del cliente móvil provienen ahora del conjunto canónico `CHAT_QUEUE_*` de `@synapse/shared` (los valores de cadena no cambian; no hay migración de datos).
+- El propagador de salida ya no lee el atributo de span heredado `http.url` (el estable `url.full` está siempre presente; sin cambios de comportamiento).
+
+### Corregido
+
+- Los reintentos de entrega ya no generan una época de turno nueva en cada ciclo: las épocas se persisten por entrega (nueva columna `remote_agent_message_deliveries.turn_epoch`, que admite nulos) antes del primer despacho, de modo que un reintento vuelve a entrar en el mismo grupo de portadores del lado de la api y en el mismo turno del daemon.
+- El daemon agrupa ahora las entregas entrantes por época de turno, de modo que una entrega rezagada de un turno anterior ya no puede arrastrar una entrega nueva al vaciado del turno antiguo y notificarla como fallida antes de tiempo.
+- Traducciones del registro de cambios: se corrigieron tres errores que alteraban el significado (el texto en español había inventado una garantía de no pérdida de datos para «data-free»; el texto en chino había rebajado la eliminación de `expiresAt` a una obsolescencia y prometía de más en cuanto a la compatibilidad de la lista de permitidos de `operations`).
+
 ## [0.28.0] - 2026-07-24
 
-Corrección de exactitud de la ronda 3 del trazado distribuido (commits `c068aef3`, `9b5a30c8`, `92645a74`): correlación de trazas acotada al turno para las llamadas a herramientas de reverse-MCP a través de despertares de conversación intercalados (F-r3-2). Cambia el contrato del protocolo del daemon de agentes remotos y requiere un **redespliegue coordinado**: el orden estricto de compilación de imágenes y las comprobaciones posteriores a la recreación se recogen en el manual de operaciones de despliegue en [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7, con el orden de conmutación de R3 — con el daemon primero — en §7.4. No cambió ningún esquema de base de datos, así que esta versión no necesita `db:rebuild`.
+Corrección de exactitud de la ronda 3 del trazado distribuido (commits `f11556f3`, `77fe9c50`, `ebe64d44`): correlación de trazas acotada al turno para las llamadas a herramientas de reverse-MCP a través de despertares de conversación intercalados (F-r3-2). Cambia el contrato del protocolo del daemon de agentes remotos y requiere un **redespliegue coordinado**: el orden estricto de compilación de imágenes y las comprobaciones posteriores a la recreación se recogen en el manual de operaciones de despliegue en [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7, con el orden de conmutación de R3 — con el daemon primero — en §7.4. No cambió ningún esquema de base de datos, así que esta versión no necesita `db:rebuild`.
 
 Es también la primera versión en la que los manifiestos de los paquetes dejan atrás `0.1.0`: el conjunto coordinado — `@synapse/device-protocol`, `@synapse/shared`, `@synapse/device-runtime`, `@synapse/device-sdk`, `@synapse/api` y `@synapse/remote-agent-daemon` — sube en bloque a `0.28.0`, y los cuatro paquetes de runtime se publican en el registro de paquetes privado. Los bundles de runtime de plataforma se mantienen desacoplados, con su propia versión.
 
@@ -40,7 +77,7 @@ Es también la primera versión en la que los manifiestos de los paquetes dejan 
 
 ## [0.27.0] - 2026-07-23
 
-Correcciones de exactitud de la ronda 2 del trazado distribuido (commits `defdece3`, `f6c456b5`, `cd615060`, `79ddc845`), además de un endurecimiento del borde público. Para los operadores, lo esencial es un **redespliegue coordinado**: esta versión cambia contratos del protocolo, de cola y de telemetría, y el procedimiento exacto — un orden estricto de compilación de imágenes, `--force-recreate` y una lista de verificación posterior a la recreación — es el manual de operaciones de despliegue en [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No cambió ningún esquema de base de datos, así que esta versión no necesita `db:rebuild`.
+Correcciones de exactitud de la ronda 2 del trazado distribuido (commits `dc132f60`, `fb965370`, `0d5532e1`, `83145b3e`), además de un endurecimiento del borde público. Para los operadores, lo esencial es un **redespliegue coordinado**: esta versión cambia contratos del protocolo, de cola y de telemetría, y el procedimiento exacto — un orden estricto de compilación de imágenes, `--force-recreate` y una lista de verificación posterior a la recreación — es el manual de operaciones de despliegue en [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No cambió ningún esquema de base de datos, así que esta versión no necesita `db:rebuild`.
 
 ### Cambiado
 
@@ -589,7 +626,9 @@ La primera versión. Synapse es un runtime autoalojado y centrado en la conversa
 - **Memoria** — los compañeros de equipo recuerdan: memoria semántica híbrida dentro del proceso, particionada en cinco ámbitos (workspace_shared, conversation_shared, actor_private, participant_private, user_private) y siete categorías de item, que combina recuperación léxica (FTS + trigram) y vectorial mediante un modelo `multilingual-e5-small` de transformers.js empaquetado (VECTOR(384), HNSW cosine) que genera los embeddings localmente sin ningún sidecar externo, más ejecuciones de recuperación registradas.
 - **Despliegue autoalojado** — funciona en un único host Ubuntu: nginx como punto de entrada público, systemd para la API y la web de escritorio (`packages/web-next`), PostgreSQL dockerizado (pgvector/pg16) y Redis 7, una imagen de la API ejecutada con tsx, y un perfil de Compose `production` para la pila completa en contenedores. Incluye una app móvil de Expo, así como el README y el CHANGELOG en inglés, 简体中文 y Español.
 
-[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.29.1...HEAD
+[0.29.1]: https://github.com/zai-org/Synapse/compare/v0.29.0...v0.29.1
+[0.29.0]: https://github.com/zai-org/Synapse/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/zai-org/Synapse/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/zai-org/Synapse/compare/v0.26.2...v0.27.0
 [0.26.2]: https://github.com/zai-org/Synapse/compare/v0.26.1...v0.26.2

@@ -22,9 +22,46 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-07-25
+
+Configuration grows a file-based, schema-checked surface, and working documents leave the published repository. No wire contract changed and no database schema changed, so this release needs no `db:rebuild`.
+
+### Added
+
+- A Zod→JSON-Schema generation pipeline: `npm run schema:gen` emits `/schemas/*.schema.json` (draft-07) from the Zod definitions; a `guard:schemas` gate in `verify:boundary` fails CI whenever a committed schema drifts from its source; and first-time `.vscode` settings wire the schemas into YAML/JSON editing, with vendored third-party schemas under `schemas/vendor/`.
+- `CONTENT_STORAGE_BACKENDS_FILE`: the content-storage backend registry can now be loaded from a JSON file. Mutually exclusive with the inline `CONTENT_STORAGE_BACKENDS` env — setting both is a startup error.
+- `runtime-tuning.json` (path via `RUNTIME_TUNING_CONFIG_PATH`): thirteen tuning knobs for memory recall and the realtime outbox, schema-checked at boot.
+- The device runtime's bundled `cli-prereq-overlay.json` is now genuinely validated at load — it was an unchecked cast, and a malformed overlay used to mis-gate CLIs silently — plus a schema for the toolchain manifest.
+
+### Changed
+
+- `CONTENT_STORAGE_BACKENDS` s3 entries are validated strictly: unknown or misspelled keys, previously ignored silently, now fail startup with an error. Correct configurations are unaffected.
+- The daemon's next-turn dispatch goes through the structured `detach()` path to satisfy the trace guard (no behavior change).
+
+### Removed
+
+- Six legacy design/prompt documents left the tracked tree; working documents now live in the local-only, gitignored `.docs/` directory and are no longer published with the repository.
+
+## [0.29.0] - 2026-07-24
+
+Trace round-3 closes out: the `turn_epoch` correlation field introduced as optional in v0.28.0 becomes mandatory on the remote-agent daemon wire, and delivery turn-epochs are now persisted so retries stay in their original turn. This release changes the database schema (one new nullable column), so it requires a `db:rebuild`, and both wire peers must already be on v0.28.0.
+
+### Changed
+
+- **Breaking:** `turn_epoch` is now required on the daemon wire in both directions — on `agent:status` (daemon→api; the value may still be null when idle) and on every `agent:deliver` delivery entry (api→daemon). The optional-field tolerance, the api's reconcile-on-undefined branch, and the daemon's self-minted fallback epoch are all gone, and the exported `@synapse/device-protocol` schemas changed shape accordingly. Peers older than v0.28.0 are cut off fail-closed — their frames are silently dropped: an old daemon still looks online but its status never updates, and an old api's deliveries stay stuck in retry. A v0.28.0 fleet interoperates cleanly, so upgrade peers to v0.28.0 before rolling this out.
+- The device runtime's self-reported version strings are single-sourced in `version.ts` (values unchanged — deliberately decoupled from the npm package version, so a release bump can never silently change a wire-visible string).
+- Mobile's offline chat-queue constants now come from the canonical `@synapse/shared` `CHAT_QUEUE_*` set (string values unchanged; no data migration).
+- The egress propagator no longer reads the legacy `http.url` span attribute (the stable `url.full` is always present; no behavior change).
+
+### Fixed
+
+- Delivery retries no longer mint a fresh turn-epoch on every cycle: epochs are persisted per delivery (new nullable `remote_agent_message_deliveries.turn_epoch` column) before first dispatch, so a retry re-enters the same api-side carrier bucket and the same daemon turn.
+- The daemon groups incoming deliveries by turn-epoch, so a straggler from an earlier turn can no longer drag a fresh delivery into the old turn's drain and fail-report it prematurely.
+- Changelog translations: three meaning-changing errors corrected (the Spanish text had invented a no-data-loss guarantee for "data-free"; the Chinese text had weakened the removed `expiresAt` to a deprecation and over-promised compatibility for the `operations` allowlist).
+
 ## [0.28.0] - 2026-07-24
 
-Distributed-tracing round-3 correctness fix (commits `c068aef3`, `9b5a30c8`, `92645a74`): turn-scoped trace correlation for reverse-MCP tool calls across interleaved conversation wakes (F-r3-2). It changes the remote-agent daemon wire contract and requires a **coordinated redeploy** — the strict image build order and post-recreate checks are covered by the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7, with the R3 daemon-first cutover order in §7.4. No database schema changed, so this release needs no `db:rebuild`.
+Distributed-tracing round-3 correctness fix (commits `f11556f3`, `77fe9c50`, `ebe64d44`): turn-scoped trace correlation for reverse-MCP tool calls across interleaved conversation wakes (F-r3-2). It changes the remote-agent daemon wire contract and requires a **coordinated redeploy** — the strict image build order and post-recreate checks are covered by the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7, with the R3 daemon-first cutover order in §7.4. No database schema changed, so this release needs no `db:rebuild`.
 
 This is also the first release in which the package manifests leave `0.1.0`: the coordinated set — `@synapse/device-protocol`, `@synapse/shared`, `@synapse/device-runtime`, `@synapse/device-sdk`, `@synapse/api`, and `@synapse/remote-agent-daemon` — is bumped in lockstep to `0.28.0`, and the four runtime packages are published to the private package registry. The platform runtime bundles stay decoupled at their own version.
 
@@ -39,7 +76,7 @@ This is also the first release in which the package manifests leave `0.1.0`: the
 
 ## [0.27.0] - 2026-07-23
 
-Distributed-tracing round-2 correctness fixes (commits `defdece3`, `f6c456b5`, `cd615060`, `79ddc845`) plus public-edge hardening. For operators, the headline is a **coordinated redeploy**: this release changes wire, queue, and telemetry contracts, and the exact procedure — a strict image build order, `--force-recreate`, and a post-recreate verification checklist — is the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No database schema changed, so this release needs no `db:rebuild`.
+Distributed-tracing round-2 correctness fixes (commits `dc132f60`, `fb965370`, `0d5532e1`, `83145b3e`) plus public-edge hardening. For operators, the headline is a **coordinated redeploy**: this release changes wire, queue, and telemetry contracts, and the exact procedure — a strict image build order, `--force-recreate`, and a post-recreate verification checklist — is the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No database schema changed, so this release needs no `db:rebuild`.
 
 ### Changed
 
@@ -588,7 +625,9 @@ The first release. Synapse is a self-hosted, conversation-centric runtime for di
 - **Memory** — teammates remember: in-process hybrid semantic memory partitioned into five scopes (workspace_shared, conversation_shared, actor_private, participant_private, user_private) across seven item categories, combining lexical (FTS + trigram) and vector recall via a bundled transformers.js `multilingual-e5-small` model (VECTOR(384), HNSW cosine) that embeds locally with no external sidecar, plus recorded recall runs.
 - **Self-hosted deployment** — runs on a single Ubuntu host: an nginx public entrypoint, systemd for the API and desktop web (`packages/web-next`), Dockerized PostgreSQL (pgvector/pg16) and Redis 7, a tsx-run API image, and a `production` Compose profile for the full containerized stack. Ships an Expo mobile app and README/CHANGELOG locales in English, 简体中文, and Español.
 
-[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.29.1...HEAD
+[0.29.1]: https://github.com/zai-org/Synapse/compare/v0.29.0...v0.29.1
+[0.29.0]: https://github.com/zai-org/Synapse/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/zai-org/Synapse/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/zai-org/Synapse/compare/v0.26.2...v0.27.0
 [0.26.2]: https://github.com/zai-org/Synapse/compare/v0.26.1...v0.26.2

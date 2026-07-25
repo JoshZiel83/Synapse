@@ -19,9 +19,46 @@
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-07-25
+
+配置新增了一层基于文件、经 schema 校验的入口，工作文档则撤出对外发布的仓库。wire 契约与数据库 schema 均无变更，故本次发布无需 `db:rebuild`。
+
+### 新增
+
+- 一条 Zod→JSON-Schema 生成流水线：`npm run schema:gen` 从 Zod 定义生成 `/schemas/*.schema.json`（draft-07）；`verify:boundary` 中新增 `guard:schemas` 门控，已提交的 schema 一旦偏离其来源即令 CI 失败；首次加入的 `.vscode` 设置把这些 schema 接入 YAML/JSON 编辑，随仓库收录的第三方 schema 收在 `schemas/vendor/` 下。
+- `CONTENT_STORAGE_BACKENDS_FILE`：内容存储后端注册表现在可以从 JSON 文件加载。与内联的 `CONTENT_STORAGE_BACKENDS` 环境变量互斥——两者同时设置会在启动时报错。
+- `runtime-tuning.json`（路径由 `RUNTIME_TUNING_CONFIG_PATH` 指定）：面向记忆召回与实时发件箱的十三个可调参数，启动时经 schema 校验。
+- 设备运行时自带的 `cli-prereq-overlay.json` 现在在加载时得到真正的校验——此前只是一次未经检查的类型断言，畸形的 overlay 会静默地让 CLI 门控出错——另为工具链 manifest 补上了 schema。
+
+### 变更
+
+- `CONTENT_STORAGE_BACKENDS` 的 s3 条目改为严格校验：未知或拼写错误的键此前被静默忽略，现在会在启动时报错。配置正确者不受影响。
+- daemon 的下一 turn 派发改走结构化的 `detach()` 路径，以满足 trace guard（行为无变化）。
+
+### 移除
+
+- 六份遗留的设计/提示词文档移出了受跟踪的目录树；工作文档现在放在仅限本地、已被 gitignore 的 `.docs/` 目录下，不再随仓库发布。
+
+## [0.29.0] - 2026-07-24
+
+分布式追踪 round-3 至此收官：v0.28.0 引入时还是可选的 `turn_epoch` 关联字段，现在在 remote-agent daemon 的 wire 上成为必填；投递的 turn-epoch 也开始持久化，重试因此留在其原本的 turn 内。本次发布改变了数据库 schema（新增一列可空字段），故需要 `db:rebuild`，且 wire 两端都必须已运行 v0.28.0。
+
+### 变更
+
+- **破坏性变更：** daemon wire 两个方向上的 `turn_epoch` 现在均为必填——`agent:status`（daemon→api；空闲时取值仍可为 null）与每一条 `agent:deliver` 投递条目（api→daemon）上皆是如此。可选字段的容错、api 侧字段缺失时走对账的分支、以及 daemon 自行签发的兜底 epoch 均已删除，`@synapse/device-protocol` 导出的 schema 形状随之改变。早于 v0.28.0 的对端会以 fail-closed 方式被切断——它们的帧被静默丢弃：旧 daemon 看起来仍然在线但状态永不更新，旧 api 的投递则一直卡在重试。全员 v0.28.0 的部署可以正常互通，因此上线本版本之前，请先把各对端升级到 v0.28.0。
+- 设备运行时自报的版本字符串统一收敛到 `version.ts` 这一单一来源（取值不变——刻意与 npm 包版本解耦，因此发版升号绝不可能悄悄改变 wire 上可见的字符串）。
+- 移动端离线聊天队列的常量改为取自 `@synapse/shared` 中权威的 `CHAT_QUEUE_*` 集合（字符串取值不变；无需数据迁移）。
+- 出站传播器不再读取旧的 `http.url` span 属性（稳定的 `url.full` 始终存在；行为无变化）。
+
+### 修复
+
+- 投递重试不再每轮都签发一个新的 turn-epoch：epoch 在首次派发前按投递逐条持久化（新增可空列 `remote_agent_message_deliveries.turn_epoch`），重试因此会回到 api 侧同一个 carrier 分桶、daemon 侧同一个 turn。
+- daemon 现在按 turn-epoch 对到达的投递分组，来自更早 turn 的迟到者不再能把新投递拖进旧 turn 的排空流程、过早地将其上报为失败。
+- 更新日志翻译：修正三处改变原意的错误（西语文本把 "data-free" 误译出了一条不丢数据的保证；中文文本把已移除的 `expiresAt` 弱化成了弃用，并对 `operations` 允许列表的兼容性作了过度承诺）。
+
 ## [0.28.0] - 2026-07-24
 
-分布式追踪 round-3 正确性修复（提交 `c068aef3`、`9b5a30c8`、`92645a74`）：为跨交错会话唤醒的 reverse-MCP 工具调用提供以 turn 为作用域的 trace 关联（F-r3-2）。它改变了 remote-agent daemon 的 wire 契约，需要一次**协同重新部署**——镜像的硬构建顺序与重建容器后的核对清单见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的上线运行手册，R3 的 daemon 先行上线顺序见 §7.4。本次无数据库 schema 变更，故无需 `db:rebuild`。
+分布式追踪 round-3 正确性修复（提交 `f11556f3`、`77fe9c50`、`ebe64d44`）：为跨交错会话唤醒的 reverse-MCP 工具调用提供以 turn 为作用域的 trace 关联（F-r3-2）。它改变了 remote-agent daemon 的 wire 契约，需要一次**协同重新部署**——镜像的硬构建顺序与重建容器后的核对清单见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的上线运行手册，R3 的 daemon 先行上线顺序见 §7.4。本次无数据库 schema 变更，故无需 `db:rebuild`。
 
 这也是各包 manifest 首次离开 `0.1.0` 的版本：`@synapse/device-protocol`、`@synapse/shared`、`@synapse/device-runtime`、`@synapse/device-sdk`、`@synapse/api` 与 `@synapse/remote-agent-daemon` 这组协同变更的包同步升到 `0.28.0`，其中四个运行时包发布到私有包注册表。平台运行时 bundle 与它们解耦，各自保持原有版本。
 
@@ -36,7 +73,7 @@
 
 ## [0.27.0] - 2026-07-23
 
-分布式追踪 round-2 正确性修复（提交 `defdece3`、`f6c456b5`、`cd615060`、`79d8ddc845`），外加公网边缘加固。对运维者而言，重点是一次**协同重新部署**：本次发布改变了 wire、队列与遥测契约，精确步骤——镜像的硬构建顺序、`--force-recreate`、以及重建容器后的核对清单——见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的上线运行手册。本次无数据库 schema 变更，故无需 `db:rebuild`。
+分布式追踪 round-2 正确性修复（提交 `dc132f60`、`fb965370`、`0d5532e1`、`83145b3e`），外加公网边缘加固。对运维者而言，重点是一次**协同重新部署**：本次发布改变了 wire、队列与遥测契约，精确步骤——镜像的硬构建顺序、`--force-recreate`、以及重建容器后的核对清单——见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的上线运行手册。本次无数据库 schema 变更，故无需 `db:rebuild`。
 
 ### 变更
 
@@ -586,7 +623,9 @@
 - **Memory** — 同事拥有记忆：进程内的混合语义记忆，划分为五个 scope（workspace_shared、conversation_shared、actor_private、participant_private、user_private），横跨七个 item 分类，结合词法（FTS + trigram）与向量召回——经由一个内置的 transformers.js `multilingual-e5-small` 模型（VECTOR(384)、HNSW cosine）在本地做 embedding、无需外部 sidecar，并留存每次召回的运行记录。
 - **自托管部署** — 可运行在单台 Ubuntu 宿主机上：nginx 公网入口、面向 API 与桌面 web（`packages/web-next`）的 systemd、容器化的 PostgreSQL（pgvector/pg16）与 Redis 7、一个以 tsx 运行的 API 镜像，以及一个用于整套容器化栈的 `production` Compose profile；并随附一个 Expo 移动端 app，以及 English、简体中文、Español 三种语言的 README/CHANGELOG。
 
-[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/zai-org/Synapse/compare/v0.29.1...HEAD
+[0.29.1]: https://github.com/zai-org/Synapse/compare/v0.29.0...v0.29.1
+[0.29.0]: https://github.com/zai-org/Synapse/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/zai-org/Synapse/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/zai-org/Synapse/compare/v0.26.2...v0.27.0
 [0.26.2]: https://github.com/zai-org/Synapse/compare/v0.26.1...v0.26.2
