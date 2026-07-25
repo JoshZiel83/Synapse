@@ -361,6 +361,18 @@ export class ConversationRuntime {
    * never runs) — without it the turn would wedge turnInFlight with no terminal
    * ever arriving. failGateOnDeath is idempotent, so racing drainEvents' finally
    * strands the epoch exactly once.
+   *
+   * The send is routed through `detach` to satisfy the F4 guard
+   * (daemon_bare_detach), which is SYNTACTIC — it flags every bare
+   * fire-and-forget async in the daemon, whether or not the call site is provably
+   * context-free. Here advanceGate is already reached from WITHIN the detached
+   * drainEvents loop, after the scoped onTurnCompleted callback returned and its
+   * per-turn carrier scope reverted, so the ambient is already NO_CARRIER;
+   * `detach` just makes that context-freeness explicit by construction (and keeps
+   * the ratchet green). The next turn's own events still re-enter their carrier
+   * via the turns registry (scoped callbacks / frontEpoch), keyed by `next.epoch`
+   * (registered at wake time by noteDeliveries / noteDriver). The `.catch` stays
+   * inside the detached fn, so reject→failGateOnDeath is preserved.
    */
   private advanceGate() {
     const next = this.pendingTurns.shift()
@@ -378,7 +390,7 @@ export class ConversationRuntime {
       this.failGateOnDeath()
       return
     }
-    void session.send(next.prompt).catch(() => this.failGateOnDeath())
+    detach(() => session.send(next.prompt).catch(() => this.failGateOnDeath()))
   }
 
   private pushPendingTurn(epoch: string, prompt: string) {
