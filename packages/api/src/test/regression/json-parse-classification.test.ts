@@ -179,6 +179,8 @@ const classifiedJsonParseFiles = {
   configImportBootstrapAdapter: {
     "packages/api/src/infrastructure/storage/remote/config.ts":
       "Remote content-storage backend + credential config from env is bootstrap/config input.",
+    "packages/api/src/infrastructure/runtime-tuning-bootstrap.ts":
+      "runtime-tuning.json knob overrides (strict-validated, fail-closed) are local bootstrap/config input.",
     "packages/api/src/modules/reports/index.ts":
       "Browser NEL/CSP report bodies use a custom Fastify content-type parser (HTTP adapter boundary).",
     "packages/api/src/infrastructure/database/seed-metadata-codec.ts":
