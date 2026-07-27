@@ -1,0 +1,475 @@
+<svg xmlns="http://www.w3.org/2000/svg" lang="es" xml:lang="es" viewBox="0 0 1480 900" role="img" aria-labelledby="sy-title sy-desc">
+<title id="sy-title">Vista general de la arquitectura de Synapse</title>
+<desc id="sy-desc">Una conversación en el Workspace actual donde colaboran una persona, un Actor nativo, un participante externo de mensajería y un Remote Agent. Los eventos y los mensajes de las plataformas de mensajería entran en la conversación y despiertan al Actor correspondiente; las llamadas a herramientas pasan por una puerta de autorización para llegar a los recursos del Workspace sujetos a concesiones (plugins, skills, dispositivos, sandboxes); la memoria, el archivado de contexto y los proveedores conectables, locales o en la nube, forman la base.</desc>
+<style>
+/* ---------- theme tokens (light default, dark via media query) ---------- */
+:root{
+  --ink:#0a0a0a; --muted:#737373; --faint:#767676;
+  --bg:#ffffff; --panel:#fafafa; --card:#ffffff; --chipbg:#f5f5f5;
+  --border:#e5e5e5; --border2:#d4d4d4;
+  --brand:#268dfd;
+  --accent:#0084d1; --accent-deep:#0069a8; --accent-soft:#e0f2fe; --accent-text:#075985;
+  --sky:#00a6f4;
+  --emerald:#059669; --emerald-soft:#d1fae5; --emerald-text:#065f46;
+  --amber:#d97706;  --amber-soft:#fef3c7;  --amber-text:#92400e;
+  --violet:#7c3aed; --violet-soft:#ede9fe; --violet-text:#5b21b6;
+  --link:#cbd5e1;
+}
+feDropShadow{flood-opacity:.07}
+@media (prefers-color-scheme: dark){
+  feDropShadow{flood-opacity:0}
+  :root{
+    --ink:#fafafa; --muted:#a3a3a3; --faint:#8b8b8b;
+    --bg:#0d1117; --panel:rgba(255,255,255,.035); --card:rgba(255,255,255,.055); --chipbg:rgba(255,255,255,.075);
+    --border:rgba(255,255,255,.11); --border2:rgba(255,255,255,.19);
+    --brand:#3b9dff;
+    --accent:#00a6f4; --accent-deep:#38bdf8; --accent-soft:rgba(0,166,244,.16); --accent-text:#7dd3fc;
+    --sky:#38bdf8;
+    --emerald:#34d399; --emerald-soft:rgba(52,211,153,.14); --emerald-text:#6ee7b7;
+    --amber:#fbbf24;  --amber-soft:rgba(251,191,36,.13);  --amber-text:#fcd34d;
+    --violet:#a78bfa; --violet-soft:rgba(167,139,250,.16); --violet-text:#c4b5fd;
+    --link:rgba(255,255,255,.22);
+  }
+}
+/* ---------- base ---------- */
+text{font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;fill:var(--ink)}
+.mut{fill:var(--muted)} .fnt{fill:var(--faint)}
+.b{font-weight:600} .bb{font-weight:700}
+.f9{font-size:10.5px}.f95{font-size:10px}.f85{font-size:9px}.f10{font-size:11px}.f105{font-size:11.5px}.f11{font-size:12px}.f115{font-size:12.5px}.f125{font-size:13.5px}.f135{font-size:14.5px}.f14{font-size:15.5px}.f15{font-size:16.5px}.f27{font-size:28px}
+.bgc{fill:var(--bg)}
+.panel{fill:var(--panel);stroke:var(--border)}
+.card{fill:var(--card);stroke:var(--border)}
+.chip{fill:var(--card);stroke:var(--border)}
+.chipOn{fill:var(--chipbg);stroke:var(--border)}
+.acct{fill:var(--accent-text)} .emt{fill:var(--emerald-text)} .amt{fill:var(--amber-text)} .vit{fill:var(--violet-text)}
+.ico-acc{color:var(--accent)} .ico-em{color:var(--emerald)} .ico-vi{color:var(--violet)} .ico-am{color:var(--amber)} .ico-mut{color:var(--muted)}
+.pill-sky{fill:var(--accent-soft)} .pill-em{fill:var(--emerald-soft)} .pill-am{fill:var(--amber-soft)} .pill-vi{fill:var(--violet-soft)}
+.link{fill:none;stroke:var(--link);stroke-width:1.5;stroke-dasharray:5 5}
+.link-em{stroke:var(--emerald);stroke-opacity:.45}
+.link-vi{stroke:var(--violet);stroke-opacity:.45}
+.link-acc{stroke:var(--accent);stroke-opacity:.5}
+.dot{fill:var(--accent);opacity:0}
+.dot-em{fill:var(--emerald)} .dot-vi{fill:var(--violet)} .dot-am{fill:var(--amber)}
+/* ---------- ambient motion ---------- */
+@keyframes sy-dash{to{stroke-dashoffset:-40}}
+.flow{animation:sy-dash 4s linear infinite}
+.flow-slow{animation:sy-dash 7s linear infinite}
+@keyframes sy-breathe{0%,100%{transform:scale(1);opacity:.92}50%{transform:scale(1.05);opacity:1}}
+.breathe{animation:sy-breathe 4s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+@keyframes sy-blink{0%,100%{opacity:1}50%{opacity:.3}}
+.blink{animation:sy-blink 2.4s ease-in-out infinite}
+/* ---------- 24s master timeline ----------
+   0.0-1.45s  scheduled-event pulse travels into the conversation
+   1.45-2.05s bell flashes amber and rings on impact
+   1.5-2.05s  automation notice lands in the thread
+   2.2-3.0s   IM pulse from Telegram; external message lands at 3.0-3.6s
+   4.1-4.8s   actor picks the task up; typing 5.0-9.6s
+   6.0-7.2s   tool call crosses the authorization gate (check pulses on crossing)
+   7.2-9.6s   plugin works (chip glow); result returns 8.6-9.6s
+   9.6-10.3s  drafted report lands in the thread
+  11.5-12.5s  remote-agent pulse over its bridge; message lands 12.5-13.2s
+  14.9-16.8s  turn is archived into memory (pulse, then compaction sweep)
+  22.1-23.2s  soft cross-fade, loop restarts                          */
+@keyframes sy-note{0%,6.2%{opacity:0;transform:translateY(6px)}8.5%{opacity:1;transform:translateY(0)}92%{opacity:1;transform:translateY(0)}96.5%,100%{opacity:0;transform:translateY(6px)}}
+.note{animation:sy-note 24s linear infinite}
+@keyframes sy-msg2{0%,12.5%{opacity:0;transform:translateY(7px)}15%{opacity:1;transform:translateY(0)}92%{opacity:1;transform:translateY(0)}96.5%,100%{opacity:0;transform:translateY(7px)}}
+.msg2{animation:sy-msg2 24s linear infinite}
+@keyframes sy-msg3{0%,17%{opacity:0;transform:translateY(7px)}20%{opacity:1;transform:translateY(0)}92%{opacity:1;transform:translateY(0)}96.5%,100%{opacity:0;transform:translateY(7px)}}
+.msg3{animation:sy-msg3 24s linear infinite}
+@keyframes sy-attach{0%,40%{opacity:0;transform:translateY(6px)}43%{opacity:1;transform:translateY(0)}92%{opacity:1;transform:translateY(0)}96.5%,100%{opacity:0;transform:translateY(6px)}}
+.attach{animation:sy-attach 24s linear infinite}
+@keyframes sy-msg4{0%,52%{opacity:0;transform:translateY(7px)}55%{opacity:1;transform:translateY(0)}92%{opacity:1;transform:translateY(0)}96.5%,100%{opacity:0;transform:translateY(7px)}}
+.msg4{animation:sy-msg4 24s linear infinite}
+@keyframes sy-typing{0%,21%{opacity:0}22.5%{opacity:1}38%{opacity:1}40%,100%{opacity:0}}
+.typing{opacity:0;animation:sy-typing 24s linear infinite}
+@keyframes sy-tdot{0%,100%{transform:translateY(0);opacity:.45}30%{transform:translateY(-2.6px);opacity:1}}
+.tdot{animation:sy-tdot 1.05s ease-in-out infinite}
+.tdot2{animation-delay:.16s}.tdot3{animation-delay:.32s}
+@keyframes sy-ring{0%,6%{opacity:0;transform:scale(.5)}8.5%{opacity:.75;transform:scale(1)}13%{opacity:0;transform:scale(1.7)}100%{opacity:0;transform:scale(.5)}}
+.ring{opacity:0;animation:sy-ring 24s linear infinite;transform-box:fill-box;transform-origin:center}
+@keyframes sy-bellwig{0%,6%,12%,100%{transform:rotate(0deg)}7.5%{transform:rotate(11deg)}9%{transform:rotate(-9deg)}10.5%{transform:rotate(6deg)}}
+@keyframes sy-bellcol{0%,5.5%{color:var(--muted)}6.5%{color:var(--amber)}14%{color:var(--amber)}19%,100%{color:var(--muted)}}
+.bellanim{color:var(--muted);animation:sy-bellwig 24s linear infinite,sy-bellcol 24s linear infinite;transform-box:fill-box;transform-origin:center}
+@keyframes sy-check{0%,26%{opacity:.4;transform:scale(1)}28.5%{opacity:1;transform:scale(1.18)}32%{opacity:1;transform:scale(1)}48%{opacity:.4;transform:scale(1)}100%{opacity:.4;transform:scale(1)}}
+.gatecheck{animation:sy-check 24s linear infinite;transform-box:fill-box;transform-origin:center}
+@keyframes sy-glowA{0%,30%{opacity:0}32%{opacity:1}40%{opacity:1}44%,100%{opacity:0}}
+.glow-plugin{opacity:0;animation:sy-glowA 24s linear infinite}
+@keyframes sy-glowB{0%,9%{opacity:0}11%{opacity:1}15%{opacity:1}18.5%,100%{opacity:0}}
+.glow-im{opacity:0;animation:sy-glowB 24s linear infinite}
+@keyframes sy-glowC{0%,47%{opacity:0}49.5%{opacity:1}56%{opacity:1}60%,100%{opacity:0}}
+.glow-remote{opacity:0;animation:sy-glowC 24s linear infinite}
+@keyframes sy-memglow{0%,65%{opacity:0}67%{opacity:.9}70%,100%{opacity:0}}
+.memglow{opacity:0;animation:sy-memglow 24s linear infinite}
+.memglow2{animation-delay:.55s}.memglow3{animation-delay:1.1s}.memglow4{animation-delay:1.65s}
+@keyframes sy-tail{0%{transform:scaleX(.55);opacity:1}90%{transform:scaleX(1);opacity:1}93%{transform:scaleX(1);opacity:1}96.5%{transform:scaleX(1);opacity:0}98%{transform:scaleX(.55);opacity:0}100%{transform:scaleX(.55);opacity:1}}
+.tailgrow{animation:sy-tail 24s linear infinite;transform-box:fill-box;transform-origin:left center}
+@keyframes sy-slot{0%{opacity:0}2%{opacity:.9}16%{opacity:.9}21%,100%{opacity:0}}
+.slotglow{opacity:0;animation:sy-slot 24s linear infinite}
+.slot2{animation-delay:4.8s}.slot3{animation-delay:9.6s}.slot4{animation-delay:14.4s}.slot5{animation-delay:19.2s}
+/* ---------- reduced motion: freeze to the complete static poster ---------- */
+@media (prefers-reduced-motion: reduce){
+  *{animation:none !important}
+  .motion{display:none !important}
+}
+</style>
+<defs>
+  <!-- Lucide glyphs (from lucide-react in node_modules; 24-box, centered at origin;
+       stroke-width is set per <use> so small sizes stay legible) -->
+  <g id="lu-user" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></g>
+  <g id="lu-bot" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></g>
+  <g id="lu-msg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/></g>
+  <g id="lu-bell" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></g>
+  <g id="lu-zap" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></g>
+  <g id="lu-file" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></g>
+  <g id="lu-shield" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></g>
+  <g id="lu-check" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M20 6 9 17l-5-5"/></g>
+  <g id="lu-clock" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></g>
+  <g id="lu-webhook" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06"/><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8"/></g>
+  <g id="lu-monsp" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8"/><path d="M10 19v-3.96 3.15"/><path d="M7 19h5"/><rect width="6" height="10" x="16" y="12" rx="2"/></g>
+  <g id="lu-workflow" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/></g>
+  <!-- Brand marks from the repo's own icon components (im-brand-icons.tsx /
+       plugin-brand-icons.tsx / brand-icons.tsx / runtime-kind-icon.tsx), all
+       normalized to a centered 24-box. Mono marks use currentColor. -->
+  <g id="br-feishu" fill="currentColor" transform="scale(0.0234375) translate(-512,-512)"><path d="M428.141714 367.908571q67.510857 72.411429 106.496 143.872-77.494857 70.326857-171.958857 70.326858c-0.987429 0-1.974857 0-2.925714 0.109714-101.558857-77.165714-191.085714-173.641143-239.250286-243.712a42.678857 42.678857 0 0 0-71.753143 46.153143v387.913143l13.348572 10.971428q60.635429 49.956571 139.958857 83.785143 102.217143 43.593143 203.154286 43.885714 186.075429 0.585143 322.486857-115.346285 15.469714-13.165714 29.513143-27.721143c3.657143-1.828571 7.241143-3.803429 10.825142-5.851429 11.849143-6.912 19.163429-18.578286 20.918858-31.195428q20.992-27.684571 37.668571-59.355429 22.016-41.691429 48.493714-120.393143 20.772571-61.696 33.901715-85.577143 18.907429-34.267429 47.177142-49.664l64-34.925714-66.267428-30.427429-3.84-1.755428q-80.676571-37.302857-147.821714-27.721143-27.904 3.949714-55.917715 14.994286-48.201143-137.508571-133.156571-214.089143l-10.459429-9.435429H159.963429l61.330285 62.244572q20.297143 20.589714 73.947429 67.620571 88.429714 77.531429 132.900571 125.257143z m303.725715 317.44c-2.267429 0.804571-4.461714 1.828571-6.582858 3.072-38.253714 22.125714-85.430857 25.782857-140.873142 12.288-42.678857-10.386286-88.283429-30.537143-134.4-57.563428q96.768-27.904 175.177142-120.100572 99.364571-116.845714 187.392-129.353142 25.088-3.584 54.857143 3.291428-12.324571 15.104-22.454857 33.536-16.310857 29.586286-39.168 97.499429-24.649143 73.142857-43.885714 109.604571-13.385143 25.417143-30.061714 47.689143z m-126.756572 105.910858q-89.453714 47.177143-199.68 46.811428-86.089143-0.256-174.665143-38.034286-61.001143-25.965714-108.873143-62.390857v-260.388571c63.963429 72.009143 148.443429 149.942857 238.336 210.176 65.024 43.593143 135.058286 79.396571 204.032 96.182857 13.531429 3.291429 27.209143 5.888 40.850286 7.68z m75.995429-419.657143q-46.957714 32.219429-94.208 84.224-41.179429-69.12-105.216-137.801143-47.030857-50.468571-138.24-130.413714l-1.938286-1.718858H574.171429q67.291429 66.377143 106.934857 185.709715z"/></g>
+  <g id="br-weixin" fill="currentColor" transform="translate(-12,-12)"><path d="M10 3c4.071 0 7.7 2.67 7.982 6.368c2.304.862 4.018 2.81 4.018 5.26c0 1.867-1.026 3.472-2.52 4.493a2.3 2.3 0 0 0-.022.439l.014.44a1 1 0 0 1-1 1c-.758 0-1.46-.247-2.054-.71a8 8 0 0 1-1.105.078c-2.767 0-5.322-1.491-6.284-3.751a9 9 0 0 1-.454-.058c-.716.567-1.54.885-2.464.885a1 1 0 0 1-1-1l.005-.203l.018-.41a2.1 2.1 0 0 0-.058-.608C3.248 14.004 2 12.073 2 9.833C2 5.896 5.76 3 10 3m5.313 7.889c-2.768 0-4.688 1.837-4.688 3.74c0 1.902 1.92 3.74 4.688 3.74a6 6 0 0 0 1.078-.101c.434-.082.819.1 1.15.36c.099-.433.324-.842.706-1.088C19.363 16.82 20 15.753 20 14.629c0-1.903-1.92-3.74-4.687-3.74M10 5C6.508 5 4 7.327 4 9.833c0 1.477.837 2.858 2.264 3.777c.531.343.76.957.83 1.559l.482-.342c.308-.208.63-.366 1.05-.288c.056-3.286 3.203-5.65 6.687-5.65q.288 0 .573.021C15.362 6.784 13.059 5 10 5m3.62 8a1 1 0 1 1 0 2a1 1 0 0 1 0-2M17 13a1 1 0 1 1 0 2a1 1 0 0 1 0-2M8 7a1 1 0 1 1 0 2a1 1 0 0 1 0-2m4 0a1 1 0 1 1 0 2a1 1 0 0 1 0-2"/></g>
+  <g id="br-wecom" fill="currentColor" transform="translate(-12,-12)"><path d="m17.326 8.158l-.003-.007a6.6 6.6 0 0 0-1.178-1.674c-1.266-1.307-3.067-2.19-5.102-2.417a9.3 9.3 0 0 0-2.124 0h-.001c-2.061.228-3.882 1.107-5.14 2.405a6.7 6.7 0 0 0-1.194 1.682A5.7 5.7 0 0 0 2 10.657c0 1.106.332 2.218.988 3.201l.006.01c.391.594 1.092 1.39 1.637 1.83l.983.793l-.208.875l.527-.267l.708-.358l.761.225c.467.137.955.227 1.517.29h.005q.515.06 1.026.059c.355 0 .724-.02 1.095-.06a9 9 0 0 0 1.346-.258c.095.7.43 1.337.932 1.81c-.658.208-1.352.358-2.061.436c-.442.048-.883.072-1.312.072q-.627 0-1.253-.072a10.7 10.7 0 0 1-1.861-.36l-2.84 1.438s-.29.131-.44.131c-.418 0-.702-.285-.702-.704c0-.252.067-.598.128-.84l.394-1.653c-.728-.586-1.563-1.544-2.052-2.287A7.76 7.76 0 0 1 0 10.658a7.7 7.7 0 0 1 .787-3.39a8.7 8.7 0 0 1 1.551-2.19c1.61-1.665 3.878-2.73 6.359-3.006a11.3 11.3 0 0 1 2.565 0c2.47.275 4.712 1.353 6.323 3.017a8.6 8.6 0 0 1 1.539 2.192c.466.945.769 1.937.769 2.978a3.06 3.06 0 0 0-2-.005c-.001-.644-.189-1.329-.564-2.09zm4.125 6.977l-.024-.024l-.024-.018l-.024-.018l-.096-.095a4.24 4.24 0 0 1-1.169-2.192q0-.038-.006-.075l-.006-.056l-.035-.144a1.3 1.3 0 0 0-.358-.61a1.386 1.386 0 0 0-1.957 0a1.4 1.4 0 0 0 0 1.963c.191.191.418.311.668.371c.024.012.06.012.084.012q.019 0 .041.006q.023.005.042.006a4.24 4.24 0 0 1 2.231 1.186c.048.048.096.095.131.143a.323.323 0 0 0 .466 0a.35.35 0 0 0 .036-.455m-1.05 4.37l-.025.025c-.119.096-.31.096-.453-.036a.326.326 0 0 1 0-.467c.047-.036.094-.083.141-.13l.002-.002a4.27 4.27 0 0 0 1.187-2.28q.005-.024.006-.043c0-.024 0-.06.012-.084a1.386 1.386 0 0 1 2.326-.67a1.4 1.4 0 0 1 0 1.964c-.167.18-.382.299-.608.359l-.143.036l-.057.005q-.035.006-.075.007a4.2 4.2 0 0 0-2.183 1.173l-.095.096q-.009.01-.018.024t-.018.024m-4.392-1.053l.024.024l.024.018q.015.009.024.018l.096.096a4.25 4.25 0 0 1 1.169 2.19q0 .04.006.076q.005.03.006.057l.035.143c.06.228.18.443.358.611c.537.539 1.42.539 1.957 0a1.4 1.4 0 0 0 0-1.964a1.4 1.4 0 0 0-.668-.371c-.024-.012-.06-.012-.084-.012q-.018 0-.041-.006l-.042-.006a4.25 4.25 0 0 1-2.231-1.185a1.4 1.4 0 0 1-.131-.144a.323.323 0 0 0-.466 0a.325.325 0 0 0-.036.455m1.039-4.358l.024-.024a.32.32 0 0 1 .453.035a.326.326 0 0 1 0 .467c-.047.036-.094.083-.141.13l-.002.002a4.27 4.27 0 0 0-1.187 2.281l-.006.042c0 .024 0 .06-.012.084a1.386 1.386 0 0 1-2.326.67a1.4 1.4 0 0 1 0-1.963c.166-.18.381-.3.608-.36l.143-.035q.026 0 .056-.006q.037-.005.075-.006a4.2 4.2 0 0 0 2.183-1.174l.096-.095l.018-.025z"/></g>
+  <g id="br-dingtalk" fill="currentColor" fill-rule="evenodd" transform="translate(-12,-12)"><path d="M6.802 2.02a1 1 0 0 1 .849.22l9.751 8.359a2 2 0 0 1 .235 2.799l-1.06 1.272l.87.436a1 1 0 0 1 .134 1.708l-7 5a1 1 0 0 1-1.539-1.101l1.21-4.034c-2.363-.9-3.747-3.055-4.233-5.483A1 1 0 0 1 7.01 10c-.474-.703-.86-1.42-1.134-2.149c-.649-1.73-.658-3.523.23-5.298a1 1 0 0 1 .696-.533m1.78 10.562c.653 1.279 1.705 2.156 3.114 2.437a1 1 0 0 1 .762 1.268l-.66 2.2l3.27-2.335c-.442-.221-.934-.406-1.047-.947a1 1 0 0 1 .21-.845l1.87-2.242L7.47 4.72c-.136.798-.032 1.6.279 2.429c.49 1.309 1.504 2.69 2.958 4.144a1 1 0 0 1-1.023 1.656z"/></g>
+  <g id="br-qq" fill="currentColor" fill-rule="evenodd" transform="translate(-12,-12)"><path d="M5.567 10.592c.075-.883.108-1.77.157-2.655a6.286 6.286 0 0 1 12.552 0c.05.91.09 1.818.184 2.724q.292.627.57 1.316c1.242 3.073 1.73 5.773 1.09 6.032c-.336.135-.914-.425-1.566-1.431a5 5 0 0 1-.067.322a6.7 6.7 0 0 1-1.899 3.27c1.028.35 1.912.827 1.912 1.33c0 .509-2.48.503-4.238.5c-.549-.002-1.012-.008-1.382-.058a6.7 6.7 0 0 1-1.76 0c-.37.05-.832.056-1.382.057c-1.758.004-4.238.01-4.238-.499c0-.503.884-.98 1.912-1.33a6.7 6.7 0 0 1-1.899-3.27a7 7 0 0 1-.077-.316c-.65 1.002-1.227 1.56-1.561 1.425c-.64-.259-.153-2.96 1.089-6.032c.195-.483.398-.948.603-1.385M7.72 8.048a4.286 4.286 0 0 1 8.558 0L16.443 11h.002c0 1.079.526 1.973.992 2.906a1.146 1.146 0 0 0-.769 1.15A4.68 4.68 0 0 1 12 20c-2.682 0-4.817-2.262-4.668-4.944c.033-.602-.375-1-.745-1.142c-.047-.018.969-1.903.969-2.914h.001l.164-2.952Z"/></g>
+  <g id="br-telegram" fill="currentColor" fill-rule="evenodd" transform="translate(-12,-12)"><path d="M21.84 6.056a1.5 1.5 0 0 0-2.063-1.626l-17.1 7.2c-1.192.502-1.253 2.226 0 2.746a57 57 0 0 0 3.774 1.418c1.168.386 2.442.743 3.463.844c.279.334.63.656.988.95c.547.45 1.205.913 1.885 1.357c1.362.89 2.873 1.741 3.891 2.295c1.217.66 2.674-.1 2.892-1.427zM4.594 12.993l15.124-6.368l-2.118 12.84c-.999-.543-2.438-1.356-3.72-2.194a20 20 0 0 1-1.709-1.229a8 8 0 0 1-.426-.374l3.961-3.96a1 1 0 0 0-1.414-1.415L9.955 14.63c-.734-.094-1.756-.366-2.878-.736a49 49 0 0 1-2.482-.902Z"/></g>
+  <g id="br-whatsapp" fill="currentColor" transform="translate(-12,-12)"><path d="M12 2c5.523 0 10 4.477 10 10s-4.477 10-10 10a9.96 9.96 0 0 1-4.863-1.26l-.305-.178l-3.032.892a1.01 1.01 0 0 1-1.28-1.145l.026-.109l.892-3.032A9.96 9.96 0 0 1 2 12C2 6.477 6.477 2 12 2m0 2a8 8 0 0 0-6.759 12.282c.198.312.283.696.216 1.077l-.039.163l-.441 1.501l1.501-.441c.433-.128.883-.05 1.24.177A8 8 0 1 0 12 4M9.102 7.184a.7.7 0 0 1 .684.075c.504.368.904.862 1.248 1.344l.327.474l.153.225a.71.71 0 0 1-.046.864l-.075.076l-.924.686a.23.23 0 0 0-.067.291c.21.38.581.947 1.007 1.373c.427.426 1.02.822 1.426 1.055c.088.05.194.034.266-.031l.038-.045l.601-.915a.71.71 0 0 1 .973-.158l.543.379c.54.385 1.059.799 1.47 1.324a.7.7 0 0 1 .089.703c-.396.924-1.399 1.711-2.441 1.673l-.159-.01l-.191-.018l-.108-.014l-.238-.04c-.924-.174-2.405-.698-3.94-2.232c-1.534-1.535-2.058-3.016-2.232-3.94l-.04-.238l-.025-.208l-.013-.175l-.004-.075c-.038-1.044.753-2.047 1.678-2.443"/></g>
+  <g id="br-github" fill="currentColor" transform="scale(0.09375) translate(-128,-125)"><path d="M128.001 0C57.317 0 0 57.307 0 128.001c0 56.554 36.676 104.535 87.535 121.46c6.397 1.185 8.746-2.777 8.746-6.158c0-3.052-.12-13.135-.174-23.83c-35.61 7.742-43.124-15.103-43.124-15.103c-5.823-14.795-14.213-18.73-14.213-18.73c-11.613-7.944.876-7.78.876-7.78c12.853.902 19.621 13.19 19.621 13.19c11.417 19.568 29.945 13.911 37.249 10.64c1.149-8.272 4.466-13.92 8.127-17.116c-28.431-3.236-58.318-14.212-58.318-63.258c0-13.975 5-25.394 13.188-34.358c-1.329-3.224-5.71-16.242 1.24-33.874c0 0 10.749-3.44 35.21 13.121c10.21-2.836 21.16-4.258 32.038-4.307c10.878.049 21.837 1.47 32.066 4.307c24.431-16.56 35.165-13.12 35.165-13.12c6.967 17.63 2.584 30.65 1.255 33.873c8.207 8.964 13.173 20.383 13.173 34.358c0 49.163-29.944 59.988-58.447 63.157c4.591 3.972 8.682 11.762 8.682 23.704c0 17.126-.148 30.91-.148 35.126c0 3.407 2.304 7.398 8.792 6.14C219.37 232.5 256 184.537 256 128.002C256 57.307 198.691 0 128.001 0m-80.06 182.34c-.282.636-1.283.827-2.194.39c-.929-.417-1.45-1.284-1.15-1.922c.276-.655 1.279-.838 2.205-.399c.93.418 1.46 1.293 1.139 1.931m6.296 5.618c-.61.566-1.804.303-2.614-.591c-.837-.892-.994-2.086-.375-2.66c.63-.566 1.787-.301 2.626.591c.838.903 1 2.088.363 2.66m4.32 7.188c-.785.545-2.067.034-2.86-1.104c-.784-1.138-.784-2.503.017-3.05c.795-.547 2.058-.055 2.861 1.075c.782 1.157.782 2.522-.019 3.08m7.304 8.325c-.701.774-2.196.566-3.29-.49c-1.119-1.032-1.43-2.496-.726-3.27c.71-.776 2.213-.558 3.315.49c1.11 1.03 1.45 2.505.701 3.27m9.442 2.81c-.31 1.003-1.75 1.459-3.199 1.033c-1.448-.439-2.395-1.613-2.103-2.626c.301-1.01 1.747-1.484 3.207-1.028c1.446.436 2.396 1.602 2.095 2.622m10.744 1.193c.036 1.055-1.193 1.93-2.715 1.95c-1.53.034-2.769-.82-2.786-1.86c0-1.065 1.202-1.932 2.733-1.958c1.522-.03 2.768.818 2.768 1.868m10.555-.405c.182 1.03-.875 2.088-2.387 2.37c-1.485.271-2.861-.365-3.05-1.386c-.184-1.056.893-2.114 2.376-2.387c1.514-.263 2.868.356 3.061 1.403"/></g>
+  <g id="br-gitlab" transform="scale(0.09375) translate(-128,-123.5)"><path fill="#e24329" d="m251.845 97.642l-.328-.986l-34.85-90.903c-.657-1.808-1.972-3.287-3.616-4.274Q210.586 0 207.627 0c-1.973 0-3.78.822-5.26 1.973a8.73 8.73 0 0 0-3.124 4.767l-23.506 71.999H80.56l-23.506-72c-.493-1.808-1.644-3.451-3.123-4.766C52.45.822 50.643 0 48.67 0s-3.781.329-5.425 1.48c-1.644.986-2.96 2.465-3.617 4.273L4.781 96.656l-.33.986c-10.355 26.959-1.479 57.37 21.535 74.794h.328c0 .164 53.096 39.944 53.096 39.944l26.3 19.89l15.946 12c3.78 2.96 9.205 2.96 12.986 0l15.945-12l26.3-19.89l53.424-39.944c23.014-17.425 31.726-47.835 21.37-74.794z"/><path fill="#fc6d26" d="m251.845 97.642l-.328-.986c-17.26 3.616-33.205 10.85-46.849 21.04c-.164 0-41.424 31.398-76.602 57.863a18377 18377 0 0 0 48.657 36.821l53.424-39.944c23.013-17.425 31.726-47.835 21.37-74.794z"/><path fill="#fca326" d="m79.245 212.38l26.301 19.89l15.945 12c3.78 2.96 9.206 2.96 12.986 0l15.945-12l26.301-19.89s-22.684-17.095-48.657-36.82c-26.136 19.725-48.82 36.82-48.82 36.82"/><path fill="#fc6d26" d="M51.465 117.697c-13.644-10.192-29.589-17.589-46.849-21.04l-.329.985c-10.356 26.959-1.479 57.37 21.534 74.794h.33c0 .164 53.094 39.944 53.094 39.944s22.685-17.095 48.821-36.82c-35.013-26.466-76.272-57.699-76.601-57.863"/></g>
+  <g id="br-zai" fill="currentColor" fill-rule="evenodd" transform="translate(-12,-12)"><path d="M12.105 2L9.927 4.953H.653L2.83 2h9.276zM23.254 19.048L21.078 22h-9.242l2.174-2.952h9.244zM24 2L9.264 22H0L14.736 2H24z"/></g>
+  <g id="br-amap" transform="scale(0.0234375) translate(-512,-512)"><path d="M389.12 629.76V0H158.72C71.68 0 0 71.68 0 158.72v469.333333h389.12v1.706667z" fill="#AFE881"/><path d="M1024 633.173333H500.053333V3.413333h365.226667C952.32 3.413333 1024 75.093333 1024 162.133333v471.04zM389.12 1024H158.72C71.68 1024 0 952.32 0 865.28v-141.653333h389.12V1024z" fill="#F2F0EB"/><path d="M1024 863.573333v-141.653333H498.346667V1024h365.226666c88.746667 0 160.426667-71.68 160.426667-160.426667z" fill="#A3C9FF"/><path d="M409.6 725.333333L725.333333 904.533333l155.306667-779.946666L409.6 725.333333zM71.68 534.186667s256 141.653333 256 145.066666c3.413333 3.413333 551.253333-552.96 551.253333-552.96L71.68 534.186667z" fill="#0093FD"/><path d="M411.306667 727.04L878.933333 126.293333 329.386667 679.253333l58.026666 175.786667 23.893334-128z" fill="#0066BD"/><path d="M409.6 727.04l-22.186667 128 78.506667-97.28-56.32-30.72z" fill="#004E9D"/></g>
+  <g id="br-aminer" transform="scale(0.0234375) translate(-512,-512)"><path d="M962.56 885.76c-15.36 20.48-30.72 35.84-46.08 51.2-61.44 51.2-138.24 81.92-220.16 81.92h-358.4c-87.04 0-163.84-30.72-220.16-81.92-15.36-15.36-30.72-30.72-46.08-51.2 0 0 0-5.12 5.12-5.12 97.28-204.8 189.44-404.48 286.72-609.28C409.6 179.2 445.44 92.16 486.4 5.12c0 0 0-5.12 5.12-5.12h66.56v5.12c20.48 46.08 46.08 92.16 61.44 133.12 20.48 56.32 46.08 112.64 71.68 168.96L768 476.16c61.44 138.24 128 276.48 194.56 409.6z" fill="#FEFEFE"/><path d="M1024 332.8v358.4c0 71.68-20.48 138.24-61.44 194.56-61.44-133.12-128-271.36-189.44-404.48-30.72-56.32-56.32-117.76-81.92-174.08s-51.2-112.64-81.92-168.96c-20.48-46.08-46.08-92.16-61.44-133.12V0c66.56 0 128 5.12 194.56 5.12C901.12 30.72 1024 163.84 1024 332.8zM481.28 5.12c-46.08 92.16-87.04 179.2-128 271.36-97.28 204.8-189.44 404.48-286.72 609.28v5.12C25.6 834.56 0 762.88 0 691.2v-358.4C0 168.96 117.76 30.72 276.48 5.12h204.8z" fill="#3B3837"/><path d="M348.16 419.84l276.48-87.04-117.76-261.12z" fill="#E9614C"/><path d="M337.92 491.52L256 665.6l389.12 122.88 97.28-225.28-71.68-163.84z" fill="#28688C"/><path d="M911.36 942.08c-61.44 51.2-138.24 81.92-220.16 81.92h-358.4c-87.04 0-163.84-30.72-220.16-81.92l102.4-220.16 440.32 133.12 107.52-230.4 148.48 317.44z" fill="#1B3A80"/></g>
+  <g id="br-claude" fill="currentColor" fill-rule="evenodd" transform="translate(-12,-12)"><path d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z"/></g>
+  <g id="br-codex" fill="currentColor" fill-rule="evenodd" transform="translate(-12,-12)"><path d="M8.086.457a6.105 6.105 0 013.046-.415c1.333.153 2.521.72 3.564 1.7a.117.117 0 00.107.029c1.408-.346 2.762-.224 4.061.366l.063.03.154.076c1.357.703 2.33 1.77 2.918 3.198.278.679.418 1.388.421 2.126a5.655 5.655 0 01-.18 1.631.167.167 0 00.04.155 5.982 5.982 0 011.578 2.891c.385 1.901-.01 3.615-1.183 5.14l-.182.22a6.063 6.063 0 01-2.934 1.851.162.162 0 00-.108.102c-.255.736-.511 1.364-.987 1.992-1.199 1.582-2.962 2.462-4.948 2.451-1.583-.008-2.986-.587-4.21-1.736a.145.145 0 00-.14-.032c-.518.167-1.04.191-1.604.185a5.924 5.924 0 01-2.595-.622 6.058 6.058 0 01-2.146-1.781c-.203-.269-.404-.522-.551-.821a7.74 7.74 0 01-.495-1.283 6.11 6.11 0 01-.017-3.064.166.166 0 00.008-.074.115.115 0 00-.037-.064 5.958 5.958 0 01-1.38-2.202 5.196 5.196 0 01-.333-1.589 6.915 6.915 0 01.188-2.132c.45-1.484 1.309-2.648 2.577-3.493.282-.188.55-.334.802-.438.286-.12.573-.22.861-.304a.129.129 0 00.087-.087A6.016 6.016 0 015.635 2.31C6.315 1.464 7.132.846 8.086.457zm-.804 7.85a.848.848 0 00-1.473.842l1.694 2.965-1.688 2.848a.849.849 0 001.46.864l1.94-3.272a.849.849 0 00.007-.854l-1.94-3.393zm5.446 6.24a.849.849 0 000 1.695h4.848a.849.849 0 000-1.696h-4.848z"/></g>
+  <filter id="sy-shadow" x="-6%" y="-6%" width="112%" height="112%"><feDropShadow dx="0" dy="3" stdDeviation="9" flood-color="#0a1e33" flood-opacity="0.07"/></filter>
+</defs>
+
+<!-- self-carried background: keeps both palettes legible even when the page
+     theme and prefers-color-scheme disagree (e.g. Safari keys off the OS) -->
+<rect class="bgc" x="0" y="0" width="1480" height="900" rx="24"/>
+
+<!-- ═══════════════ header ═══════════════ -->
+<g transform="translate(30,20) scale(0.0335)" style="fill:var(--brand)">
+  <path d="M829.44 670.72c-143.36-15.36-271.36 138.24-276.48 143.36-40.96 46.08-92.16 71.68-143.36 71.68-20.48 0-51.2 0-76.8-30.72-56.32-56.32-10.24-143.36 20.48-184.32 25.6 30.72 40.96 71.68 46.08 87.04 0 15.36 20.48 30.72 40.96 30.72s35.84-10.24 40.96-30.72c15.36-51.2 35.84-81.92 66.56-97.28 40.96-15.36 92.16 5.12 112.64 15.36 15.36 10.24 35.84 5.12 46.08-5.12 15.36-15.36 15.36-30.72 5.12-51.2-20.48-40.96-30.72-76.8-15.36-102.4 15.36-35.84 56.32-51.2 71.68-61.44 15.36-5.12 25.6-20.48 25.6-40.96 0-15.36-10.24-30.72-30.72-40.96-30.72-10.24-51.2-25.6-61.44-46.08-20.48-40.96 0-97.28 5.12-112.64 5.12-15.36 0-30.72-10.24-46.08-10.24-10.24-30.72-15.36-46.08-10.24-46.08 15.36-87.04 20.48-112.64 0-35.84-20.48-56.32-61.44-61.44-87.04-5.12-20.48-20.48-30.72-40.96-30.72s-35.84 15.36-40.96 30.72c-10.24 35.84-25.6 76.8-56.32 87.04-35.84 15.36-92.16-20.48-107.52-35.84-15.36-10.24-35.84-10.24-51.2 0-15.36 10.24-20.48 30.72-15.36 46.08 25.6 61.44 30.72 107.52 15.36 138.24-10.24 20.48-30.72 30.72-56.32 40.96-20.48 0-30.72 20.48-30.72 40.96s15.36 35.84 30.72 40.96c30.72 5.12 51.2 20.48 61.44 40.96 20.48 35.84 0 97.28-10.24 112.64-5.12 15.36 0 35.84 10.24 46.08 15.36 10.24 30.72 15.36 46.08 5.12 15.36-5.12 25.6-10.24 35.84-15.36-40.96 71.68-76.8 179.2 0 256 30.72 35.84 76.8 51.2 122.88 51.2 71.68 0 143.36-35.84 194.56-97.28 30.72-35.84 128-128 215.04-117.76 46.08 0 56.32 30.72 56.32 51.2 0 15.36-10.24 35.84-35.84 35.84V870.4c61.44 0 107.52-46.08 107.52-102.4 0-51.2-35.84-112.64-122.88-122.88z m-568.32-204.8c-10.24-20.48-25.6-35.84-40.96-51.2 15.36-10.24 30.72-25.6 35.84-46.08 15.36-35.84 20.48-76.8 10.24-122.88 30.72 10.24 66.56 15.36 102.4 0 30.72-10.24 56.32-30.72 71.68-66.56 15.36 20.48 35.84 46.08 66.56 61.44 35.84 15.36 71.68 20.48 117.76 15.36-5.12 35.84-5.12 76.8 10.24 112.64 10.24 20.48 25.6 40.96 46.08 56.32-25.6 15.36-46.08 40.96-56.32 71.68-10.24 30.72-10.24 61.44 0 92.16-30.72-5.12-66.56-10.24-102.4 5.12-30.72 15.36-56.32 35.84-76.8 71.68-20.48-35.84-46.08-66.56-87.04-81.92-15.36-5.12-30.72-10.24-51.2-10.24h-30.72c5.12-35.84 5.12-76.8-10.24-112.64z"/>
+  <path d="M368.64 522.24c25.6 20.48 51.2 25.6 81.92 25.6s71.68-15.36 92.16-46.08c35.84-51.2 25.6-128-30.72-168.96-56.32-40.96-133.12-35.84-174.08 15.36-35.84 51.2-25.6 128 30.72 168.96z m25.6-128c5.12-10.24 20.48-15.36 35.84-15.36s25.6 0 35.84 15.36c25.6 20.48 30.72 51.2 20.48 66.56-15.36 20.48-46.08 20.48-71.68 0-25.6-20.48-30.72-51.2-20.48-66.56z"/>
+</g>
+<text x="78" y="48" class="f27 bb">Synapse</text>
+<text x="1454" y="46" text-anchor="end" class="f125 mut">un runtime centrado en la conversación para compañeros de IA</text>
+
+<!-- ═══════════════ connectors ═══════════════ -->
+<path class="link flow-slow" d="M559 123 C564 152, 762 106, 812 150"/>
+<path class="link link-em flow" d="M326 232 C344 232, 338 382, 344 386"/>
+<path class="link link-vi flow-slow" d="M326 536 C346 536, 340 630, 344 634"/>
+<path class="link link-vi glow-remote" d="M326 536 C346 536, 340 630, 344 634" style="stroke-width:2.4;stroke-opacity:.9"/>
+<path class="link link-acc flow" d="M926 478 L981 478"/>
+<path class="link link-acc flow" d="M1015 478 C1036 478, 1052 434, 1070 396"/>
+<path class="link flow-slow" d="M610 726 C608 736, 580 738, 540 742"/>
+
+<!-- ═══════════════ event sources bar ═══════════════ -->
+<g>
+  <rect x="346" y="74" width="1108" height="64" rx="14" class="panel"/>
+  <text x="368" y="111" class="f135 b">Fuentes de eventos</text>
+  <g class="f95">
+    <rect x="542" y="89" width="143" height="34" rx="22" class="chip"/><g class="ico-am"><use href="#lu-clock" transform="translate(561 106) scale(0.625)" stroke-width="2.2"/></g><text x="573" y="110">Tareas programadas</text>
+    <rect x="690" y="89" width="92" height="34" rx="22" class="chip"/><g style="color:var(--sky)"><use href="#lu-webhook" transform="translate(709 106) scale(0.625)" stroke-width="2.2"/></g><text x="721" y="110">Webhooks</text>
+    <rect x="787" y="89" width="76" height="34" rx="22" class="chip"/><g style="color:var(--ink)"><use href="#br-github" transform="translate(806 106) scale(0.583)"/></g><text x="818" y="110">GitHub</text>
+    <rect x="868" y="89" width="75" height="34" rx="22" class="chip"/><use href="#br-gitlab" transform="translate(887 106) scale(0.583)"/><text x="899" y="110">GitLab</text>
+    <rect x="948" y="89" width="158" height="34" rx="22" class="chip"/><g class="ico-em"><use href="#lu-monsp" transform="translate(967 106) scale(0.625)" stroke-width="2.2"/></g><text x="979" y="110">Eventos de dispositivos</text>
+    <rect x="1111" y="89" width="169" height="34" rx="22" class="chip"/><g class="ico-acc"><use href="#lu-workflow" transform="translate(1130 106) scale(0.625)" stroke-width="2.2"/></g><text x="1142" y="110">Reglas de automatización</text>
+  </g>
+  <text x="1436" y="110" text-anchor="end" class="f95 mut">despiertan a los Actors →</text>
+</g>
+
+<!-- ═══════════════ IM transports (left top) ═══════════════ -->
+<g>
+  <rect x="26" y="74" width="300" height="292" rx="16" class="panel"/>
+  <text x="50" y="106" class="f135 b">Conectores de mensajería</text>
+  <rect x="280" y="90" width="26" height="20" rx="7" class="chipOn"/><text x="293" y="104" text-anchor="middle" class="f10 b mut">8</text>
+  <text x="50" y="126" class="f105 mut">chats externos vinculados a conversaciones</text>
+  <g class="f11">
+    <rect x="44" y="140" width="130" height="36" rx="10" class="chip"/><g style="color:#3370ff"><use href="#br-feishu" transform="translate(63 158) scale(0.625)"/></g><text x="75" y="162">Feishu</text>
+    <rect x="182" y="140" width="130" height="36" rx="10" class="chip"/><g style="color:#22c55e"><use href="#br-weixin" transform="translate(201 158) scale(0.625)"/></g><text x="213" y="162">WeChat</text>
+    <rect x="44" y="182" width="130" height="36" rx="10" class="chip"/><g style="color:#2563eb"><use href="#br-wecom" transform="translate(63 200) scale(0.625)"/></g><text x="75" y="204">WeCom</text>
+    <rect x="182" y="182" width="130" height="36" rx="10" class="chip"/><g style="color:#1e9dfd"><use href="#br-dingtalk" transform="translate(201 200) scale(0.625)"/></g><text x="213" y="204">DingTalk</text>
+    <rect x="44" y="224" width="130" height="36" rx="10" class="chip"/><g style="color:#12b7f5"><use href="#br-qq" transform="translate(63 242) scale(0.625)"/></g><text x="75" y="246">QQ</text>
+    <g><rect x="182" y="224" width="130" height="36" rx="10" class="chip"/><rect x="182" y="224" width="130" height="36" rx="10" fill="none" stroke-width="1.6" style="stroke:var(--accent)" class="glow-im"/><g style="color:#2aabee"><use href="#br-telegram" transform="translate(201 242) scale(0.625)"/></g><text x="213" y="246">Telegram</text></g>
+    <rect x="44" y="266" width="136" height="36" rx="10" class="chip"/><g style="color:#25d366"><use href="#br-whatsapp" transform="translate(63 284) scale(0.625)"/></g><text x="75" y="288">WhatsApp Cloud</text>
+    <rect x="188" y="266" width="128" height="36" rx="10" class="chip"/><g style="color:#25d366"><use href="#br-whatsapp" transform="translate(205 284) scale(0.583)"/></g><text x="217" y="288" class="f10">WhatsApp Web*</text>
+  </g>
+  <text x="50" y="340" class="f95 mut">webhook · conexión persistente · QR · *no oficial</text>
+</g>
+
+<!-- ═══════════════ remote agents (left bottom) ═══════════════ -->
+<g>
+  <rect x="26" y="386" width="300" height="340" rx="16" class="panel"/>
+  <text x="50" y="418" class="f135 b">Remote Agents</text>
+  <text x="50" y="438" class="f105 mut">tu máquina, conectada por un daemon</text>
+  <rect x="44" y="452" width="264" height="60" rx="12" class="card"/>
+  <g style="color:var(--ink)"><use href="#br-claude" transform="translate(72 482) scale(0.875)"/></g>
+  <text x="96" y="477" class="f125 b">Claude Code</text>
+  <text x="96" y="496" class="f10 mut">runtime y herramientas propios</text>
+  <rect x="44" y="520" width="264" height="60" rx="12" class="card"/>
+  <g style="color:var(--ink)"><use href="#br-codex" transform="translate(72 550) scale(0.875)"/></g>
+  <text x="96" y="545" class="f125 b">Codex CLI</text>
+  <text x="96" y="564" class="f10 mut">runtime y herramientas propios</text>
+  <g class="f105">
+    <rect x="44" y="592" width="98" height="32" rx="9" class="chip"/><text x="93" y="612" text-anchor="middle" class="vit">Daemon WSS</text>
+    <rect x="150" y="592" width="106" height="32" rx="9" class="chip"/><text x="203" y="612" text-anchor="middle" class="vit">Reverse MCP</text>
+    <rect x="36" y="630" width="156" height="32" rx="9" class="chip"/><text x="114" y="650" text-anchor="middle" class="f10 vit">Herramientas autorizadas</text>
+    <rect x="200" y="630" width="112" height="32" rx="9" class="chip"/><text x="256" y="650" text-anchor="middle" class="f10 vit">Tarjetas de tareas</text>
+  </g>
+  <text x="50" y="700" class="f105 mut">plugins y dispositivos a los que tiene acceso</text>
+</g>
+
+<!-- ═══════════════ conversation (center) ═══════════════ -->
+<g>
+  <rect x="346" y="158" width="580" height="568" rx="18" class="card" filter="url(#sy-shadow)"/>
+  <text x="372" y="192" class="f15 bb">Conversación</text>
+  <rect x="500" y="172" width="140" height="27" rx="13.5" class="chipOn"/><text x="570" y="190" text-anchor="middle" class="f105 mut">Workspace actual</text>
+  <!-- participants cluster -->
+  <circle cx="756" cy="186" r="9" class="pill-sky" style="stroke:var(--card)" stroke-width="1.5"/>
+  <circle cx="770" cy="186" r="9" class="pill-em" style="stroke:var(--card)" stroke-width="1.5"/>
+  <circle cx="784" cy="186" r="9" class="pill-vi" style="stroke:var(--card)" stroke-width="1.5"/>
+  <circle cx="798" cy="186" r="9" style="fill:var(--accent-soft);stroke:var(--card)" stroke-width="1.5"/>
+  <text x="816" y="190" class="f105 mut">4</text>
+  <!-- wakeup bell -->
+  <circle cx="870" cy="186" r="17" class="chipOn"/>
+  <circle cx="870" cy="186" r="17" fill="none" stroke-width="1.6" style="stroke:var(--amber)" class="ring motion"/>
+  <g class="bellanim"><use href="#lu-bell" transform="translate(870 186) scale(0.66)" stroke-width="2.2"/></g>
+  <line x1="370" y1="216" x2="904" y2="216" style="stroke:var(--border)"/>
+
+  <!-- msg 1 · human (persistent) -->
+  <g>
+    <circle cx="394" cy="252" r="17" class="pill-sky"/><g class="ico-acc"><use href="#lu-user" transform="translate(394 252) scale(0.79)" stroke-width="2"/></g>
+    <rect x="424" y="232" width="58" height="21" rx="10.5" class="pill-sky"/><text x="453" y="247" text-anchor="middle" class="f10 b acct">Humano</text>
+    <text x="490" y="247" class="f125 b">Coordinador</text>
+    <text x="898" y="247" text-anchor="end" class="f10 fnt">09:58</text>
+    <text x="424" y="274" class="f125">Buenos días — saquemos el informe de uso del Q3.</text>
+  </g>
+
+  <!-- persistent archive seam: the thread has history -->
+  <g>
+    <line x1="424" y1="298" x2="578" y2="298" style="stroke:var(--border)"/>
+    <text x="661" y="302" text-anchor="middle" class="f9 fnt">contexto anterior archivado</text>
+    <line x1="744" y1="298" x2="898" y2="298" style="stroke:var(--border)"/>
+  </g>
+
+  <!-- automation notice (t≈1.5s) -->
+  <g class="note">
+    <rect x="424" y="316" width="368" height="28" rx="14" class="chipOn"/>
+    <g class="ico-am"><use href="#lu-zap" transform="translate(442 330) scale(0.5)" stroke-width="2.4"/></g>
+    <text x="456" y="334" class="f105 mut">Tarea programada · weekly-report → despertó a Analista</text>
+  </g>
+
+  <!-- msg 2 · external IM (t≈3.0s) -->
+  <g class="msg2">
+    <circle cx="394" cy="388" r="17" class="pill-em"/><g class="ico-em"><use href="#lu-msg" transform="translate(394 388) scale(0.79)" stroke-width="2"/></g>
+    <rect x="424" y="368" width="88" height="21" rx="10.5" class="pill-em"/><text x="468" y="383" text-anchor="middle" class="f10 b emt">IM externo</text>
+    <text x="520" y="383" class="f125 b">Cliente · Telegram</text>
+    <text x="898" y="383" text-anchor="end" class="f10 fnt">10:02</text>
+    <text x="424" y="410" class="f125">Últimas métricas adjuntas — ¿podemos tener listo el resumen hoy?</text>
+  </g>
+
+  <!-- msg 3 · native actor (t≈4.1s) -->
+  <g class="msg3">
+    <circle cx="394" cy="456" r="17" style="fill:var(--accent-soft)"/><g class="ico-acc"><use href="#lu-bot" transform="translate(394 456) scale(0.79)" stroke-width="2"/></g>
+    <rect x="424" y="436" width="52" height="21" rx="10.5" class="pill-sky"/><text x="450" y="451" text-anchor="middle" class="f10 b acct">Actor</text>
+    <text x="484" y="451" class="f125 b">Analista</text>
+    <text x="898" y="451" text-anchor="end" class="f10 fnt">10:02</text>
+    <text x="424" y="478" class="f125">Me pongo con ello — recupero contexto, extraigo datos y redacto.</text>
+    <g class="f105">
+      <rect x="424" y="492" width="124" height="28" rx="8" class="chipOn"/><text x="486" y="510" text-anchor="middle" class="mut">Bucle de ejecución</text>
+      <rect x="556" y="492" width="70" height="28" rx="8" class="chipOn"/><text x="591" y="510" text-anchor="middle" class="mut">Memoria</text>
+      <rect x="634" y="492" width="62" height="28" rx="8" class="chipOn"/><text x="665" y="510" text-anchor="middle" class="mut">Skills</text>
+      <rect x="704" y="492" width="88" height="28" rx="8" class="chipOn"/><text x="748" y="510" text-anchor="middle" class="mut">Modo plan</text>
+    </g>
+  </g>
+  <!-- typing indicator (t≈5.0-9.6s) then result attachment (t≈9.6s) -->
+  <g class="typing motion">
+    <rect x="424" y="546" width="58" height="27" rx="13.5" class="chipOn"/>
+    <circle cx="442" cy="560" r="2.8" style="fill:var(--muted)" class="tdot"/>
+    <circle cx="452" cy="560" r="2.8" style="fill:var(--muted)" class="tdot tdot2"/>
+    <circle cx="462" cy="560" r="2.8" style="fill:var(--muted)" class="tdot tdot3"/>
+  </g>
+  <g class="attach">
+    <rect x="424" y="542" width="260" height="54" rx="10" class="chipOn"/>
+    <g class="ico-acc"><use href="#lu-file" transform="translate(446 569) scale(0.75)" stroke-width="2"/></g>
+    <text x="468" y="564" class="f115 b">q3-usage-report.md</text>
+    <text x="468" y="582" class="f9 mut">redactado por Analista · en el hilo</text>
+  </g>
+
+  <!-- msg 4 · remote agent (t≈12.5s) -->
+  <g class="msg4">
+    <circle cx="394" cy="638" r="17" class="pill-vi"/><g class="ico-vi"><use href="#br-claude" transform="translate(394 638) scale(0.71)"/></g>
+    <rect x="424" y="618" width="100" height="21" rx="10.5" class="pill-vi"/><text x="474" y="633" text-anchor="middle" class="f10 b vit">Remote Agent</text>
+    <text x="532" y="633" class="f125 b">Claude Code</text>
+    <g class="f105">
+      <rect x="640" y="616" width="96" height="26" rx="8" class="chipOn"/><text x="688" y="633" text-anchor="middle" class="mut">Runtime propio</text>
+      <rect x="744" y="616" width="98" height="26" rx="8" class="chipOn"/><text x="793" y="633" text-anchor="middle" class="mut">Reverse MCP</text>
+    </g>
+    <text x="898" y="633" text-anchor="end" class="f10 fnt">10:07</text>
+    <text x="424" y="660" class="f125">Pruebas en verde — rama subida.</text>
+  </g>
+
+  <line x1="370" y1="680" x2="904" y2="680" style="stroke:var(--border)"/>
+  <text x="372" y="706" class="f85 mut">activaciones: usuario · Actor · automatización · interrupción · reintento</text>
+  <text x="898" y="706" text-anchor="end" class="f85 mut">cadenas de archivado + segmento activo</text>
+</g>
+
+<!-- ═══════════════ authorization gate ═══════════════ -->
+<g>
+  <rect x="942" y="158" width="112" height="568" rx="16" class="panel"/>
+  <g class="ico-acc breathe">
+    <use href="#lu-shield" transform="translate(998 216) scale(1.75)" stroke-width="1.65"/>
+  </g>
+  <text x="998" y="268" text-anchor="middle" class="f11 b">Autorización</text>
+  <g class="f9">
+    <rect x="950" y="286" width="96" height="26" rx="8" class="chip"/><text x="998" y="303" text-anchor="middle" class="mut">Concesiones</text>
+    <rect x="950" y="320" width="96" height="26" rx="8" class="chip"/><text x="998" y="337" text-anchor="middle" class="mut">Solicitudes</text>
+    <rect x="950" y="354" width="96" height="26" rx="8" class="chip"/><text x="998" y="371" text-anchor="middle" class="mut">Un solo uso</text>
+  </g>
+  <g class="gatecheck">
+    <circle cx="998" cy="478" r="15" class="pill-em"/>
+    <g class="ico-em"><use href="#lu-check" transform="translate(998 478) scale(0.58)" stroke-width="3.2"/></g>
+  </g>
+  <text x="998" y="530" text-anchor="middle" class="f9 fnt">ámbitos concedidos</text>
+  <g class="f9">
+    <rect x="948" y="544" width="100" height="24" rx="8" class="chip"/><text x="998" y="560" text-anchor="middle" class="mut">usar</text>
+    <rect x="948" y="574" width="100" height="24" rx="8" class="chip"/><text x="998" y="590" text-anchor="middle" class="mut">gestionar</text>
+    <rect x="948" y="604" width="100" height="24" rx="8" class="chip"/><text x="998" y="620" text-anchor="middle" class="mut">contact_visible</text>
+  </g>
+  <text x="998" y="668" text-anchor="middle" class="f9 fnt">solo con concesión</text>
+</g>
+
+<!-- ═══════════════ workspace resources (right) ═══════════════ -->
+<g>
+  <rect x="1070" y="158" width="384" height="568" rx="16" class="panel"/>
+  <text x="1094" y="192" class="f14 bb">Recursos del Workspace</text>
+  <text x="1094" y="212" class="f105 mut">compartidos · autorizados · revocables</text>
+
+  <!-- plugins -->
+  <rect x="1090" y="228" width="344" height="184" rx="12" class="card"/>
+  <text x="1110" y="254" class="f125 b">Plugins</text>
+  <text x="1414" y="254" text-anchor="end" class="f9 mut">MCP · sidecars</text>
+  <g class="f11">
+    <rect x="1110" y="268" width="148" height="34" rx="9" class="chipOn"/><g style="color:#3370ff"><use href="#br-feishu" transform="translate(1130 285) scale(0.708)"/></g><text x="1145" y="290">Feishu</text>
+    <rect x="1270" y="268" width="144" height="34" rx="9" class="chipOn"/><g style="color:var(--ink)"><use href="#br-zai" transform="translate(1290 285) scale(0.708)"/></g><text x="1305" y="290">ZhipuAI</text>
+    <g><rect x="1110" y="308" width="148" height="34" rx="9" class="chipOn"/><rect x="1110" y="308" width="148" height="34" rx="9" fill="none" stroke-width="1.6" style="stroke:var(--accent)" class="glow-plugin"/><g style="color:var(--ink)"><use href="#br-github" transform="translate(1130 325) scale(0.708)"/></g><text x="1145" y="330">GitHub</text></g>
+    <rect x="1270" y="308" width="144" height="34" rx="9" class="chipOn"/><use href="#br-gitlab" transform="translate(1290 325) scale(0.708)"/><text x="1305" y="330">GitLab</text>
+    <rect x="1110" y="348" width="148" height="34" rx="9" class="chipOn"/><use href="#br-amap" transform="translate(1130 365) scale(0.708)"/><text x="1145" y="370">AMap</text>
+    <rect x="1270" y="348" width="144" height="34" rx="9" class="chipOn"/><use href="#br-aminer" transform="translate(1290 365) scale(0.708)"/><text x="1305" y="370">AMiner</text>
+  </g>
+  <text x="1110" y="400" class="f9 mut">6 plugins opcionales más · Mijia · Figma · Notion …</text>
+
+  <!-- skills -->
+  <rect x="1090" y="426" width="344" height="58" rx="12" class="card"/>
+  <text x="1110" y="462" class="f125 b">Skills</text>
+  <rect x="1226" y="440" width="84" height="30" rx="9" class="chipOn"/><text x="1268" y="459" text-anchor="middle" class="f105 mut">SKILL.md</text>
+  <rect x="1320" y="440" width="94" height="30" rx="9" class="chipOn"/><text x="1367" y="459" text-anchor="middle" class="f105 mut">Marketplace</text>
+
+  <!-- runtimes -->
+  <text x="1094" y="514" class="f125 b">Runtimes</text>
+  <text x="1438" y="514" text-anchor="end" class="f9 mut">entornos de ejecución sujetos a control de acceso</text>
+  <rect x="1090" y="526" width="166" height="184" rx="12" class="card"/>
+  <circle cx="1112" cy="550" r="3.5" style="fill:var(--emerald)" class="blink"/>
+  <text x="1122" y="555" class="f115 b">Dispositivos</text>
+  <g class="f105">
+    <rect x="1106" y="568" width="136" height="29" rx="8" class="chipOn"/><text x="1118" y="587" class="mut">Sistema de archivos</text>
+    <rect x="1106" y="602" width="136" height="29" rx="8" class="chipOn"/><text x="1118" y="621" class="mut">Línea de comandos</text>
+    <rect x="1106" y="636" width="136" height="29" rx="8" class="chipOn"/><text x="1118" y="655" class="mut">Navegador</text>
+    <rect x="1106" y="670" width="136" height="29" rx="8" class="chipOn"/><text x="1118" y="689" class="mut">Control del equipo</text>
+  </g>
+  <rect x="1268" y="526" width="166" height="184" rx="12" class="card"/>
+  <text x="1284" y="555" class="f115 b">Sandbox</text>
+  <g class="f105">
+    <rect x="1284" y="568" width="136" height="29" rx="8" class="chipOn"/><text x="1296" y="587" class="mut">Por sesión</text>
+    <rect x="1284" y="602" width="136" height="29" rx="8" class="chipOn"/><text x="1296" y="621" class="mut">local · Docker · VM</text>
+    <rect x="1284" y="636" width="136" height="29" rx="8" class="chipOn"/><text x="1296" y="655" class="f95 mut">Montajes de snapshots</text>
+  </g>
+  <text x="1284" y="692" class="f9 mut">compatible con E2B</text>
+</g>
+
+<!-- ═══════════════ memory &amp; context (bottom left) ═══════════════ -->
+<g>
+  <rect x="26" y="742" width="532" height="112" rx="16" class="panel"/>
+  <text x="50" y="774" class="f135 b">Memoria y contexto</text>
+  <g class="f105">
+    <rect x="50" y="788" width="118" height="32" rx="9" class="chip"/><text x="109" y="808" text-anchor="middle" class="mut">Espacios de memoria</text>
+    <rect x="176" y="788" width="110" height="32" rx="9" class="chip"/><text x="231" y="808" text-anchor="middle" class="mut">Búsqueda híbrida</text>
+  </g>
+  <g>
+    <g style="fill:var(--muted)">
+      <rect x="310" y="784" width="34" height="34" rx="8" class="chipOn"/><rect x="317" y="795" width="20" height="3.5" rx="1.75" opacity=".55"/><rect x="317" y="802.5" width="13" height="3.5" rx="1.75" opacity=".35"/>
+      <rect x="352" y="784" width="34" height="34" rx="8" class="chipOn"/><rect x="359" y="795" width="20" height="3.5" rx="1.75" opacity=".55"/><rect x="359" y="802.5" width="13" height="3.5" rx="1.75" opacity=".35"/>
+      <rect x="394" y="784" width="34" height="34" rx="8" class="chipOn"/><rect x="401" y="795" width="20" height="3.5" rx="1.75" opacity=".55"/><rect x="401" y="802.5" width="13" height="3.5" rx="1.75" opacity=".35"/>
+      <rect x="436" y="784" width="34" height="34" rx="8" class="chipOn"/><rect x="443" y="795" width="20" height="3.5" rx="1.75" opacity=".55"/><rect x="443" y="802.5" width="13" height="3.5" rx="1.75" opacity=".35"/>
+    </g>
+    <rect x="310" y="784" width="34" height="34" rx="8" style="fill:var(--accent-soft)" class="memglow"/>
+    <rect x="352" y="784" width="34" height="34" rx="8" style="fill:var(--accent-soft)" class="memglow memglow2"/>
+    <rect x="394" y="784" width="34" height="34" rx="8" style="fill:var(--accent-soft)" class="memglow memglow3"/>
+    <rect x="436" y="784" width="34" height="34" rx="8" style="fill:var(--accent-soft)" class="memglow memglow4"/>
+    <rect x="478" y="784" width="40" height="34" rx="8" style="fill:var(--accent-soft)"/>
+    <rect x="484" y="797" width="28" height="8" rx="4" style="fill:var(--accent)" class="tailgrow"/>
+  </g>
+  <text x="414" y="842" text-anchor="middle" class="f9 mut">búsqueda léxica · vectorial opcional · archivado íntegro</text>
+</g>
+
+<!-- ═══════════════ pluggable providers (bottom right) ═══════════════ -->
+<g>
+  <rect x="578" y="742" width="876" height="112" rx="16" class="panel"/>
+  <text x="602" y="774" class="f135 b">Proveedores conectables</text>
+  <text x="824" y="774" class="f105 mut">sidecars locales o servicios en la nube · elegidos por variables de entorno · degradación controlada</text>
+  <g>
+    <rect x="602" y="788" width="158" height="54" rx="12" class="card"/><rect x="602" y="788" width="158" height="54" rx="12" fill="none" stroke-width="1.6" style="stroke:var(--accent)" class="slotglow"/>
+    <text x="616" y="810" class="f115 b">Embeddings</text><text x="616" y="828" class="f9 mut">bge-m3 · API</text>
+    <rect x="770" y="788" width="130" height="54" rx="12" class="card"/><rect x="770" y="788" width="130" height="54" rx="12" fill="none" stroke-width="1.6" style="stroke:var(--accent)" class="slotglow slot2"/>
+    <text x="784" y="810" class="f115 b">OCR</text><text x="784" y="828" class="f9 mut">Tesseract · PP-OCR</text>
+    <rect x="910" y="788" width="186" height="54" rx="12" class="card"/><rect x="910" y="788" width="186" height="54" rx="12" fill="none" stroke-width="1.6" style="stroke:var(--accent)" class="slotglow slot3"/>
+    <text x="924" y="810" class="f10 b">Extracción de documentos</text><text x="924" y="828" class="f9 mut">Tika · LlamaParse</text>
+    <rect x="1106" y="788" width="158" height="54" rx="12" class="card"/><rect x="1106" y="788" width="158" height="54" rx="12" fill="none" stroke-width="1.6" style="stroke:var(--accent)" class="slotglow slot4"/>
+    <text x="1120" y="810" class="f115 b">Transcripción</text><text x="1120" y="828" class="f9 mut">Whisper · SenseVoice</text>
+    <rect x="1274" y="788" width="158" height="54" rx="12" class="card"/><rect x="1274" y="788" width="158" height="54" rx="12" fill="none" stroke-width="1.6" style="stroke:var(--accent)" class="slotglow slot5"/>
+    <text x="1288" y="810" class="f115 b">ASR en tiempo real</text><text x="1288" y="828" class="f9 mut">Volcengine · Sherpa</text>
+  </g>
+</g>
+
+<!-- ═══════════════ footer ═══════════════ -->
+<text x="740" y="884" text-anchor="middle" class="f105 mut">autoalojado · PostgreSQL + pgvector · Redis + BullMQ · trazado distribuido de extremo a extremo con OpenTelemetry</text>
+
+<!-- ═══════════════ traveling pulses (SMIL, hidden under reduced motion) ═══════════════ -->
+<g class="motion">
+  <!-- event → bell (0-1.45s) -->
+  <circle r="4" class="dot dot-am">
+    <animateMotion dur="24s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.005;0.06;1" path="M559 123 C564 152, 762 106, 812 150 L864 176"/>
+    <animate attributeName="opacity" dur="24s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.008;0.014;0.052;0.06;1"/>
+  </circle>
+  <!-- IM → conversation (2.2-3.0s) -->
+  <circle r="4" class="dot dot-em">
+    <animateMotion dur="24s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.092;0.125;1" path="M326 232 C344 232, 338 382, 344 386 L377 388"/>
+    <animate attributeName="opacity" dur="24s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.094;0.1;0.118;0.125;1"/>
+  </circle>
+  <!-- actor → gate → plugin (6.0-7.2s) -->
+  <circle r="4" class="dot">
+    <animateMotion dur="24s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.25;0.3;1" path="M926 478 L998 478 C1046 478, 1064 390, 1110 325"/>
+    <animate attributeName="opacity" dur="24s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.252;0.258;0.293;0.3;1"/>
+  </circle>
+  <!-- plugin → gate → actor, result (8.6-9.6s) -->
+  <circle r="4" class="dot">
+    <animateMotion dur="24s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.36;0.4;1" path="M1110 325 C1064 390, 1046 478, 998 478 L926 478"/>
+    <animate attributeName="opacity" dur="24s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.362;0.368;0.393;0.4;1"/>
+  </circle>
+  <!-- remote bridge (11.5-12.5s) -->
+  <circle r="4" class="dot dot-vi">
+    <animateMotion dur="24s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.48;0.52;1" path="M326 536 C346 536, 340 630, 344 634 L377 638"/>
+    <animate attributeName="opacity" dur="24s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.482;0.488;0.513;0.52;1"/>
+  </circle>
+  <!-- conversation → memory (14.9-15.6s) -->
+  <circle r="4" class="dot dot-am">
+    <animateMotion dur="24s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.62;0.65;1" path="M610 726 C608 736, 580 738, 540 742"/>
+    <animate attributeName="opacity" dur="24s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.622;0.628;0.643;0.65;1"/>
+  </circle>
+</g>
+</svg>

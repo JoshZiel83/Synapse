@@ -1,0 +1,201 @@
+<svg xmlns="http://www.w3.org/2000/svg" lang="zh-CN" xml:lang="zh-CN" viewBox="0 0 720 364" role="img" aria-labelledby="fi-title fi-desc">
+<title id="fi-title">IM 接入</title>
+<desc id="fi-desc">客户在 Telegram 里发来消息。首次联系时，外部聊天经验证后与一条 Synapse 会话一一绑定；发消息的人以外部参与者身份加入，配置好的 Actor 随即被唤醒处理。在支持状态反馈的平台上，状态反馈会展示处理进度；八种接入方式共用同一套会话处理路径。</desc>
+<style>
+:root{
+  --ink:#0a0a0a; --muted:#737373; --faint:#767676;
+  --bg:#ffffff; --panel:#fafafa; --card:#ffffff; --chipbg:#f5f5f5;
+  --border:#e5e5e5;
+  --accent:#0084d1; --accent-soft:#e0f2fe; --accent-text:#075985;
+  --emerald:#059669; --emerald-soft:#d1fae5;
+  --amber:#d97706; --amber-soft:#fef3c7;
+  --violet:#7c3aed; --violet-soft:#ede9fe;
+  --link:#cbd5e1;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#fafafa; --muted:#a3a3a3; --faint:#8b8b8b;
+    --bg:#0d1117; --panel:rgba(255,255,255,.035); --card:rgba(255,255,255,.055); --chipbg:rgba(255,255,255,.075);
+    --border:rgba(255,255,255,.11);
+    --accent:#00a6f4; --accent-soft:rgba(0,166,244,.16); --accent-text:#7dd3fc;
+    --emerald:#34d399; --emerald-soft:rgba(52,211,153,.14);
+    --amber:#fbbf24; --amber-soft:rgba(251,191,36,.13);
+    --violet:#a78bfa; --violet-soft:rgba(167,139,250,.16);
+    --link:rgba(255,255,255,.22);
+  }
+}
+text{font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;fill:var(--ink)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.mut{fill:var(--muted)} .fnt{fill:var(--faint)}
+.b{font-weight:600} .bb{font-weight:700}
+.f9{font-size:9.5px}.f95{font-size:10px}.f105{font-size:11px}.f115{font-size:12px}.f125{font-size:13px}.f17{font-size:17px}
+.bgc{fill:var(--bg)}
+.panel{fill:var(--panel);stroke:var(--border)}
+.card{fill:var(--card);stroke:var(--border)}
+.chip{fill:var(--card);stroke:var(--border)}
+.chipOn{fill:var(--chipbg);stroke:var(--border)}
+.acct{fill:var(--accent-text)}
+.ico-acc{color:var(--accent)} .ico-em{color:var(--emerald)} .ico-mut{color:var(--muted)}
+.pill-sky{fill:var(--accent-soft)} .pill-em{fill:var(--emerald-soft)}
+.link{fill:none;stroke:var(--link);stroke-width:1.5;stroke-dasharray:5 5}
+.dot{fill:var(--accent);opacity:0} .dot-em{fill:var(--emerald)}
+@keyframes a-dash{to{stroke-dashoffset:-40}}
+.flow{animation:a-dash 5s linear infinite}
+/* ---- 15s: bubble → verify → bind → external joins → actor wakes → asks → approval keyboard on phone → tap → done ---- */
+@keyframes a-b1{0%,4%{opacity:0;transform:translateY(5px)}7%{opacity:1;transform:translateY(0)}95%{opacity:1;transform:translateY(0)}99%,100%{opacity:0;transform:translateY(5px)}}
+.b1{animation:a-b1 15s linear infinite}
+@keyframes a-ver{0%,13%{opacity:0}16%{opacity:1}23%,100%{opacity:0}}
+.verify{opacity:0;animation:a-ver 15s linear infinite}
+@keyframes a-conv{0%,20%{opacity:0;transform:translateY(6px)}24%{opacity:1;transform:translateY(0)}97%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(6px)}}
+.conv{animation:a-conv 15s linear infinite}
+@keyframes a-bind{0%,24%{opacity:0}28%{opacity:1}95%{opacity:1}99%,100%{opacity:0}}
+.bind{opacity:0;animation:a-bind 15s linear infinite}
+@keyframes a-ext{0%,28%{opacity:0;transform:translateY(4px)}32%{opacity:1;transform:translateY(0)}100%{opacity:1;transform:translateY(0)}}
+.ext{animation:a-ext 15s linear infinite}
+@keyframes a-typ{0%,36%{opacity:0}39%{opacity:1}53%{opacity:1}55%,100%{opacity:0}}
+.typing{opacity:0;animation:a-typ 15s linear infinite}
+@keyframes a-tdot{0%,100%{transform:translateY(0);opacity:.45}30%{transform:translateY(-2.4px);opacity:1}}
+.tdot{animation:a-tdot 1s ease-in-out infinite}
+.tdot2{animation-delay:.15s}.tdot3{animation-delay:.3s}
+@keyframes a-m2{0%,54%{opacity:0;transform:translateY(5px)}58%{opacity:1;transform:translateY(0)}100%{opacity:1;transform:translateY(0)}}
+.m2{animation:a-m2 15s linear infinite}
+@keyframes a-pty{0%,38%{opacity:0}42%{opacity:1}62%{opacity:1}66%,100%{opacity:0}}
+.pty{opacity:0;animation:a-pty 15s linear infinite}
+@keyframes a-r1{0%,40%{opacity:0}44%{opacity:1}68%{opacity:1}72%,100%{opacity:0}}
+.react1{opacity:0;animation:a-r1 15s linear infinite}
+@keyframes a-r2{0%,70%{opacity:0}74%{opacity:1}95%{opacity:1}99%,100%{opacity:0}}
+.react2{opacity:0;animation:a-r2 15s linear infinite}
+@keyframes a-ws0{0%,15%{opacity:0}18%{opacity:1}95%{opacity:1}99%,100%{opacity:0}}
+.ws0{animation:a-ws0 15s linear infinite}
+@keyframes a-ws1{0%,26%{opacity:0}30%{opacity:1}95%{opacity:1}99%,100%{opacity:0}}
+.ws1{animation:a-ws1 15s linear infinite}
+@keyframes a-ws2{0%,30%{opacity:0}34%{opacity:1}95%{opacity:1}99%,100%{opacity:0}}
+.ws2{animation:a-ws2 15s linear infinite}
+@media (prefers-reduced-motion: reduce){
+  *{animation:none !important}
+  .motion{display:none !important}
+}
+</style>
+<defs>
+  <g id="i-bot" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></g>
+  <g id="i-user" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></g>
+  <g id="i-shield" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></g>
+  <g id="i-lock" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></g>
+  <g id="br-telegram" fill="currentColor" fill-rule="evenodd" transform="translate(-12,-12)"><path d="M21.84 6.056a1.5 1.5 0 0 0-2.063-1.626l-17.1 7.2c-1.192.502-1.253 2.226 0 2.746a57 57 0 0 0 3.774 1.418c1.168.386 2.442.743 3.463.844c.279.334.63.656.988.95c.547.45 1.205.913 1.885 1.357c1.362.89 2.873 1.741 3.891 2.295c1.217.66 2.674-.1 2.892-1.427zM4.594 12.993l15.124-6.368l-2.118 12.84c-.999-.543-2.438-1.356-3.72-2.194a20 20 0 0 1-1.709-1.229a8 8 0 0 1-.426-.374l3.961-3.96a1 1 0 0 0-1.414-1.415L9.955 14.63c-.734-.094-1.756-.366-2.878-.736a49 49 0 0 1-2.482-.902Z"/></g>
+  <g id="br-weixin" fill="currentColor" transform="translate(-12,-12)"><path d="M10 3c4.071 0 7.7 2.67 7.982 6.368c2.304.862 4.018 2.81 4.018 5.26c0 1.867-1.026 3.472-2.52 4.493a2.3 2.3 0 0 0-.022.439l.014.44a1 1 0 0 1-1 1c-.758 0-1.46-.247-2.054-.71a8 8 0 0 1-1.105.078c-2.767 0-5.322-1.491-6.284-3.751a9 9 0 0 1-.454-.058c-.716.567-1.54.885-2.464.885a1 1 0 0 1-1-1l.005-.203l.018-.41a2.1 2.1 0 0 0-.058-.608C3.248 14.004 2 12.073 2 9.833C2 5.896 5.76 3 10 3m5.313 7.889c-2.768 0-4.688 1.837-4.688 3.74c0 1.902 1.92 3.74 4.688 3.74a6 6 0 0 0 1.078-.101c.434-.082.819.1 1.15.36c.099-.433.324-.842.706-1.088C19.363 16.82 20 15.753 20 14.629c0-1.903-1.92-3.74-4.687-3.74M10 5C6.508 5 4 7.327 4 9.833c0 1.477.837 2.858 2.264 3.777c.531.343.76.957.83 1.559l.482-.342c.308-.208.63-.366 1.05-.288c.056-3.286 3.203-5.65 6.687-5.65q.288 0 .573.021C15.362 6.784 13.059 5 10 5m3.62 8a1 1 0 1 1 0 2a1 1 0 0 1 0-2M17 13a1 1 0 1 1 0 2a1 1 0 0 1 0-2M8 7a1 1 0 1 1 0 2a1 1 0 0 1 0-2m4 0a1 1 0 1 1 0 2a1 1 0 0 1 0-2"/></g>
+  <g id="br-whatsapp" fill="currentColor" transform="translate(-12,-12)"><path d="M12 2c5.523 0 10 4.477 10 10s-4.477 10-10 10a9.96 9.96 0 0 1-4.863-1.26l-.305-.178l-3.032.892a1.01 1.01 0 0 1-1.28-1.145l.026-.109l.892-3.032A9.96 9.96 0 0 1 2 12C2 6.477 6.477 2 12 2m0 2a8 8 0 0 0-6.759 12.282c.198.312.283.696.216 1.077l-.039.163l-.441 1.501l1.501-.441c.433-.128.883-.05 1.24.177A8 8 0 1 0 12 4M9.102 7.184a.7.7 0 0 1 .684.075c.504.368.904.862 1.248 1.344l.327.474l.153.225a.71.71 0 0 1-.046.864l-.075.076l-.924.686a.23.23 0 0 0-.067.291c.21.38.581.947 1.007 1.373c.427.426 1.02.822 1.426 1.055c.088.05.194.034.266-.031l.038-.045l.601-.915a.71.71 0 0 1 .973-.158l.543.379c.54.385 1.059.799 1.47 1.324a.7.7 0 0 1 .089.703c-.396.924-1.399 1.711-2.441 1.673l-.159-.01l-.191-.018l-.108-.014l-.238-.04c-.924-.174-2.405-.698-3.94-2.232c-1.534-1.535-2.058-3.016-2.232-3.94l-.04-.238l-.025-.208l-.013-.175l-.004-.075c-.038-1.044.753-2.047 1.678-2.443"/></g>
+  <g id="br-dingtalk" fill="currentColor" fill-rule="evenodd" transform="translate(-12,-12)"><path d="M6.802 2.02a1 1 0 0 1 .849.22l9.751 8.359a2 2 0 0 1 .235 2.799l-1.06 1.272l.87.436a1 1 0 0 1 .134 1.708l-7 5a1 1 0 0 1-1.539-1.101l1.21-4.034c-2.363-.9-3.747-3.055-4.233-5.483A1 1 0 0 1 7.01 10c-.474-.703-.86-1.42-1.134-2.149c-.649-1.73-.658-3.523.23-5.298a1 1 0 0 1 .696-.533m1.78 10.562c.653 1.279 1.705 2.156 3.114 2.437a1 1 0 0 1 .762 1.268l-.66 2.2l3.27-2.335c-.442-.221-.934-.406-1.047-.947a1 1 0 0 1 .21-.845l1.87-2.242L7.47 4.72c-.136.798-.032 1.6.279 2.429c.49 1.309 1.504 2.69 2.958 4.144a1 1 0 0 1-1.023 1.656z"/></g>
+</defs>
+
+<rect class="bgc" x="0" y="0" width="720" height="364" rx="16"/>
+
+<text x="28" y="38" class="f17 bb">IM 接入</text>
+<text x="28" y="58" class="f115 mut">客户在自己常用的 IM 里聊天——Actor 在纳入统一治理的会话里作答</text>
+
+<!-- ═══ phone (left) ═══ -->
+<g>
+  <rect x="28" y="84" width="188" height="236" rx="18" class="panel"/>
+  <rect x="42" y="98" width="160" height="24" rx="8" class="chipOn"/>
+  <g style="color:#2aabee"><use href="#br-telegram" transform="translate(58 110) scale(0.5)"/></g>
+  <text x="70" y="114" class="f95 b">Telegram</text>
+  <text x="188" y="114" text-anchor="end" class="f9 fnt">客户端</text>
+  <!-- inbound bubble -->
+  <g class="b1">
+    <rect x="42" y="134" width="150" height="38" rx="10" class="card"/>
+    <text x="52" y="150" class="f95">能把上个月的发票</text>
+    <text x="52" y="164" class="f95">发我一份吗？</text>
+  </g>
+  <!-- verified outbound: actor-status hooks breathe on the customer's message -->
+  <g class="pty"><text x="52" y="192" class="f9 fnt">客服正在输入…</text></g>
+  <g class="react1"><circle cx="186" cy="171" r="9" class="chipOn"/><text x="186" y="175" text-anchor="middle" class="f9">✍</text></g>
+  <g class="react2"><circle cx="186" cy="171" r="9" class="pill-em"/><text x="186" y="175" text-anchor="middle" class="f9 b" style="fill:var(--emerald)">✓</text></g>
+  <text x="42" y="308" class="f9 fnt">在支持的平台上实时展示进度</text>
+</g>
+
+<!-- ═══ transport rail (center) ═══ -->
+<g>
+  <text x="272" y="100" text-anchor="middle" class="f9 fnt">8 种接入方式</text>
+  <g><rect x="238" y="110" width="30" height="30" rx="9" class="chip"/><rect x="238" y="110" width="30" height="30" rx="9" fill="none" stroke-width="1.8" style="stroke:#2aabee"/><g style="color:#2aabee"><use href="#br-telegram" transform="translate(253 125) scale(0.55)"/></g></g>
+  <g><rect x="276" y="110" width="30" height="30" rx="9" class="chip"/><g style="color:#22c55e"><use href="#br-weixin" transform="translate(291 125) scale(0.55)"/></g></g>
+  <g><rect x="238" y="148" width="30" height="30" rx="9" class="chip"/><g style="color:#25d366"><use href="#br-whatsapp" transform="translate(253 163) scale(0.55)"/></g></g>
+  <g><rect x="276" y="148" width="30" height="30" rx="9" class="chip"/><g style="color:#1e9dfd"><use href="#br-dingtalk" transform="translate(291 163) scale(0.55)"/></g></g>
+  <text x="272" y="196" text-anchor="middle" class="f9 fnt">飞书 · 企业微信 · QQ 等</text>
+
+  <g class="verify">
+    <rect x="234" y="214" width="80" height="24" rx="8" class="pill-em"/>
+    <g class="ico-em"><use href="#i-shield" transform="translate(250 226) scale(0.42)" stroke-width="2.6"/></g>
+    <text x="261" y="230" class="f9 b" style="fill:var(--emerald)">已验证</text>
+  </g>
+  <g class="bind">
+    <rect x="234" y="246" width="88" height="24" rx="8" class="chipOn"/>
+    <g class="ico-acc"><use href="#i-lock" transform="translate(250 258) scale(0.42)" stroke-width="2.6"/></g>
+    <text x="261" y="262" class="f9 acct b">一一绑定</text>
+  </g>
+  <text x="272" y="292" text-anchor="middle" class="f9 fnt">首次联系</text>
+  <text x="272" y="304" text-anchor="middle" class="f9 fnt">即建立绑定</text>
+</g>
+
+<!-- ═══ conversation (right) ═══ -->
+<g class="conv">
+  <rect x="344" y="84" width="348" height="220" rx="14" class="card"/>
+  <text x="364" y="112" class="f125 b">会话</text>
+  <text x="672" y="112" text-anchor="end" class="f9 fnt">自动创建</text>
+
+  <g class="ext">
+    <rect x="364" y="126" width="142" height="22" rx="11" class="chipOn"/>
+    <g class="ico-mut"><use href="#i-user" transform="translate(380 137) scale(0.45)" stroke-width="2.4"/></g>
+    <text x="392" y="141" class="f9 mut">外部参与者</text>
+  </g>
+
+  <!-- mirrored inbound -->
+  <circle cx="380" cy="172" r="11" class="pill-em"/><g class="ico-em"><use href="#i-user" transform="translate(380 172) scale(0.5)" stroke-width="2.2"/></g>
+  <text x="398" y="168" class="f105 b">客户</text>
+  <text x="398" y="184" class="f105">能把上个月的发票发我一份吗？</text>
+
+  <!-- typing -->
+  <g class="typing motion">
+    <rect x="364" y="200" width="52" height="22" rx="11" class="chipOn"/>
+    <circle cx="380" cy="211" r="2.5" style="fill:var(--muted)" class="tdot"/>
+    <circle cx="389" cy="211" r="2.5" style="fill:var(--muted)" class="tdot tdot2"/>
+    <circle cx="398" cy="211" r="2.5" style="fill:var(--muted)" class="tdot tdot3"/>
+  </g>
+
+  <!-- actor reply -->
+  <g class="m2">
+    <circle cx="380" cy="216" r="11" class="pill-sky"/><g class="ico-acc"><use href="#i-bot" transform="translate(380 216) scale(0.5)" stroke-width="2.2"/></g>
+    <text x="398" y="212" class="f105 b">客服 · Actor</text>
+    <text x="398" y="228" class="f105">找到了——六月的 invoice_06.pdf。</text>
+  </g>
+
+  <text x="364" y="264" class="f9 fnt">Actor 由这条入站消息唤醒——一次持久化唤醒，</text>
+  <text x="364" y="278" class="f9 fnt">忙时进入持久队列</text>
+</g>
+
+<!-- wires -->
+<path class="link flow" d="M216 152 C226 152, 228 122, 238 122"/>
+<g class="ws0"><path class="link flow" d="M306 126 C330 132, 336 172, 344 192"/></g>
+<g class="ws1"><path class="link flow" d="M322 258 C334 258, 336 220, 344 200"/></g>
+<g class="ws2"><path class="link flow" d="M344 250 C336 250, 330 300, 216 310"/></g>
+
+<!-- footer -->
+<text x="360" y="344" text-anchor="middle" class="f9 fnt">飞书 · 微信 · 企业微信 · 钉钉 · QQ · Telegram · WhatsApp（云 API 与非官方网页版）——同一条治理路径</text>
+
+<!-- ═══ traveling pulses ═══ -->
+<g class="motion">
+  <!-- inbound relay: phone → Telegram connector (1.5-2s) -->
+  <circle r="3.5" class="dot dot-em">
+    <animateMotion dur="15s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.10;0.135;1" path="M216 152 C226 152, 228 128, 236 124"/>
+    <animate attributeName="opacity" dur="15s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.102;0.108;0.128;0.135;1"/>
+  </circle>
+  <!-- connector → conversation (2.4-3.1s) -->
+  <circle r="3.5" class="dot dot-em">
+    <animateMotion dur="15s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.16;0.205;1" path="M306 126 C330 132, 336 172, 344 192"/>
+    <animate attributeName="opacity" dur="15s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.162;0.168;0.198;0.205;1"/>
+  </circle>
+  <!-- status hook: connector updates the reaction on the phone (5.8s) -->
+  <circle r="3.5" class="dot">
+    <animateMotion dur="15s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.355;0.405;1" path="M344 250 C336 250, 330 300, 216 310"/>
+    <animate attributeName="opacity" dur="15s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.357;0.363;0.398;0.405;1"/>
+  </circle>
+</g>
+</svg>

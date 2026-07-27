@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" lang="zh-CN" xml:lang="zh-CN" viewBox="0 0 720 372" role="img" aria-labelledby="fw-title fw-desc">
+<title id="fw-title">事件也能触发工作</title>
+<desc id="fw-desc">Actor 完成当前任务后，给自己安排后续唤醒，随后转入空闲；调度器到点触发规则，一条自动化通知进入同一条会话，唤醒对应的 Actor。定时任务、Webhook、GitHub/GitLab 事件都从同一条路径进入。</desc>
+<style>
+:root{
+  --ink:#0a0a0a; --muted:#737373; --faint:#767676;
+  --bg:#ffffff; --panel:#fafafa; --card:#ffffff; --chipbg:#f5f5f5;
+  --border:#e5e5e5;
+  --accent:#0084d1; --accent-soft:#e0f2fe; --accent-text:#075985;
+  --emerald:#059669; --emerald-soft:#d1fae5;
+  --amber:#d97706; --amber-soft:#fef3c7;
+  --violet:#7c3aed; --violet-soft:#ede9fe;
+  --link:#cbd5e1;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#fafafa; --muted:#a3a3a3; --faint:#8b8b8b;
+    --bg:#0d1117; --panel:rgba(255,255,255,.035); --card:rgba(255,255,255,.055); --chipbg:rgba(255,255,255,.075);
+    --border:rgba(255,255,255,.11);
+    --accent:#00a6f4; --accent-soft:rgba(0,166,244,.16); --accent-text:#7dd3fc;
+    --emerald:#34d399; --emerald-soft:rgba(52,211,153,.14);
+    --amber:#fbbf24; --amber-soft:rgba(251,191,36,.13);
+    --violet:#a78bfa; --violet-soft:rgba(167,139,250,.16);
+    --link:rgba(255,255,255,.22);
+  }
+}
+text{font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;fill:var(--ink)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.mut{fill:var(--muted)} .fnt{fill:var(--faint)}
+.b{font-weight:600} .bb{font-weight:700}
+.f9{font-size:9.5px}.f95{font-size:10px}.f105{font-size:11px}.f115{font-size:12px}.f125{font-size:13px}.f17{font-size:17px}
+.bgc{fill:var(--bg)}
+.panel{fill:var(--panel);stroke:var(--border)}
+.card{fill:var(--card);stroke:var(--border)}
+.chip{fill:var(--card);stroke:var(--border)}
+.chipOn{fill:var(--chipbg);stroke:var(--border)}
+.acct{fill:var(--accent-text)}
+.ico-acc{color:var(--accent)} .ico-em{color:var(--emerald)} .ico-mut{color:var(--muted)} .ico-am{color:var(--amber)} .ico-vi{color:var(--violet)}
+.pill-sky{fill:var(--accent-soft)} .pill-am{fill:var(--amber-soft)}
+.link{fill:none;stroke:var(--link);stroke-width:1.5;stroke-dasharray:5 5}
+.dot{fill:var(--accent);opacity:0} .dot-am{fill:var(--amber)} .dot-vi{fill:var(--violet)}
+@keyframes a-dash{to{stroke-dashoffset:-40}}
+.flow{animation:a-dash 5s linear infinite}
+/* ---- 16s: work done → schedule_self_wakeup → idle (moon) → clock fires → notice → wake → follow-up → external lane cameo ---- */
+@keyframes a-pill{0%,7%{opacity:0;transform:translateY(4px)}10%{opacity:1;transform:translateY(0)}94%{opacity:1;transform:translateY(0)}98%,100%{opacity:0;transform:translateY(4px)}}
+.toolpill{animation:a-pill 16s linear infinite}
+@keyframes a-rule{0%,12%{opacity:0;transform:translateY(5px)}16%{opacity:1;transform:translateY(0)}96%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(5px)}}
+.rule{animation:a-rule 16s linear infinite}
+@keyframes a-cd{0%,16%{transform:scaleX(1)}44%{transform:scaleX(0)}100%{transform:scaleX(0)}}
+.cdbar{animation:a-cd 16s linear infinite;transform-box:fill-box;transform-origin:left center}
+@keyframes a-fire{0%,44%{opacity:0}47%{opacity:1}54%,100%{opacity:0}}
+.fire{opacity:0;animation:a-fire 16s linear infinite}
+@keyframes a-moon{0%,20%{opacity:0}24%{opacity:1}54%{opacity:1}58%,100%{opacity:0}}
+.moon{opacity:0;animation:a-moon 16s linear infinite}
+@keyframes a-sti{0%,20%{opacity:0}24%{opacity:1}56%{opacity:1}58%,100%{opacity:0}}
+.st-idle{opacity:0;animation:a-sti 16s linear infinite}
+@keyframes a-str{0%,20%{opacity:1}24%{opacity:0}58%{opacity:0}62%,100%{opacity:1}}
+.st-run{animation:a-str 16s linear infinite}
+@keyframes a-notice{0%,52%{opacity:0;transform:translateY(5px)}56%{opacity:1;transform:translateY(0)}94%{opacity:1;transform:translateY(0)}98%,100%{opacity:0;transform:translateY(5px)}}
+.notice{animation:a-notice 16s linear infinite}
+@keyframes a-m2{0%,64%{opacity:0;transform:translateY(5px)}68%{opacity:1;transform:translateY(0)}94%{opacity:1;transform:translateY(0)}98%,100%{opacity:0;transform:translateY(5px)}}
+.m2{animation:a-m2 16s linear infinite}
+@keyframes a-cnt1{0%{opacity:0}3%{opacity:1}44%{opacity:1}47%,100%{opacity:0}}
+.cnt1{animation:a-cnt1 16s linear infinite}
+@keyframes a-cnt2{0%,44%{opacity:0}47%{opacity:1}92%{opacity:1}97%,100%{opacity:0}}
+.cnt2{opacity:0;animation:a-cnt2 16s linear infinite}
+@keyframes a-ext{0%,74%{opacity:0}78%{opacity:.95}88%{opacity:.95}92%,100%{opacity:0}}
+.extglow{opacity:0;animation:a-ext 16s linear infinite}
+@keyframes a-ws1{0%,8%{opacity:0}12%{opacity:1}96%{opacity:1}100%{opacity:0}}
+.ws1{animation:a-ws1 16s linear infinite}
+@keyframes a-ws2{0%,44%{opacity:0}48%{opacity:1}94%{opacity:1}98%,100%{opacity:0}}
+.ws2{animation:a-ws2 16s linear infinite}
+@keyframes a-ws3{0%,76%{opacity:0}79%{opacity:1}90%{opacity:1}94%,100%{opacity:0}}
+.ws3{animation:a-ws3 16s linear infinite}
+@media (prefers-reduced-motion: reduce){
+  *{animation:none !important}
+  .motion{display:none !important}
+}
+</style>
+<defs>
+  <g id="i-bot" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></g>
+  <g id="i-alarm" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3 2 6"/><path d="m22 6-3-3"/><path d="M6.38 18.7 4 21"/><path d="M17.64 18.67 20 21"/></g>
+  <g id="i-clock" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></g>
+  <g id="i-moon" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></g>
+  <g id="i-webhook" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06"/><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8"/></g>
+  <g id="i-zap" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></g>
+  <g id="br-github" fill="currentColor" transform="scale(0.09375) translate(-128,-125)"><path d="M128.001 0C57.317 0 0 57.307 0 128.001c0 56.554 36.676 104.535 87.535 121.46c6.397 1.185 8.746-2.777 8.746-6.158c0-3.052-.12-13.135-.174-23.83c-35.61 7.742-43.124-15.103-43.124-15.103c-5.823-14.795-14.213-18.73-14.213-18.73c-11.613-7.944.876-7.78.876-7.78c12.853.902 19.621 13.19 19.621 13.19c11.417 19.568 29.945 13.911 37.249 10.64c1.149-8.272 4.466-13.92 8.127-17.116c-28.431-3.236-58.318-14.212-58.318-63.258c0-13.975 5-25.394 13.188-34.358c-1.329-3.224-5.71-16.242 1.24-33.874c0 0 10.749-3.44 35.21 13.121c10.21-2.836 21.16-4.258 32.038-4.307c10.878.049 21.837 1.47 32.066 4.307c24.431-16.56 35.165-13.12 35.165-13.12c6.967 17.63 2.584 30.65 1.255 33.873c8.207 8.964 13.173 20.383 13.173 34.358c0 49.163-29.944 59.988-58.447 63.157c4.591 3.972 8.682 11.762 8.682 23.704c0 17.126-.148 30.91-.148 35.126c0 3.407 2.304 7.398 8.792 6.14C219.37 232.5 256 184.537 256 128.002C256 57.307 198.691 0 128.001 0m-80.06 182.34c-.282.636-1.283.827-2.194.39c-.929-.417-1.45-1.284-1.15-1.922c.276-.655 1.279-.838 2.205-.399c.93.418 1.46 1.293 1.139 1.931m6.296 5.618c-.61.566-1.804.303-2.614-.591c-.837-.892-.994-2.086-.375-2.66c.63-.566 1.787-.301 2.626.591c.838.903 1 2.088.363 2.66m4.32 7.188c-.785.545-2.067.034-2.86-1.104c-.784-1.138-.784-2.503.017-3.05c.795-.547 2.058-.055 2.861 1.075c.782 1.157.782 2.522-.019 3.08m7.304 8.325c-.701.774-2.196.566-3.29-.49c-1.119-1.032-1.43-2.496-.726-3.27c.71-.776 2.213-.558 3.315.49c1.11 1.03 1.45 2.505.701 3.27m9.442 2.81c-.31 1.003-1.75 1.459-3.199 1.033c-1.448-.439-2.395-1.613-2.103-2.626c.301-1.01 1.747-1.484 3.207-1.028c1.446.436 2.396 1.602 2.095 2.622m10.744 1.193c.036 1.055-1.193 1.93-2.715 1.95c-1.53.034-2.769-.82-2.786-1.86c0-1.065 1.202-1.932 2.733-1.958c1.522-.03 2.768.818 2.768 1.868m10.555-.405c.182 1.03-.875 2.088-2.387 2.37c-1.485.271-2.861-.365-3.05-1.386c-.184-1.056.893-2.114 2.376-2.387c1.514-.263 2.868.356 3.061 1.403"/></g>
+</defs>
+
+<rect class="bgc" x="0" y="0" width="720" height="372" rx="16"/>
+
+<text x="28" y="38" class="f17 bb">事件也能触发工作</text>
+<text x="28" y="58" class="f115 mut">Actor 会给自己定闹钟——定时任务、Webhook、GitHub 事件进入会话，唤醒对应的 Actor</text>
+
+<!-- ═══ conversation (left) ═══ -->
+<g>
+  <rect x="28" y="84" width="356" height="240" rx="14" class="card"/>
+  <text x="48" y="112" class="f125 b">会话</text>
+  <rect x="290" y="96" width="74" height="22" rx="11" class="chipOn"/>
+  <g class="st-run"><circle cx="304" cy="107" r="3.5" style="fill:var(--emerald)"/><text x="313" y="111" class="f9 mut">运行中</text></g>
+  <g class="st-idle"><g class="ico-mut"><use href="#i-moon" transform="translate(305 107) scale(0.4)" stroke-width="2.4"/></g><text x="315" y="111" class="f9 mut">空闲</text></g>
+
+  <!-- m1: actor finishes + schedules follow-up -->
+  <circle cx="58" cy="146" r="12" class="pill-sky"/><g class="ico-acc"><use href="#i-bot" transform="translate(58 146) scale(0.55)" stroke-width="2.2"/></g>
+  <text x="78" y="142" class="f105 b">分析师</text>
+  <text x="78" y="158" class="f105">部署完成。09:00 我来复查指标。</text>
+  <g class="toolpill">
+    <rect x="78" y="166" width="212" height="20" rx="6" class="chipOn"/>
+    <g class="ico-am"><use href="#i-alarm" transform="translate(92 176) scale(0.42)" stroke-width="2.4"/></g>
+    <text x="102" y="180" class="f9 mono mut">schedule_self_wakeup("09:00")</text>
+  </g>
+
+  <!-- automation notice -->
+  <g class="notice">
+    <rect x="48" y="202" width="286" height="24" rx="12" class="pill-am"/>
+    <g class="ico-am"><use href="#i-zap" transform="translate(64 214) scale(0.42)" stroke-width="2.4"/></g>
+    <text x="76" y="218" class="f95" style="fill:var(--amber)">自动化 · 唤醒：复查指标</text>
+  </g>
+
+  <!-- m2: follow-up -->
+  <g class="m2">
+    <circle cx="58" cy="252" r="12" class="pill-sky"/><g class="ico-acc"><use href="#i-bot" transform="translate(58 252) scale(0.55)" stroke-width="2.2"/></g>
+    <text x="78" y="248" class="f105 b">分析师</text>
+    <text x="78" y="264" class="f105">早间指标一切正常 ✓</text>
+  </g>
+
+  <text x="48" y="306" class="f9 fnt">当前任务结束后，可自动安排下一次检查</text>
+</g>
+
+<!-- ═══ wakeup rule (right) ═══ -->
+<g>
+  <rect x="420" y="84" width="272" height="132" rx="14" class="panel"/>
+  <g class="ico-am"><use href="#i-alarm" transform="translate(444 108) scale(0.62)" stroke-width="2"/></g>
+  <text x="460" y="113" class="f115 b">唤醒规则</text>
+  <g class="cnt1"><text x="646" y="113" text-anchor="end" class="f9 mut">触发 0/1</text></g>
+  <g class="cnt2"><text x="646" y="113" text-anchor="end" class="f9 b" style="fill:var(--emerald)">触发 1/1 ✓</text></g>
+  <g class="rule">
+    <rect x="440" y="128" width="232" height="46" rx="10" class="card"/>
+    <text x="454" y="146" class="f95 mono mut">09:00 → 唤醒分析师</text>
+    <rect x="454" y="154" width="180" height="6" rx="3" class="chipOn"/>
+    <rect x="454" y="154" width="180" height="6" rx="3" style="fill:var(--amber)" class="cdbar"/>
+    <g class="fire"><circle cx="655" cy="157" r="8" style="fill:var(--amber-soft)"/><g class="ico-am"><use href="#i-clock" transform="translate(655 157) scale(0.4)" stroke-width="2.6"/></g></g>
+  </g>
+  <text x="440" y="198" class="f9 fnt">调度器每 15 秒扫描 · 到期后触发</text>
+</g>
+
+<!-- ═══ external event lane (bottom, same path cameo) ═══ -->
+<g>
+  <rect x="420" y="240" width="272" height="84" rx="14" class="panel"/>
+  <text x="440" y="264" class="f105 b">外部事件走同一条路径</text>
+  <g>
+    <rect x="440" y="276" width="80" height="26" rx="8" class="chip"/>
+    <rect x="440" y="276" width="80" height="26" rx="8" fill="none" stroke-width="1.6" style="stroke:var(--violet)" class="extglow"/>
+    <g style="color:var(--ink)"><use href="#br-github" transform="translate(456 289) scale(0.5)"/></g>
+    <text x="468" y="293" class="f95">push</text>
+  </g>
+  <g>
+    <rect x="528" y="276" width="94" height="26" rx="8" class="chip"/>
+    <g class="ico-acc"><use href="#i-webhook" transform="translate(544 289) scale(0.5)" stroke-width="2.2"/></g>
+    <text x="556" y="293" class="f95">Webhook</text>
+  </g>
+  <rect x="630" y="276" width="52" height="26" rx="8" class="chip"/>
+  <g class="ico-am"><use href="#i-clock" transform="translate(646 289) scale(0.5)" stroke-width="2.2"/></g>
+  <text x="658" y="293" class="f95">cron</text>
+  <text x="440" y="316" class="f9 fnt">事件以通知形式落进会话 · 唤醒对应 Actor</text>
+</g>
+
+<!-- wires -->
+<g class="ws1"><path class="link flow" d="M384 170 C404 172, 408 138, 420 132"/></g>
+<g class="ws2"><path class="link flow" d="M420 214 C400 216, 396 210, 384 212"/></g>
+<g class="ws3"><path class="link flow" d="M420 289 C396 290, 390 240, 384 226"/></g>
+
+<!-- footer -->
+<text x="360" y="352" text-anchor="middle" class="f9 fnt">Actor 忙时，唤醒进入持久队列</text>
+
+<!-- ═══ traveling pulses ═══ -->
+<g class="motion">
+  <!-- schedule → rule card (1.9s) -->
+  <circle r="3.5" class="dot dot-am">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.12;0.16;1" path="M384 170 C404 172, 408 138, 420 132"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.122;0.128;0.154;0.16;1"/>
+  </circle>
+  <!-- fire → notice (7.8s) -->
+  <circle r="3.5" class="dot dot-am">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.485;0.535;1" path="M420 214 C400 216, 396 210, 384 212"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.487;0.493;0.528;0.535;1"/>
+  </circle>
+  <!-- github push → conversation (12.8s cameo) -->
+  <circle r="3.5" class="dot dot-vi">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.8;0.85;1" path="M420 289 C396 290, 390 240, 384 226"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.802;0.808;0.843;0.85;1"/>
+  </circle>
+</g>
+</svg>

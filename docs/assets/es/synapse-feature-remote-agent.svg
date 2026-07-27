@@ -1,0 +1,212 @@
+<svg xmlns="http://www.w3.org/2000/svg" lang="es" xml:lang="es" viewBox="0 0 720 424" role="img" aria-labelledby="fr-title fr-desc">
+<title id="fr-title">Remote Agents</title>
+<desc id="fr-desc">Tu propio Claude Code o Codex CLI se une a una conversación de Synapse como un compañero más. Se ejecuta en tu máquina con tus herramientas y tu cuenta del proveedor del modelo, inicia la conexión saliente, recupera los mensajes, responde y puede hacerle preguntas al equipo mediante tarjetas de tarea. Las herramientas autorizadas del Workspace se exponen al agente.</desc>
+<style>
+:root{
+  --ink:#0a0a0a; --muted:#737373; --faint:#767676;
+  --bg:#ffffff; --panel:#fafafa; --card:#ffffff; --chipbg:#f5f5f5;
+  --border:#e5e5e5;
+  --accent:#0084d1; --accent-soft:#e0f2fe; --accent-text:#075985;
+  --emerald:#059669; --emerald-soft:#d1fae5;
+  --amber:#d97706; --amber-soft:#fef3c7;
+  --violet:#7c3aed; --violet-soft:#ede9fe;
+  --link:#cbd5e1;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#fafafa; --muted:#a3a3a3; --faint:#8b8b8b;
+    --bg:#0d1117; --panel:rgba(255,255,255,.035); --card:rgba(255,255,255,.055); --chipbg:rgba(255,255,255,.075);
+    --border:rgba(255,255,255,.11);
+    --accent:#00a6f4; --accent-soft:rgba(0,166,244,.16); --accent-text:#7dd3fc;
+    --emerald:#34d399; --emerald-soft:rgba(52,211,153,.14);
+    --amber:#fbbf24; --amber-soft:rgba(251,191,36,.13);
+    --violet:#a78bfa; --violet-soft:rgba(167,139,250,.16);
+    --link:rgba(255,255,255,.22);
+  }
+}
+text{font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;fill:var(--ink)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.mut{fill:var(--muted)} .fnt{fill:var(--faint)}
+.b{font-weight:600} .bb{font-weight:700}
+.f9{font-size:9.5px}.f95{font-size:10px}.f105{font-size:11px}.f115{font-size:12px}.f125{font-size:13px}.f17{font-size:17px}
+.bgc{fill:var(--bg)}
+.panel{fill:var(--panel);stroke:var(--border)}
+.card{fill:var(--card);stroke:var(--border)}
+.chip{fill:var(--card);stroke:var(--border)}
+.chipOn{fill:var(--chipbg);stroke:var(--border)}
+.acct{fill:var(--accent-text)} .vit{fill:var(--violet-text,#5b21b6)}
+.ico-acc{color:var(--accent)} .ico-em{color:var(--emerald)} .ico-mut{color:var(--muted)} .ico-vi{color:var(--violet)}
+.pill-vi{fill:var(--violet-soft)} .pill-sky{fill:var(--accent-soft)} .pill-em{fill:var(--emerald-soft)}
+.link{fill:none;stroke:var(--link);stroke-width:1.5;stroke-dasharray:5 5}
+.dot{fill:var(--accent);opacity:0} .dot-vi{fill:var(--violet)} .dot-em{fill:var(--emerald)}
+@keyframes a-dash{to{stroke-dashoffset:-40}}
+.flow{animation:a-dash 5s linear infinite}
+/* ---- 16s: connect → task → pull → work → reply → grants cameo → question card → answer → idle ---- */
+@keyframes a-conn{0%,2%{opacity:0}5%{opacity:1}96%{opacity:1}100%{opacity:0}}
+.conn{opacity:0;animation:a-conn 16s linear infinite}
+@keyframes a-m1{0%,12%{opacity:0;transform:translateY(5px)}15%{opacity:1;transform:translateY(0)}93%{opacity:1;transform:translateY(0)}98%,100%{opacity:0;transform:translateY(5px)}}
+.m1{animation:a-m1 16s linear infinite}
+@keyframes a-hl{0%,26%{opacity:0}29%{opacity:.9}36%,100%{opacity:0}}
+.m1hl{opacity:0;animation:a-hl 16s linear infinite}
+@keyframes a-term{0%,34%{opacity:0}37%{opacity:1}93%{opacity:1}97%,100%{opacity:0}}
+.term{animation:a-term 16s linear infinite}
+@keyframes a-tok{0%,40%{opacity:0}43%{opacity:1}93%{opacity:1}97%,100%{opacity:0}}
+.tok{animation:a-tok 16s linear infinite}
+@keyframes a-m2{0%,52%{opacity:0;transform:translateY(5px)}55%{opacity:1;transform:translateY(0)}93%{opacity:1;transform:translateY(0)}98%,100%{opacity:0;transform:translateY(5px)}}
+.m2{animation:a-m2 16s linear infinite}
+@keyframes a-gr{0%,56%{opacity:0}59%{opacity:.9}66%,100%{opacity:0}}
+.grglow{opacity:0;animation:a-gr 16s linear infinite}
+@keyframes a-qc{0%,64%{opacity:0;transform:translateY(5px)}67%{opacity:1;transform:translateY(0)}90%{opacity:1;transform:translateY(0)}94%,100%{opacity:0;transform:translateY(5px)}}
+.qcard{animation:a-qc 16s linear infinite}
+@keyframes a-click{0%,77%{opacity:0}79%{opacity:1}83%,100%{opacity:0}}
+.click{opacity:0;animation:a-click 16s linear infinite}
+@keyframes a-st1{0%,34%{opacity:1}36%{opacity:0}92%{opacity:0}95%,100%{opacity:1}}
+.st-idle{animation:a-st1 16s linear infinite}
+@keyframes a-st2{0%,34%{opacity:0}36%{opacity:1}66%{opacity:1}68%{opacity:0}84%{opacity:0}86%{opacity:1}92%{opacity:1}95%,100%{opacity:0}}
+.st-work{opacity:0;animation:a-st2 16s linear infinite}
+@keyframes a-st3{0%,66%{opacity:0}68%{opacity:1}84%{opacity:1}86%,100%{opacity:0}}
+.st-wait{opacity:0;animation:a-st3 16s linear infinite}
+@keyframes a-cur{0%,70%{opacity:0}72%{opacity:1}80%{opacity:1}82%,100%{opacity:0}}
+.curwin{opacity:0;animation:a-cur 16s linear infinite}
+@keyframes a-dip{0%,76.5%{transform:scale(1)}77.5%{transform:scale(.82)}78.5%,100%{transform:scale(1)}}
+.curclick{animation:a-dip 16s linear infinite;transform-box:fill-box;transform-origin:top left}
+@keyframes a-ws1{0%,2%{opacity:0}5%{opacity:1}96%{opacity:1}100%{opacity:0}}
+.ws1{animation:a-ws1 16s linear infinite}
+@keyframes a-ws2{0%,64%{opacity:0}68%{opacity:1}90%{opacity:1}94%,100%{opacity:0}}
+.ws2{animation:a-ws2 16s linear infinite}
+@media (prefers-reduced-motion: reduce){
+  *{animation:none !important}
+  .motion{display:none !important}
+}
+</style>
+<defs>
+  <g id="i-laptop" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"/><path d="M20.054 15.987H3.946"/></g>
+  <g id="i-user" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></g>
+  <g id="i-check" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M20 6 9 17l-5-5"/></g>
+  <g id="br-claude" fill="currentColor" fill-rule="evenodd" transform="translate(-12,-12)"><path d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z"/></g>
+  <g id="br-github" fill="currentColor" transform="scale(0.09375) translate(-128,-125)"><path d="M128.001 0C57.317 0 0 57.307 0 128.001c0 56.554 36.676 104.535 87.535 121.46c6.397 1.185 8.746-2.777 8.746-6.158c0-3.052-.12-13.135-.174-23.83c-35.61 7.742-43.124-15.103-43.124-15.103c-5.823-14.795-14.213-18.73-14.213-18.73c-11.613-7.944.876-7.78.876-7.78c12.853.902 19.621 13.19 19.621 13.19c11.417 19.568 29.945 13.911 37.249 10.64c1.149-8.272 4.466-13.92 8.127-17.116c-28.431-3.236-58.318-14.212-58.318-63.258c0-13.975 5-25.394 13.188-34.358c-1.329-3.224-5.71-16.242 1.24-33.874c0 0 10.749-3.44 35.21 13.121c10.21-2.836 21.16-4.258 32.038-4.307c10.878.049 21.837 1.47 32.066 4.307c24.431-16.56 35.165-13.12 35.165-13.12c6.967 17.63 2.584 30.65 1.255 33.873c8.207 8.964 13.173 20.383 13.173 34.358c0 49.163-29.944 59.988-58.447 63.157c4.591 3.972 8.682 11.762 8.682 23.704c0 17.126-.148 30.91-.148 35.126c0 3.407 2.304 7.398 8.792 6.14C219.37 232.5 256 184.537 256 128.002C256 57.307 198.691 0 128.001 0m-80.06 182.34c-.282.636-1.283.827-2.194.39c-.929-.417-1.45-1.284-1.15-1.922c.276-.655 1.279-.838 2.205-.399c.93.418 1.46 1.293 1.139 1.931m6.296 5.618c-.61.566-1.804.303-2.614-.591c-.837-.892-.994-2.086-.375-2.66c.63-.566 1.787-.301 2.626.591c.838.903 1 2.088.363 2.66m4.32 7.188c-.785.545-2.067.034-2.86-1.104c-.784-1.138-.784-2.503.017-3.05c.795-.547 2.058-.055 2.861 1.075c.782 1.157.782 2.522-.019 3.08m7.304 8.325c-.701.774-2.196.566-3.29-.49c-1.119-1.032-1.43-2.496-.726-3.27c.71-.776 2.213-.558 3.315.49c1.11 1.03 1.45 2.505.701 3.27m9.442 2.81c-.31 1.003-1.75 1.459-3.199 1.033c-1.448-.439-2.395-1.613-2.103-2.626c.301-1.01 1.747-1.484 3.207-1.028c1.446.436 2.396 1.602 2.095 2.622m10.744 1.193c.036 1.055-1.193 1.93-2.715 1.95c-1.53.034-2.769-.82-2.786-1.86c0-1.065 1.202-1.932 2.733-1.958c1.522-.03 2.768.818 2.768 1.868m10.555-.405c.182 1.03-.875 2.088-2.387 2.37c-1.485.271-2.861-.365-3.05-1.386c-.184-1.056.893-2.114 2.376-2.387c1.514-.263 2.868.356 3.061 1.403"/></g>
+  <g id="i-cursor" transform="rotate(20) translate(-3,-3)"><path d="M3.688 3.037a.497.497 0 0 0-.651.651l6.5 15.999a.501.501 0 0 0 .947-.062l1.569-6.083a2 2 0 0 1 1.448-1.479l6.124-1.579a.5.5 0 0 0 .063-.947z" style="fill:var(--ink);stroke:var(--card)" stroke-width="1"/><path d="M12.586 12.586 19 19" style="stroke:var(--ink)" stroke-width="2" stroke-linecap="round"/></g>
+</defs>
+
+<rect class="bgc" x="0" y="0" width="720" height="424" rx="16"/>
+
+<text x="28" y="38" class="f17 bb">Remote Agents</text>
+<text x="28" y="58" class="f115 mut">tu Claude Code se une al equipo — en tu máquina, con tus herramientas y tu modelo</text>
+
+<!-- ═══ conversation (left) ═══ -->
+<g>
+  <rect x="28" y="84" width="316" height="272" rx="14" class="card"/>
+  <text x="48" y="112" class="f125 b">Conversación</text>
+  <rect x="152" y="98" width="104" height="20" rx="10" class="chipOn"/><text x="204" y="112" text-anchor="middle" class="f9 mut">Workspace actual</text>
+
+  <!-- m1 · human task (persistent) -->
+  <g class="m1">
+    <circle cx="58" cy="146" r="12" class="pill-sky"/><g class="ico-acc"><use href="#i-user" transform="translate(58 146) scale(0.55)" stroke-width="2.2"/></g>
+    <text x="78" y="142" class="f105 b">Coordinador</text>
+    <text x="78" y="158" class="f105">@Claude Code — lanza las pruebas de la versión</text>
+    <rect x="78" y="166" width="118" height="18" rx="6" class="chipOn"/><rect x="78" y="166" width="118" height="18" rx="6" fill="none" stroke-width="1.6" style="stroke:var(--accent)" class="m1hl"/><text x="86" y="179" class="f9 mono mut">entrega → remoto</text>
+  </g>
+
+  <!-- m2 · agent reply -->
+  <g class="m2">
+    <circle cx="58" cy="212" r="12" class="pill-vi"/><g class="ico-vi"><use href="#br-claude" transform="translate(58 212) scale(0.5)"/></g>
+    <text x="78" y="208" class="f105 b">Claude Code</text>
+    <rect x="162" y="197" width="90" height="15" rx="7.5" class="pill-vi"/><text x="207" y="208" text-anchor="middle" class="f9" style="fill:var(--violet)">Remote Agent</text>
+    <text x="78" y="224" class="f105">Pruebas en verde — 142 superadas.</text>
+  </g>
+
+  <!-- question task card -->
+  <g class="qcard">
+    <rect x="48" y="244" width="276" height="66" rx="10" class="chipOn"/>
+    <text x="62" y="266" class="f105 b">Claude Code necesita información</text>
+    <text x="62" y="283" class="f95 mut">¿Desplegamos también en staging?</text>
+    <g>
+      <rect x="200" y="288" width="52" height="16" rx="8" class="pill-em"/><text x="226" y="300" text-anchor="middle" class="f9 b" style="fill:var(--emerald)">Sí</text>
+      <circle cx="226" cy="296" r="13" fill="none" stroke-width="2" style="stroke:var(--emerald)" class="click"/>
+      <rect x="260" y="288" width="46" height="16" rx="8" class="chip"/><text x="283" y="300" text-anchor="middle" class="f9 mut">Luego</text>
+    </g>
+  </g>
+
+  <text x="48" y="340" class="f9 fnt">modelo pull — Synapse no envía contenido no solicitado</text>
+</g>
+
+<!-- ═══ wire: outbound WSS + reverse-MCP pulls ═══ -->
+<g class="ws1"><path class="link flow" d="M456 200 C420 200, 400 190, 344 178"/></g>
+<text x="400" y="166" text-anchor="middle" class="f9 fnt">WSS · saliente</text>
+<g class="conn"><circle cx="456" cy="200" r="4" style="fill:var(--emerald)"/></g>
+<text x="400" y="238" text-anchor="middle" class="f9 mono mut">check_messages ↑</text>
+<text x="400" y="256" text-anchor="middle" class="f9 mono mut">send_message ↑</text>
+
+<!-- ═══ your machine (right) ═══ -->
+<g>
+  <rect x="456" y="84" width="236" height="188" rx="14" class="panel"/>
+  <g class="ico-mut"><use href="#i-laptop" transform="translate(478 108) scale(0.7)" stroke-width="2"/></g>
+  <text x="494" y="113" class="f125 b">Tu máquina</text>
+  <rect x="606" y="98" width="70" height="20" rx="10" class="chipOn"/>
+  <text x="641" y="112" text-anchor="middle" class="f9 mut st-idle">inactivo</text>
+  <text x="641" y="112" text-anchor="middle" class="f9 b acct st-work">trabajando</text>
+  <g class="st-wait"><text x="641" y="112" text-anchor="middle" class="f9 b" style="fill:var(--amber)">esperando</text></g>
+
+  <g style="color:var(--ink)"><use href="#br-claude" transform="translate(487 146) scale(0.75)"/></g>
+  <text x="504" y="151" class="f115 b">Claude Code</text>
+  <text x="472" y="172" class="f95 mut">runtime propio · cuenta propia</text>
+
+  <rect x="472" y="184" width="204" height="42" rx="8" fill="#111827"/>
+  <text x="482" y="201" class="f95 mono" style="fill:#94a3b8">$</text>
+  <g class="term"><text x="492" y="201" class="f95 mono" style="fill:#e5e7eb">npm test</text></g>
+  <g class="tok"><text x="482" y="218" class="f95 mono" style="fill:#34d399">✓ 142 passed</text></g>
+
+  <text x="476" y="252" class="f9 fnt">la respuesta avisa al agente para reanudar</text>
+</g>
+
+<!-- ═══ granted tools shelf (integration cameo) ═══ -->
+<g>
+  <rect x="456" y="292" width="236" height="90" rx="12" class="panel"/>
+  <text x="472" y="316" class="f105 b">Herramientas autorizadas</text>
+  <g>
+    <rect x="472" y="328" width="96" height="24" rx="8" class="chip"/>
+    <rect x="472" y="328" width="96" height="24" rx="8" fill="none" stroke-width="1.6" style="stroke:var(--accent)" class="grglow"/>
+    <g style="color:var(--ink)"><use href="#br-github" transform="translate(487 340) scale(0.5)"/></g>
+    <text x="498" y="344" class="f95">GitHub</text>
+  </g>
+  <g>
+    <rect x="576" y="328" width="102" height="24" rx="8" class="chip"/>
+    <rect x="576" y="328" width="102" height="24" rx="8" fill="none" stroke-width="1.6" style="stroke:var(--accent)" class="grglow"/>
+    <text x="586" y="344" class="f9 mono mut">[runtime] mac</text>
+  </g>
+  <text x="472" y="370" class="f9 fnt">reverse MCP · misma puerta de autorización</text>
+</g>
+
+<!-- footer caption -->
+<text x="186" y="406" text-anchor="middle" class="f9 fnt">emparejamiento: una clave por máquina · solo conexión saliente</text>
+
+<g class="ws2"><path class="link flow" d="M344 250 C400 252, 420 220, 456 210"/></g>
+<g class="curwin motion">
+  <g class="curclick"><use href="#i-cursor"/></g>
+  <animateMotion dur="16s" repeatCount="indefinite" calcMode="spline" keySplines="0 0 1 1;0.3 0 0.2 1;0 0 1 1" keyPoints="0;0;1;1" keyTimes="0;0.71;0.76;1" path="M320 350 C290 345, 255 320, 228 297"/>
+</g>
+
+<!-- ═══ traveling pulses ═══ -->
+<g class="motion">
+  <!-- notify tag rides down (2.9s) -->
+  <circle r="3.5" class="dot">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.18;0.235;1" path="M344 178 C400 190, 420 200, 456 200"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.182;0.188;0.228;0.235;1"/>
+  </circle>
+  <!-- check_messages pull up (4.2s) -->
+  <circle r="3.5" class="dot dot-vi">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.26;0.315;1" path="M456 200 C420 200, 400 190, 344 178"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.262;0.268;0.308;0.315;1"/>
+  </circle>
+  <!-- send_message up (7.8s) -->
+  <circle r="3.5" class="dot dot-vi">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.488;0.543;1" path="M456 200 C420 200, 400 190, 344 178"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.49;0.496;0.536;0.543;1"/>
+  </circle>
+  <!-- answer rides down after click (13.1s) -->
+  <circle r="3.5" class="dot dot-em">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.82;0.87;1" path="M344 250 C400 252, 420 220, 456 210"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.822;0.828;0.863;0.87;1"/>
+  </circle>
+</g>
+</svg>

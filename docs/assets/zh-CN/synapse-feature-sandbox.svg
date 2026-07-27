@@ -1,0 +1,254 @@
+<svg xmlns="http://www.w3.org/2000/svg" lang="zh-CN" xml:lang="zh-CN" viewBox="0 0 720 440" role="img" aria-labelledby="fs-title fs-desc">
+<title id="fs-title">Actor 沙箱</title>
+<desc id="fs-desc">回合开始时，系统根据配置的沙箱后端（本机进程、Docker 容器，或 E2B 兼容的 CubeSandbox 虚拟机）拉起一个隔离沙箱。启动时探测可用工具，挂载点从内容寻址快照恢复，回合结束时提交工作，session 空闲时销毁沙箱——已提交的文件留存，供下一个 Actor 继续使用。</desc>
+<style>
+:root{
+  --ink:#0a0a0a; --muted:#737373; --faint:#767676;
+  --bg:#ffffff; --panel:#fafafa; --card:#ffffff; --chipbg:#f5f5f5;
+  --border:#e5e5e5;
+  --accent:#0084d1; --accent-soft:#e0f2fe; --accent-text:#075985;
+  --sky:#00a6f4;
+  --emerald:#059669; --emerald-soft:#d1fae5;
+  --amber:#d97706; --amber-soft:#fef3c7;
+  --violet:#7c3aed; --violet-soft:#ede9fe;
+  --link:#cbd5e1;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#fafafa; --muted:#a3a3a3; --faint:#8b8b8b;
+    --bg:#0d1117; --panel:rgba(255,255,255,.035); --card:rgba(255,255,255,.055); --chipbg:rgba(255,255,255,.075);
+    --border:rgba(255,255,255,.11);
+    --accent:#00a6f4; --accent-soft:rgba(0,166,244,.16); --accent-text:#7dd3fc;
+    --sky:#38bdf8;
+    --emerald:#34d399; --emerald-soft:rgba(52,211,153,.14);
+    --amber:#fbbf24; --amber-soft:rgba(251,191,36,.13);
+    --violet:#a78bfa; --violet-soft:rgba(167,139,250,.16);
+    --link:rgba(255,255,255,.22);
+  }
+}
+text{font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;fill:var(--ink)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.mut{fill:var(--muted)} .fnt{fill:var(--faint)}
+.b{font-weight:600} .bb{font-weight:700}
+.f9{font-size:9.5px}.f95{font-size:10px}.f105{font-size:11px}.f11{font-size:11.5px}.f115{font-size:12px}.f125{font-size:13px}.f13{font-size:13.5px}.f17{font-size:17px}
+.bgc{fill:var(--bg)}
+.panel{fill:var(--panel);stroke:var(--border)}
+.card{fill:var(--card);stroke:var(--border)}
+.chip{fill:var(--card);stroke:var(--border)}
+.chipOn{fill:var(--chipbg);stroke:var(--border)}
+.acct{fill:var(--accent-text)}
+.ico-acc{color:var(--accent)} .ico-em{color:var(--emerald)} .ico-mut{color:var(--muted)} .ico-am{color:var(--amber)}
+.link{fill:none;stroke:var(--link);stroke-width:1.5;stroke-dasharray:5 5}
+.dot{fill:var(--accent);opacity:0} .dot-em{fill:var(--emerald)}
+@keyframes a-dash{to{stroke-dashoffset:-40}}
+.flow{animation:a-dash 5s linear infinite}
+/* ---- 16s loop: provision → adapter → hydrate → probe → work → commit → teardown → handoff ---- */
+@keyframes a-box{0%{opacity:0;transform:scale(.98)}8%{opacity:1;transform:scale(1)}72%{opacity:1;transform:scale(1)}80%{opacity:.13}94%{opacity:.13}100%{opacity:0}}
+.sbx{animation:a-box 16s linear infinite;transform-box:fill-box;transform-origin:center}
+@keyframes a-si{0%,5%{opacity:1}7%{opacity:0}71%{opacity:0}74%,100%{opacity:1}}
+.st-idle{animation:a-si 16s linear infinite}
+@keyframes a-sr{0%,5%{opacity:0}7%{opacity:1}71%{opacity:1}74%,100%{opacity:0}}
+.st-run{opacity:0;animation:a-sr 16s linear infinite}
+@keyframes a-adp{0%,9%{opacity:0}12%{opacity:1}18%{opacity:1}22%,100%{opacity:0}}
+.adpulse{opacity:0;animation:a-adp 16s linear infinite}
+@keyframes a-mg{0%,22%{opacity:0}26%{opacity:.9}32%,100%{opacity:0}}
+.mglow{opacity:0;animation:a-mg 16s linear infinite}
+.mglow2{animation-delay:.5s}
+@keyframes a-t1{0%,29%{opacity:0}32%{opacity:1}100%{opacity:1}}
+.tick1{animation:a-t1 16s linear infinite}
+@keyframes a-t2{0%,32%{opacity:0}35%{opacity:1}100%{opacity:1}}
+.tick2{animation:a-t2 16s linear infinite}
+@keyframes a-t3{0%,35%{opacity:0}38%{opacity:1}100%{opacity:1}}
+.tick3{animation:a-t3 16s linear infinite}
+@keyframes a-l1{0%,39%{opacity:0}42%{opacity:1}100%{opacity:1}}
+.line1{animation:a-l1 16s linear infinite}
+@keyframes a-l2{0%,53%{opacity:0}56%{opacity:1}100%{opacity:1}}
+.line2{animation:a-l2 16s linear infinite}
+@keyframes a-cw{0%,9%{opacity:0}11%{opacity:1}39%{opacity:1}41%,100%{opacity:0}}
+.caretwin{opacity:0;animation:a-cw 16s linear infinite}
+@keyframes a-ck{0%,49%{opacity:1}50%,100%{opacity:0}}
+.caret{animation:a-ck 1s steps(1) infinite}
+@keyframes a-fc{0%,56%{opacity:0;transform:translateY(4px)}59%{opacity:1;transform:translateY(0)}100%{opacity:1;transform:translateY(0)}}
+.filechip{animation:a-fc 16s linear infinite}
+@keyframes a-n4{0%,66%{opacity:0}70%{opacity:1}96%{opacity:1}100%{opacity:0}}
+.node4{opacity:0;animation:a-n4 16s linear infinite}
+@keyframes a-head{0%,66%{transform:translateY(0)}71%{transform:translateY(56px)}96%{transform:translateY(56px)}100%{transform:translateY(0)}}
+.headptr{animation:a-head 16s linear infinite}
+@keyframes a-rvf{0%,90%{opacity:0;transform:translateY(4px)}94%{opacity:1;transform:translateY(0)}97%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(4px)}}
+.rvfile{opacity:0;animation:a-rvf 16s linear infinite}
+@keyframes a-rvg{0%,88%{opacity:0}91%{opacity:.8}96%,100%{opacity:0}}
+.rvglow{opacity:0;animation:a-rvg 16s linear infinite}
+@keyframes a-cap{0%,4%{opacity:0}8%{opacity:1}70%{opacity:1}76%,100%{opacity:0}}
+.cap-run{opacity:0;animation:a-cap 16s linear infinite}
+@keyframes a-cap2{0%,76%{opacity:0}81%{opacity:1}96%{opacity:1}100%{opacity:0}}
+.cap-done{opacity:0;animation:a-cap2 16s linear infinite}
+@keyframes a-ws1{0%,7%{opacity:0}10%{opacity:1}74%{opacity:1}79%,100%{opacity:0}}
+.ws1{animation:a-ws1 16s linear infinite}
+@keyframes a-ws2{0%,15%{opacity:0}18%{opacity:1}74%{opacity:1}79%,100%{opacity:0}}
+.ws2{animation:a-ws2 16s linear infinite}
+@keyframes a-ws3{0%,82%{opacity:0}85%{opacity:1}93%{opacity:1}97%,100%{opacity:0}}
+.ws3{animation:a-ws3 16s linear infinite}
+@media (prefers-reduced-motion: reduce){
+  *{animation:none !important}
+  .motion{display:none !important}
+}
+</style>
+<defs>
+  <g id="i-bot" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></g>
+  <g id="i-box" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></g>
+  <g id="i-lock" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></g>
+  <g id="i-folder" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></g>
+  <g id="i-file" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></g>
+  <g id="i-check" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M20 6 9 17l-5-5"/></g>
+  <g id="i-db" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></g>
+</defs>
+
+<rect class="bgc" x="0" y="0" width="720" height="440" rx="16"/>
+
+<!-- header -->
+<text x="28" y="38" class="f17 bb">Actor 沙箱</text>
+<text x="28" y="58" class="f115 mut">以 session 为生命周期的工作台——沙箱按需创建并销毁，成功提交的文件持续保留</text>
+
+<!-- ═══ actor (top-left) ═══ -->
+<g>
+  <rect x="28" y="84" width="152" height="88" rx="12" class="panel"/>
+  <circle cx="56" cy="116" r="14" style="fill:var(--accent-soft)"/>
+  <g class="ico-acc"><use href="#i-bot" transform="translate(56 116) scale(0.66)" stroke-width="2"/></g>
+  <text x="78" y="112" class="f125 b">分析师</text>
+  <text x="78" y="129" class="f95 mut">Actor · session</text>
+  <rect x="44" y="142" width="80" height="21" rx="10.5" class="chipOn"/>
+  <text x="84" y="157" text-anchor="middle" class="f95 mut st-idle">空闲</text>
+  <text x="84" y="157" text-anchor="middle" class="f95 b acct st-run">运行中</text>
+</g>
+
+<!-- ═══ reviewer (bottom-left) ═══ -->
+<g>
+  <rect x="28" y="330" width="152" height="84" rx="12" class="panel"/>
+  <circle cx="54" cy="358" r="13" style="fill:var(--violet-soft)"/>
+  <circle cx="54" cy="358" r="13" fill="none" stroke-width="2" style="stroke:var(--violet)" class="rvglow"/>
+  <g style="color:var(--violet)"><use href="#i-bot" transform="translate(54 358) scale(0.6)" stroke-width="2"/></g>
+  <text x="74" y="355" class="f115 b">审校</text>
+  <text x="74" y="371" class="f95 mut">另一个 Actor</text>
+  <g class="rvfile">
+    <rect x="44" y="382" width="112" height="22" rx="7" class="chipOn"/>
+    <g class="ico-acc"><use href="#i-file" transform="translate(58 393) scale(0.5)" stroke-width="2.2"/></g>
+    <text x="68" y="397" class="f95">report.md</text>
+  </g>
+</g>
+
+<!-- link: actor → sandbox -->
+<g class="ws1"><path class="link flow" d="M180 128 C192 128, 192 140, 200 142"/></g>
+
+<!-- ═══ sandbox (center, lifecycle-animated) ═══ -->
+<g class="sbx">
+  <rect x="200" y="84" width="312" height="238" rx="14" class="card" stroke-dasharray="7 5" style="stroke:var(--accent)" stroke-opacity=".55"/>
+  <g class="ico-acc"><use href="#i-box" transform="translate(224 108) scale(0.7)" stroke-width="2"/></g>
+  <text x="240" y="113" class="f13 b">沙箱</text>
+  <g class="ico-em"><use href="#i-lock" transform="translate(416 106) scale(0.45)" stroke-width="2.4"/></g>
+  <text x="426" y="110" class="f9 mut">已预授权</text>
+
+  <!-- baked toolbox, probed at boot -->
+  <g class="f105">
+    <rect x="222" y="126" width="76" height="26" rx="8" class="chipOn"/><text x="234" y="143" class="mut">Python</text>
+    <g class="ico-em tick1"><use href="#i-check" transform="translate(284 139) scale(0.42)" stroke-width="3"/></g>
+    <rect x="306" y="126" width="74" height="26" rx="8" class="chipOn"/><text x="318" y="143" class="mut">ffmpeg</text>
+    <g class="ico-em tick2"><use href="#i-check" transform="translate(366 139) scale(0.42)" stroke-width="3"/></g>
+    <rect x="388" y="126" width="96" height="26" rx="8" class="chipOn"/><text x="400" y="143" class="mut">Chromium</text>
+    <g class="ico-em tick3"><use href="#i-check" transform="translate(470 139) scale(0.42)" stroke-width="3"/></g>
+  </g>
+  <text x="493" y="143" class="f9 fnt">…</text>
+
+  <!-- confined shell -->
+  <rect x="222" y="164" width="268" height="60" rx="8" fill="#111827"/>
+  <text x="234" y="188" class="f105 mono" style="fill:#94a3b8">$</text>
+  <text x="482" y="180" text-anchor="end" class="f9" style="fill:#64748b">隔离运行 · 网络按策略管控</text>
+  <g class="line1">
+    <text x="247" y="188" class="f105 mono" style="fill:#e5e7eb">python build_report.py</text>
+  </g>
+  <g class="caretwin motion"><rect x="248" y="178" width="7" height="12" style="fill:#e5e7eb" class="caret"/></g>
+  <g class="line2">
+    <text x="234" y="208" class="f105 mono" style="fill:#34d399">report.md 已写入 ✓</text>
+  </g>
+
+  <!-- mounts hydrated from snapshots -->
+  <text x="222" y="248" class="f9 fnt">挂载</text>
+  <g>
+    <rect x="222" y="256" width="130" height="26" rx="8" class="chipOn"/>
+    <rect x="222" y="256" width="130" height="26" rx="8" fill="none" stroke-width="1.6" style="stroke:var(--accent)" class="mglow"/>
+    <g class="ico-mut"><use href="#i-folder" transform="translate(238 269) scale(0.5)" stroke-width="2.2"/></g>
+    <text x="250" y="273" class="f105 mono mut">/conversation</text>
+  </g>
+  <g>
+    <rect x="360" y="256" width="86" height="26" rx="8" class="chipOn"/>
+    <rect x="360" y="256" width="86" height="26" rx="8" fill="none" stroke-width="1.6" style="stroke:var(--accent)" class="mglow mglow2"/>
+    <g class="ico-mut"><use href="#i-folder" transform="translate(376 269) scale(0.5)" stroke-width="2.2"/></g>
+    <text x="388" y="273" class="f105 mono mut">/actor</text>
+  </g>
+  <g class="filechip">
+    <rect x="222" y="290" width="112" height="24" rx="7" class="chip"/>
+    <g class="ico-acc"><use href="#i-file" transform="translate(236 302) scale(0.5)" stroke-width="2.2"/></g>
+    <text x="246" y="306" class="f95">report.md</text>
+    <text x="340" y="306" class="f9 fnt">新</text>
+  </g>
+</g>
+
+<!-- captions under sandbox -->
+<text x="356" y="336" text-anchor="middle" class="f95 mut cap-run">回合开始 → 拉起 · 恢复 · 探测 · 工作 · 提交</text>
+<text x="356" y="336" text-anchor="middle" class="f95 mut cap-done">session 空闲 → 沙箱销毁——已提交的文件仍保留</text>
+
+<!-- ═══ adapter dial (deployment-level, persistent) ═══ -->
+<g>
+  <text x="200" y="360" class="f9 fnt mono">SANDBOX_PROVIDER——每套部署选定其一</text>
+  <g class="f95">
+    <rect x="200" y="368" width="112" height="26" rx="8" class="chip"/><circle cx="214" cy="381" r="3.5" fill="none" stroke-width="1.5" style="stroke:var(--faint)"/><text x="224" y="385" class="fnt">本机进程</text>
+    <g><rect x="320" y="368" width="76" height="26" rx="8" class="chip"/><rect x="320" y="368" width="76" height="26" rx="8" fill="none" stroke-width="1.8" style="stroke:var(--accent)" class="adpulse"/><circle cx="334" cy="381" r="3.5" style="fill:var(--accent)"/><text x="344" y="385" class="b acct">Docker</text></g>
+    <rect x="404" y="368" width="170" height="26" rx="8" class="chip"/><circle cx="418" cy="381" r="3.5" fill="none" stroke-width="1.5" style="stroke:var(--faint)"/><text x="428" y="385" class="fnt">CubeSandbox 虚拟机 · E2B</text>
+  </g>
+</g>
+
+<!-- ═══ snapshot DAG (right, persistent) ═══ -->
+<g>
+  <text x="620" y="96" text-anchor="middle" class="f105 b">快照</text>
+  <text x="620" y="109" text-anchor="middle" class="f9 fnt">内容寻址 · 不可变</text>
+  <text x="620" y="122" text-anchor="middle" class="f9 fnt">成功提交的更改会持久保留</text>
+  <line x1="620" y1="153" x2="620" y2="183" style="stroke:var(--border)" stroke-width="1.5"/>
+  <line x1="620" y1="209" x2="620" y2="239" style="stroke:var(--border)" stroke-width="1.5"/>
+  <circle cx="620" cy="140" r="13" class="chipOn"/><g class="ico-mut"><use href="#i-db" transform="translate(620 140) scale(0.5)" stroke-width="2.2"/></g>
+  <circle cx="620" cy="196" r="13" class="chipOn"/><g class="ico-mut"><use href="#i-db" transform="translate(620 196) scale(0.5)" stroke-width="2.2"/></g>
+  <circle cx="620" cy="252" r="13" class="chipOn"/><g class="ico-mut"><use href="#i-db" transform="translate(620 252) scale(0.5)" stroke-width="2.2"/></g>
+  <g class="node4">
+    <line x1="620" y1="265" x2="620" y2="295" style="stroke:var(--accent)" stroke-opacity=".5" stroke-width="1.5"/>
+    <circle cx="620" cy="308" r="13" style="fill:var(--accent-soft)"/>
+    <g class="ico-acc"><use href="#i-db" transform="translate(620 308) scale(0.5)" stroke-width="2.2"/></g>
+    <text x="644" y="312" class="f9 acct">提交</text>
+  </g>
+  <g class="headptr"><path d="M597 252 l-9 -6 v12 z" style="fill:var(--accent)"/></g>
+  </g>
+
+<!-- link: DAG → sandbox mounts (hydration) -->
+<g class="ws2"><path class="link flow" d="M606 192 C556 182, 540 222, 512 236"/></g>
+<g class="ws3"><path class="link flow" d="M620 321 C620 392, 540 416, 440 418 C330 420, 240 408, 182 380"/></g>
+
+<!-- ═══ traveling pulses ═══ -->
+<g class="motion">
+  <!-- hydrate: snapshot → /conversation, /actor (3.0-4.5s) -->
+  <circle r="3.5" class="dot">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.188;0.245;1" path="M606 192 C556 182, 540 222, 512 236 C470 262, 420 269, 356 269"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.19;0.196;0.238;0.245;1"/>
+  </circle>
+  <circle r="3.5" class="dot">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.213;0.27;1" path="M606 192 C556 182, 540 222, 512 236 C480 254, 470 269, 450 269"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.215;0.221;0.263;0.27;1"/>
+  </circle>
+  <!-- commit: mount → new snapshot node (9.5-10.6s) -->
+  <circle r="3.5" class="dot dot-em">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.594;0.662;1" path="M340 302 C480 302, 560 308, 605 308"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.596;0.602;0.655;0.662;1"/>
+  </circle>
+  <!-- handoff: head snapshot → Reviewer (13.5-14.8s) -->
+  <circle r="3.5" class="dot">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.845;0.925;1" path="M620 321 C620 392, 540 416, 440 418 C330 420, 240 408, 182 380"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.847;0.853;0.918;0.925;1"/>
+  </circle>
+</g>
+</svg>

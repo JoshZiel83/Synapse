@@ -1,0 +1,177 @@
+<svg xmlns="http://www.w3.org/2000/svg" lang="en" xml:lang="en" viewBox="0 0 720 440" role="img" aria-labelledby="fm-title fm-desc">
+<title id="fm-title">Shared memory</title>
+<desc id="fm-desc">An actor saves a fact in one conversation. Days later, in a different conversation, recall automatically surfaces it into the context — memory spaces are permissioned, recall combines lexical search with vector search when embeddings are configured, and long histories are archived verbatim, never summarized away.</desc>
+<style>
+:root{
+  --ink:#0a0a0a; --muted:#737373; --faint:#767676;
+  --bg:#ffffff; --panel:#fafafa; --card:#ffffff; --chipbg:#f5f5f5;
+  --border:#e5e5e5;
+  --accent:#0084d1; --accent-soft:#e0f2fe; --accent-text:#075985;
+  --emerald:#059669; --emerald-soft:#d1fae5;
+  --amber:#d97706; --amber-soft:#fef3c7;
+  --violet:#7c3aed; --violet-soft:#ede9fe;
+  --link:#cbd5e1;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#fafafa; --muted:#a3a3a3; --faint:#8b8b8b;
+    --bg:#0d1117; --panel:rgba(255,255,255,.035); --card:rgba(255,255,255,.055); --chipbg:rgba(255,255,255,.075);
+    --border:rgba(255,255,255,.11);
+    --accent:#00a6f4; --accent-soft:rgba(0,166,244,.16); --accent-text:#7dd3fc;
+    --emerald:#34d399; --emerald-soft:rgba(52,211,153,.14);
+    --amber:#fbbf24; --amber-soft:rgba(251,191,36,.13);
+    --violet:#a78bfa; --violet-soft:rgba(167,139,250,.16);
+    --link:rgba(255,255,255,.22);
+  }
+}
+text{font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;fill:var(--ink)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.mut{fill:var(--muted)} .fnt{fill:var(--faint)}
+.b{font-weight:600} .bb{font-weight:700}
+.f9{font-size:9.5px}.f95{font-size:10px}.f105{font-size:11px}.f115{font-size:12px}.f125{font-size:13px}.f17{font-size:17px}
+.bgc{fill:var(--bg)}
+.panel{fill:var(--panel);stroke:var(--border)}
+.card{fill:var(--card);stroke:var(--border)}
+.chip{fill:var(--card);stroke:var(--border)}
+.chipOn{fill:var(--chipbg);stroke:var(--border)}
+.acct{fill:var(--accent-text)}
+.ico-acc{color:var(--accent)} .ico-em{color:var(--emerald)} .ico-mut{color:var(--muted)} .ico-am{color:var(--amber)}
+.pill-sky{fill:var(--accent-soft)}
+.link{fill:none;stroke:var(--link);stroke-width:1.5;stroke-dasharray:5 5}
+.dot{fill:var(--accent);opacity:0} .dot-em{fill:var(--emerald)}
+@keyframes a-dash{to{stroke-dashoffset:-40}}
+.flow{animation:a-dash 5s linear infinite}
+/* ---- 16s: save in A → lands in space → days later turn starts in B → recall fuses → context block → reply uses it → archive cameo ---- */
+@keyframes a-pill{0%,6%{opacity:0;transform:translateY(4px)}9%{opacity:1;transform:translateY(0)}94%{opacity:1;transform:translateY(0)}98%,100%{opacity:0;transform:translateY(4px)}}
+.savepill{animation:a-pill 16s linear infinite}
+@keyframes a-mem{0%,16%{opacity:0;transform:translateY(4px)}20%{opacity:1;transform:translateY(0)}96%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(4px)}}
+.memchip{animation:a-mem 16s linear infinite}
+@keyframes a-turn{0%,34%{opacity:0}38%{opacity:1}94%{opacity:1}98%,100%{opacity:0}}
+.turnb{opacity:0;animation:a-turn 16s linear infinite}
+@keyframes a-beam{0%,42%{opacity:0}46%{opacity:.9}58%{opacity:.9}62%,100%{opacity:0}}
+.beam{opacity:0;animation:a-beam 16s linear infinite}
+@keyframes a-ctx{0%,52%{opacity:0;transform:translateY(4px)}56%{opacity:1;transform:translateY(0)}94%{opacity:1;transform:translateY(0)}98%,100%{opacity:0;transform:translateY(4px)}}
+.ctx{animation:a-ctx 16s linear infinite}
+@keyframes a-m2{0%,64%{opacity:0;transform:translateY(4px)}68%{opacity:1;transform:translateY(0)}94%{opacity:1;transform:translateY(0)}98%,100%{opacity:0;transform:translateY(4px)}}
+.m2{animation:a-m2 16s linear infinite}
+@keyframes a-arch{0%,76%{opacity:0}80%{opacity:.95}90%{opacity:.95}94%,100%{opacity:0}}
+.archglow{opacity:0;animation:a-arch 16s linear infinite}
+@keyframes a-lockp{0%,46%{opacity:.55}50%{opacity:1}56%{opacity:.55}100%{opacity:.55}}
+.lockp{animation:a-lockp 16s linear infinite}
+@media (prefers-reduced-motion: reduce){
+  *{animation:none !important}
+  .motion{display:none !important}
+}
+</style>
+<defs>
+  <g id="i-bot" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></g>
+  <g id="i-brain" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M12 18V5"/><path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"/><path d="M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5"/><path d="M17.997 5.125a4 4 0 0 1 2.526 5.77"/><path d="M18 18a4 4 0 0 0 2-7.464"/><path d="M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517"/><path d="M6 18a4 4 0 0 1-2-7.464"/><path d="M6.003 5.125a4 4 0 0 0-2.526 5.77"/></g>
+  <g id="i-lock" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></g>
+  <g id="i-search" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g>
+  <g id="i-archive" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></g>
+</defs>
+
+<rect class="bgc" x="0" y="0" width="720" height="440" rx="16"/>
+
+<text x="28" y="38" class="f17 bb">Shared memory</text>
+<text x="28" y="58" class="f115 mut">remember once, recall across authorized conversations — history is archived verbatim</text>
+
+<!-- ═══ conversation A (left top) ═══ -->
+<g>
+  <rect x="28" y="84" width="280" height="120" rx="14" class="card"/>
+  <text x="48" y="110" class="f115 b">Conversation A</text>
+  <text x="168" y="110" class="f9 fnt">Monday</text>
+  <circle cx="58" cy="138" r="12" class="pill-sky"/><g class="ico-acc"><use href="#i-bot" transform="translate(58 138) scale(0.55)" stroke-width="2.2"/></g>
+  <text x="78" y="134" class="f105 b">Analyst</text>
+  <text x="78" y="150" class="f105">Client prefers the blue theme — noted.</text>
+  <g class="savepill">
+    <rect x="78" y="160" width="212" height="20" rx="6" class="chipOn"/>
+    <g class="ico-am"><use href="#i-brain" transform="translate(92 170) scale(0.42)" stroke-width="2.4"/></g>
+    <text x="102" y="174" class="f9 mono mut">create_memory("client: blue")</text>
+  </g>
+</g>
+
+<!-- ═══ memory spaces (right) ═══ -->
+<g>
+  <rect x="420" y="84" width="272" height="176" rx="14" class="panel"/>
+  <g class="ico-acc"><use href="#i-brain" transform="translate(444 108) scale(0.62)" stroke-width="2"/></g>
+  <text x="460" y="113" class="f115 b">Memory spaces</text>
+  <text x="646" y="113" text-anchor="end" class="f9 fnt">permissioned</text>
+
+  <rect x="440" y="126" width="232" height="54" rx="10" class="card"/>
+  <text x="454" y="144" class="f95 b">workspace · shared</text>
+  <g class="memchip">
+    <rect x="454" y="152" width="122" height="20" rx="6" style="fill:var(--accent-soft)"/>
+    <text x="463" y="166" class="f9 acct">client: blue theme</text>
+  </g>
+  <rect x="440" y="188" width="112" height="28" rx="8" class="card"/>
+  <text x="452" y="206" class="f9 mut">actor-private</text>
+  <g class="lockp">
+    <rect x="560" y="188" width="112" height="28" rx="8" class="chipOn"/>
+    <g class="ico-mut"><use href="#i-lock" transform="translate(574 202) scale(0.42)" stroke-width="2.4"/></g>
+    <text x="584" y="206" class="f9 fnt">finance · no grant</text>
+  </g>
+  <text x="440" y="240" class="f9 fnt">recall only searches spaces granted to this actor</text>
+</g>
+
+<!-- ═══ conversation B (left bottom) ═══ -->
+<g>
+  <rect x="28" y="232" width="280" height="182" rx="14" class="card"/>
+  <text x="48" y="258" class="f115 b">Conversation B</text>
+  <text x="170" y="258" class="f9 fnt">Thursday · new thread</text>
+  <g class="turnb">
+    <text x="48" y="282" class="f95 mut">Can you refresh the client landing page?</text>
+  </g>
+  <!-- recall context block -->
+  <g class="ctx">
+    <rect x="48" y="294" width="240" height="40" rx="8" class="chipOn"/>
+    <g class="ico-acc"><use href="#i-search" transform="translate(64 314) scale(0.45)" stroke-width="2.4"/></g>
+    <text x="76" y="310" class="f9 mono mut">&lt;memory_recall&gt;</text>
+    <rect x="76" y="316" width="110" height="13" rx="4" style="fill:var(--accent-soft)"/>
+    <text x="82" y="326" class="f9 acct">client: blue theme</text>
+  </g>
+  <g class="m2">
+    <circle cx="58" cy="360" r="12" class="pill-sky"/><g class="ico-acc"><use href="#i-bot" transform="translate(58 360) scale(0.55)" stroke-width="2.2"/></g>
+    <text x="78" y="356" class="f105 b">Analyst</text>
+    <text x="78" y="372" class="f105">Going with the blue theme the client prefers.</text>
+  </g>
+  <text x="48" y="400" class="f9 fnt">lexical recall every turn · vector when configured</text>
+</g>
+
+<!-- ═══ archive cameo (bottom right) ═══ -->
+<g>
+  <rect x="420" y="286" width="272" height="128" rx="14" class="panel"/>
+  <g class="ico-mut"><use href="#i-archive" transform="translate(444 310) scale(0.6)" stroke-width="2"/></g>
+  <text x="460" y="315" class="f115 b">Context archive</text>
+  <g>
+    <rect x="440" y="330" width="34" height="30" rx="7" class="chipOn"/><rect x="447" y="339" width="20" height="3" rx="1.5" style="fill:var(--muted)" opacity=".5"/><rect x="447" y="346" width="13" height="3" rx="1.5" style="fill:var(--muted)" opacity=".35"/>
+    <rect x="482" y="330" width="34" height="30" rx="7" class="chipOn"/><rect x="489" y="339" width="20" height="3" rx="1.5" style="fill:var(--muted)" opacity=".5"/><rect x="489" y="346" width="13" height="3" rx="1.5" style="fill:var(--muted)" opacity=".35"/>
+    <rect x="482" y="330" width="34" height="30" rx="7" style="fill:var(--accent-soft)" class="archglow"/>
+    <rect x="524" y="330" width="34" height="30" rx="7" class="chipOn"/><rect x="531" y="339" width="20" height="3" rx="1.5" style="fill:var(--muted)" opacity=".5"/><rect x="531" y="346" width="13" height="3" rx="1.5" style="fill:var(--muted)" opacity=".35"/>
+    <rect x="566" y="330" width="42" height="30" rx="7" style="fill:var(--accent-soft)"/>
+    <rect x="572" y="342" width="30" height="7" rx="3.5" style="fill:var(--accent)"/>
+    <text x="622" y="349" class="f9 fnt">live tail</text>
+  </g>
+  <text x="440" y="384" class="f9 mut">older context is archived verbatim</text>
+  <text x="440" y="398" class="f9 mut">rather than replaced by summaries</text>
+</g>
+
+<!-- wires -->
+<path class="link flow" d="M308 152 C360 152, 380 140, 420 138"/>
+<path class="link flow" d="M420 166 C380 170, 350 240, 308 260"/>
+<g class="beam"><path class="link" style="stroke:var(--accent);stroke-opacity:.7" d="M420 166 C380 170, 350 240, 308 260"/></g>
+
+<!-- ═══ traveling pulses ═══ -->
+<g class="motion">
+  <!-- save → space (2.2s) -->
+  <circle r="3.5" class="dot">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.138;0.19;1" path="M308 152 C360 152, 380 140, 420 138 L448 158"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.14;0.146;0.183;0.19;1"/>
+  </circle>
+  <!-- recall → context block (7.4s) -->
+  <circle r="3.5" class="dot dot-em">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.462;0.52;1" path="M456 162 L420 166 C380 170, 350 240, 308 260 L288 300"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.464;0.47;0.513;0.52;1"/>
+  </circle>
+</g>
+</svg>

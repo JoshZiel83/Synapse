@@ -1,0 +1,207 @@
+<svg xmlns="http://www.w3.org/2000/svg" lang="zh-CN" xml:lang="zh-CN" viewBox="0 0 720 440" role="img" aria-labelledby="fa-title fa-desc">
+<title id="fa-title">在聊天里审批</title>
+<desc id="fa-desc">被拦下的工具调用会变成会话里（以及你的 IM 里）的一张授权卡片。点击一下即生成一次性授权；服务端在目标运行时上原样重放最初那次调用——模型无需重新输入。授权使用后即失效。</desc>
+<style>
+:root{
+  --ink:#0a0a0a; --muted:#737373; --faint:#767676;
+  --bg:#ffffff; --panel:#fafafa; --card:#ffffff; --chipbg:#f5f5f5;
+  --border:#e5e5e5;
+  --accent:#0084d1; --accent-soft:#e0f2fe; --accent-text:#075985;
+  --emerald:#059669; --emerald-soft:#d1fae5;
+  --amber:#d97706; --amber-soft:#fef3c7;
+  --red:#dc2626; --red-soft:#fee2e2;
+  --violet:#7c3aed; --violet-soft:#ede9fe;
+  --link:#cbd5e1;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#fafafa; --muted:#a3a3a3; --faint:#8b8b8b;
+    --bg:#0d1117; --panel:rgba(255,255,255,.035); --card:rgba(255,255,255,.055); --chipbg:rgba(255,255,255,.075);
+    --border:rgba(255,255,255,.11);
+    --accent:#00a6f4; --accent-soft:rgba(0,166,244,.16); --accent-text:#7dd3fc;
+    --emerald:#34d399; --emerald-soft:rgba(52,211,153,.14);
+    --amber:#fbbf24; --amber-soft:rgba(251,191,36,.13);
+    --red:#f87171; --red-soft:rgba(248,113,113,.14);
+    --violet:#a78bfa; --violet-soft:rgba(167,139,250,.16);
+    --link:rgba(255,255,255,.22);
+  }
+}
+text{font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;fill:var(--ink)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.mut{fill:var(--muted)} .fnt{fill:var(--faint)}
+.b{font-weight:600} .bb{font-weight:700}
+.f9{font-size:9.5px}.f95{font-size:10px}.f105{font-size:11px}.f115{font-size:12px}.f125{font-size:13px}.f17{font-size:17px}
+.bgc{fill:var(--bg)}
+.panel{fill:var(--panel);stroke:var(--border)}
+.card{fill:var(--card);stroke:var(--border)}
+.chip{fill:var(--card);stroke:var(--border)}
+.chipOn{fill:var(--chipbg);stroke:var(--border)}
+.acct{fill:var(--accent-text)}
+.ico-acc{color:var(--accent)} .ico-em{color:var(--emerald)} .ico-mut{color:var(--muted)} .ico-am{color:var(--amber)}
+.pill-sky{fill:var(--accent-soft)} .pill-em{fill:var(--emerald-soft)}
+.link{fill:none;stroke:var(--link);stroke-width:1.5;stroke-dasharray:5 5}
+.dot{fill:var(--accent);opacity:0} .dot-em{fill:var(--emerald)}
+@keyframes a-dash{to{stroke-dashoffset:-40}}
+.flow{animation:a-dash 5s linear infinite}
+/* ---- 15s: call → no grant → card (chat+IM) → click Once → token → server replays → burn → resume ---- */
+@keyframes a-deny{0%,8%{opacity:0}11%{opacity:1}20%{opacity:1}23%,100%{opacity:0}}
+.deny{opacity:0;animation:a-deny 15s linear infinite}
+@keyframes a-card{0%,18%{opacity:0;transform:translateY(6px)}22%{opacity:1;transform:translateY(0)}56%{opacity:1;transform:translateY(0)}60%,100%{opacity:0;transform:translateY(6px)}}
+.acard{animation:a-card 15s linear infinite}
+@keyframes a-phone{0%,23%{opacity:0}27%{opacity:1}58%{opacity:1}62%{opacity:.3}93%{opacity:.3}97%,100%{opacity:0}}
+.pcard{opacity:0;animation:a-phone 15s linear infinite}
+@keyframes a-pans{0%,60%{opacity:0}64%{opacity:1}93%{opacity:1}97%,100%{opacity:0}}
+.pans{opacity:0;animation:a-pans 15s linear infinite}
+@keyframes a-click{0%,44%{opacity:0}46%{opacity:1}51%,100%{opacity:0}}
+.click{opacity:0;animation:a-click 15s linear infinite}
+@keyframes a-badge{0%,58%{opacity:0;transform:translateY(4px)}62%{opacity:1;transform:translateY(0)}95%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(4px)}}
+.badge{opacity:0;animation:a-badge 15s linear infinite}
+@keyframes a-token{0%,54%{opacity:0}58%{opacity:1}74%{opacity:1}78%{opacity:.35}93%{opacity:.35}97%,100%{opacity:0}}
+.token{opacity:0;animation:a-token 15s linear infinite}
+@keyframes a-burn{0%,74%{opacity:0}77%{opacity:1}93%{opacity:1}97%,100%{opacity:0}}
+.burn{opacity:0;animation:a-burn 15s linear infinite}
+@keyframes a-run{0%,68%{opacity:0}71%{opacity:1}95%{opacity:1}100%{opacity:0}}
+.devrun{opacity:0;animation:a-run 15s linear infinite}
+@keyframes a-res{0%,84%{opacity:0;transform:translateY(4px)}88%{opacity:1;transform:translateY(0)}96%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(4px)}}
+.resume{animation:a-res 15s linear infinite}
+@keyframes a-cur{0%,39%{opacity:0}41%{opacity:1}49%{opacity:1}51%,100%{opacity:0}}
+.curwin{opacity:0;animation:a-cur 15s linear infinite}
+@keyframes a-dip{0%,45.5%{transform:scale(1)}46.5%{transform:scale(.82)}47.5%,100%{transform:scale(1)}}
+.curclick{animation:a-dip 15s linear infinite;transform-box:fill-box;transform-origin:top left}
+@keyframes a-ws1{0%,18%{opacity:0}22%{opacity:1}93%{opacity:1}97%,100%{opacity:0}}
+.ws1{animation:a-ws1 15s linear infinite}
+@media (prefers-reduced-motion: reduce){
+  *{animation:none !important}
+  .motion{display:none !important}
+}
+</style>
+<defs>
+  <g id="i-bot" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></g>
+  <g id="i-shield" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></g>
+  <g id="i-server" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></g>
+  <g id="i-phone" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></g>
+  <g id="i-check" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M20 6 9 17l-5-5"/></g>
+  <g id="i-cursor" transform="rotate(20) translate(-3,-3)"><path d="M3.688 3.037a.497.497 0 0 0-.651.651l6.5 15.999a.501.501 0 0 0 .947-.062l1.569-6.083a2 2 0 0 1 1.448-1.479l6.124-1.579a.5.5 0 0 0 .063-.947z" style="fill:var(--ink);stroke:var(--card)" stroke-width="1"/><path d="M12.586 12.586 19 19" style="stroke:var(--ink)" stroke-width="2" stroke-linecap="round"/></g>
+</defs>
+
+<rect class="bgc" x="0" y="0" width="720" height="440" rx="16"/>
+
+<text x="28" y="38" class="f17 bb">在聊天里审批</text>
+<text x="28" y="58" class="f115 mut">敏感调用变成一键审批的卡片——服务端重放原始调用，模型无需重新生成调用参数</text>
+
+<!-- ═══ conversation (left) ═══ -->
+<g>
+  <rect x="28" y="84" width="340" height="296" rx="14" class="card"/>
+  <text x="48" y="112" class="f125 b">会话</text>
+  <g class="ico-acc"><use href="#i-shield" transform="translate(340 106) scale(0.6)" stroke-width="2"/></g>
+
+  <!-- actor message + blocked call -->
+  <circle cx="58" cy="144" r="12" class="pill-sky"/><g class="ico-acc"><use href="#i-bot" transform="translate(58 144) scale(0.55)" stroke-width="2.2"/></g>
+  <text x="78" y="140" class="f105 b">分析师</text>
+  <text x="78" y="156" class="f105">正在把修复推送到 dev-server。</text>
+  <rect x="78" y="164" width="162" height="20" rx="6" fill="#111827"/>
+  <text x="86" y="178" class="f9 mono" style="fill:#e5e7eb">$ git push origin main</text>
+  <g class="deny">
+    <rect x="248" y="164" width="72" height="20" rx="6" style="fill:var(--red-soft)"/>
+    <text x="284" y="178" text-anchor="middle" class="f9 b" style="fill:var(--red)">无授权</text>
+  </g>
+
+  <!-- authorization card -->
+  <g class="acard">
+    <rect x="48" y="200" width="300" height="92" rx="10" class="chipOn"/>
+    <g class="ico-am"><use href="#i-shield" transform="translate(66 220) scale(0.55)" stroke-width="2.2"/></g>
+    <text x="80" y="224" class="f105 b">授权命令 · dev-server</text>
+    <text x="66" y="243" class="f95 mono mut">git push origin main</text>
+    <g>
+      <rect x="66" y="256" width="86" height="22" rx="11" class="pill-em"/><text x="109" y="271" text-anchor="middle" class="f95 b" style="fill:var(--emerald)">允许一次</text>
+      <circle cx="109" cy="267" r="16" fill="none" stroke-width="2" style="stroke:var(--emerald)" class="click"/>
+      <rect x="160" y="256" width="112" height="22" rx="11" class="chip"/><text x="216" y="271" text-anchor="middle" class="f95 mut">仅本会话</text>
+      <rect x="280" y="256" width="56" height="22" rx="11" class="chip"/><text x="308" y="271" text-anchor="middle" class="f95 mut">始终</text>
+    </g>
+  </g>
+
+  <!-- approved badge (replaces card) -->
+  <g class="badge">
+    <rect x="48" y="200" width="232" height="26" rx="8" class="pill-em"/>
+    <g class="ico-em"><use href="#i-check" transform="translate(64 213) scale(0.45)" stroke-width="3"/></g>
+    <text x="76" y="217" class="f95 b" style="fill:var(--emerald)">已批准 · consume_once</text>
+  </g>
+
+  <!-- resume message -->
+  <g class="resume">
+    <circle cx="58" cy="322" r="12" class="pill-sky"/><g class="ico-acc"><use href="#i-bot" transform="translate(58 322) scale(0.55)" stroke-width="2.2"/></g>
+    <text x="78" y="318" class="f105 b">分析师</text>
+    <text x="78" y="334" class="f105">已推送 ✓——审批通过，已自动重放原始调用。</text>
+  </g>
+
+  <text x="48" y="366" class="f9 fnt">授权选项：允许一次 · 仅本会话 · 整个 Workspace</text>
+</g>
+
+<!-- ═══ phone cameo (top right) ═══ -->
+<g>
+  <rect x="420" y="84" width="272" height="128" rx="14" class="panel"/>
+  <g class="ico-mut"><use href="#i-phone" transform="translate(444 108) scale(0.62)" stroke-width="2"/></g>
+  <text x="460" y="113" class="f115 b">你的 IM 也收到</text>
+  <text x="586" y="113" class="f9 fnt">QQ · 更多平台在路上</text>
+  <g class="pcard">
+    <rect x="440" y="126" width="232" height="66" rx="10" class="card"/>
+    <text x="454" y="146" class="f95 b">授权命令 · dev-server</text>
+    <text x="454" y="162" class="f9 mono mut">git push origin main</text>
+    <rect x="454" y="170" width="66" height="16" rx="8" class="pill-em"/><text x="487" y="182" text-anchor="middle" class="f9 b" style="fill:var(--emerald)">允许一次</text>
+    <rect x="528" y="170" width="46" height="16" rx="8" class="chip"/><text x="551" y="182" text-anchor="middle" class="f9 mut">拒绝</text>
+  </g>
+  <g class="pans">
+    <rect x="490" y="148" width="132" height="22" rx="8" class="pill-em"/>
+    <text x="556" y="163" text-anchor="middle" class="f9 b" style="fill:var(--emerald)">已在聊天中作答 ✓</text>
+  </g>
+  <text x="440" y="204" class="f9 fnt">聊天与 QQ 同一张卡片——先答者生效</text>
+</g>
+
+<!-- ═══ device (bottom right) ═══ -->
+<g>
+  <rect x="420" y="236" width="272" height="112" rx="14" class="panel"/>
+  <g class="ico-mut"><use href="#i-server" transform="translate(444 262) scale(0.65)" stroke-width="2"/></g>
+  <text x="460" y="267" class="f115 b">dev-server</text>
+  <circle cx="676" cy="262" r="4" style="fill:var(--emerald)"/>
+  <g class="token">
+    <rect x="440" y="282" width="176" height="22" rx="7" class="pill-sky"/>
+    <text x="452" y="297" class="f9 mono acct">grant: consume_once · nonce</text>
+  </g>
+  <g class="burn">
+    <text x="628" y="297" class="f9 b" style="fill:var(--amber)">已失效 ✓</text>
+  </g>
+  <g class="devrun">
+    <rect x="440" y="312" width="200" height="22" rx="7" fill="#111827"/>
+    <text x="450" y="327" class="f9 mono" style="fill:#34d399">已重放原始调用 ✓</text>
+  </g>
+</g>
+
+<!-- wires -->
+<g class="ws1"><path class="link flow" d="M368 172 C398 172, 402 148, 420 142"/></g>
+<path class="link flow" d="M368 250 C396 252, 400 268, 420 278"/>
+<text x="360" y="414" text-anchor="middle" class="f9 fnt">批准后由服务端携原始参数重放那次调用——模型不会重新输入任何内容</text>
+
+<g class="curwin motion">
+  <g class="curclick"><use href="#i-cursor"/></g>
+  <animateMotion dur="15s" repeatCount="indefinite" calcMode="spline" keySplines="0 0 1 1;0.3 0 0.2 1;0 0 1 1" keyPoints="0;0;1;1" keyTimes="0;0.40;0.45;1" path="M320 330 C270 330, 160 300, 112 268"/>
+</g>
+
+<!-- ═══ traveling pulses ═══ -->
+<g class="motion">
+  <!-- card sync to IM (3.6s) -->
+  <circle r="3.5" class="dot">
+    <animateMotion dur="15s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.24;0.29;1" path="M368 172 C398 172, 402 148, 420 142"/>
+    <animate attributeName="opacity" dur="15s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.242;0.248;0.283;0.29;1"/>
+  </circle>
+  <!-- sealed replay to device (9.6s) -->
+  <circle r="3.5" class="dot">
+    <animateMotion dur="15s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.64;0.69;1" path="M368 250 C396 252, 400 268, 420 278"/>
+    <animate attributeName="opacity" dur="15s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.642;0.648;0.683;0.69;1"/>
+  </circle>
+  <!-- result back (12.3s) -->
+  <circle r="3.5" class="dot dot-em">
+    <animateMotion dur="15s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.82;0.868;1" path="M420 278 C400 268, 396 252, 368 250"/>
+    <animate attributeName="opacity" dur="15s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.822;0.828;0.861;0.868;1"/>
+  </circle>
+</g>
+</svg>

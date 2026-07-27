@@ -15,105 +15,155 @@
 </p>
 
 <p align="center">
-  <strong>English (US)</strong> ·
-  <a href="./README_CN.md">简体中文</a> ·
-  <a href="./README_ES.md">Español</a>
+  Turn AI into a digital team with roles, memory, permissions, and working relationships.
 </p>
 
 <p align="center">
-  <a href="#why-synapse">Why Synapse</a> ·
+  <strong>English (US)</strong> ·
+  <a href="./docs/readme/README.zh-CN.md">简体中文</a> ·
+  <a href="./docs/readme/README.es.md">Español</a>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#core-model">Core Model</a> ·
   <a href="#architecture-overview">Architecture</a> ·
-  <a href="#example-flows">Example Flows</a> ·
-  <a href="#roadmap">Roadmap</a> ·
   <a href="#quick-start">Quick Start</a> ·
-  <a href="#surfaces-in-this-repo">Surfaces in This Repo</a> ·
+  <a href="#roadmap">Roadmap</a> ·
   <a href="./deploy.md">Deployment</a>
 </p>
 
 <p align="center">
-  <img
-    src="docs/.images/gpt-image-2/synapse-framework-gpt-image-2-20260514-061731.png"
-    alt="Synapse framework overview"
-    width="100%"
-  />
+  <img src="docs/assets/en/synapse-framework-overview.svg" alt="Synapse framework overview" width="100%" />
 </p>
 
-> [!WARNING]
-> Synapse is still in an early design and implementation phase. Schemas, runtime contracts, and product surfaces can change quickly, and backwards compatibility for old data is not guaranteed yet.
+> [!NOTE]
+> Synapse is in an early design and implementation phase. Schemas and runtime contracts can still change quickly, and backward compatibility for old data is not guaranteed yet.
 
 Synapse is a conversation-centric runtime for digital teammates.
 
-Most AI products treat chat as a thin interface on top of isolated bots. Synapse treats the conversation itself as the collaboration boundary: humans, platform-native actors, and bridged remote agents can work in the same thread; memory, permissions, plugins, device-exposed tools, and event sources are governed at the workspace layer; shareable teammates can be added across workspaces like contacts and then granted the right resources to work.
+Most AI products treat chat as a thin interface over an isolated bot. Synapse treats the conversation itself as the collaboration boundary: humans, platform-native actors, and bridged remote agents work in the same thread, while everything they can touch — plugins, skills, devices, sandboxes, event sources, memory — is governed at the workspace layer through explicit, revocable grants.
 
-## Why Synapse
+## Features
 
-- **Conversation-first, not bot-first.** A conversation is the runtime boundary for participants, transcript visibility, actor execution, wakeups, and memory handoff.
-- **Shareable teammates.** Workspace members, actors, and remote agents can be shared across workspaces and added through a contact-style graph. Shared actors can work with the destination workspace's granted resources.
-- **Governed resource access.** Plugins, skills, device exposures, and event sources are modeled as workspace-owned resources with explicit access control, grants, and audit trails.
-- **Cloud coordination plus local execution.** Teams can collaborate in the web app while still reaching local browsers, desktops, filesystems, internal services, or bridged remote-agent runtimes.
-- **Event-driven teamwork.** Scheduled jobs, custom webhooks, and integration-backed event sources can wake conversations and route work automatically.
-- **Native and remote agents together.** Platform-native actors live inside Synapse. Remote agents join through a bridge and keep their own runtime stack.
+### Conversations are the team room
+
+A conversation in Synapse is not a chat log in front of a bot — it is the runtime boundary. Participants, transcript visibility, actor sessions, wakeups, and memory handoff are all scoped to it, and there is no standalone, API-invoked session.
+
+- **Four kinds of participants.** Workspace members, native actors, bridged remote agents, and external IM identities all share one thread.
+- **Actors wake each other.** An actor's message lands as a durable wakeup for another actor, so multi-agent handoffs happen in the open, inside the same transcript.
+- **Teammates are shareable.** Actors and remote agents can be shared like contacts — via a QR code or a friend ID, with owner approval. Cross-workspace sharing covers discovery and rosters today; conversations and execution stay inside one workspace.
+
+<p align="center">
+  <img src="docs/assets/en/synapse-feature-team.svg" alt="Humans and actors collaborating in one conversation" width="720" />
+</p>
+
+### Bring the agents you already run
+
+A coding agent running on your laptop can join the team as a first-class participant. The machine-side daemon (`packages/remote-agent-daemon`) bridges Claude Code and Codex CLI into conversations over an outbound WebSocket. The agents keep their own runtime, tools, and model accounts.
+
+- **Pull, not push.** The bridged agent fetches messages and posts replies through a per-conversation reverse-MCP tool surface; Synapse does not push unsolicited content to it.
+- **Granted, not assumed.** Workspace plugins and runtime capabilities are projected to the remote agent through the same authorization gate that native actors use.
+- **Questions come back as cards.** When the agent needs input or plan approval, a task card lands in the conversation, and any eligible participant can answer it.
+
+<p align="center">
+  <img src="docs/assets/en/synapse-feature-remote-agent.svg" alt="A remote coding agent joining a Synapse conversation" width="720" />
+</p>
+
+### Meet your team where it already chats
+
+Eight IM transports — Feishu (Lark), WeChat, WeCom, DingTalk, QQ, Telegram, the WhatsApp Cloud API, and WhatsApp via the unofficial web protocol — connect external chats to the same conversation runtime, not to a separate bot system.
+
+- **First contact binds.** An inbound chat maps one-to-one onto a Synapse conversation; the sender joins as an external participant and the configured actor is woken.
+- **The same governed thread.** Everything above — actors, grants, memory, automation — applies to IM-originated conversations unchanged.
+- Voice notes are transcoded on ingest; delivery status reported by IM platforms is best-effort.
+
+<p align="center">
+  <img src="docs/assets/en/synapse-feature-im.svg" alt="An external Telegram chat bound to a Synapse conversation" width="720" />
+</p>
+
+### Reach real machines
+
+Pair your desktop, a Linux server, or a cloud Docker host, and actors can work where the work actually lives — with every call passing the authorization gate first.
+
+- **Built-in capabilities.** Filesystem, command line, browser (Chrome DevTools), and computer use are exposed as MCP tools, granted per capability and per conversation.
+- **Outbound only.** Devices dial out to the control plane; every operation travels as a signed envelope over the device's own connection.
+- **A capability-aware CLI catalog.** Each device probes and advertises the CLI tools it found on that machine, so actors work from detected capabilities rather than assumptions.
+
+<p align="center">
+  <img src="docs/assets/en/synapse-feature-devices.svg" alt="Actors dispatching work to paired devices" width="720" />
+</p>
+
+### Isolated compute, when you want it
+
+Actors can get a session-scoped sandbox: an isolated workbench provisioned when a turn starts and destroyed when the session goes idle — while the files persist as content-addressed snapshots that other actors can pick up.
+
+- **Three providers.** A local process, a Docker container, or an off-box E2B-compatible VM (CubeSandbox), selected per deployment.
+- **Ephemeral compute, durable files.** Working sets hydrate from snapshots and commit back at the end of every turn; nothing is lost when the sandbox is torn down.
+
+> [!NOTE]
+> The sandbox runtime is opt-in via `SANDBOX_PROVIDER` and is off by default. The off-box provider requires a self-hosted CubeSandbox endpoint.
+
+<p align="center">
+  <img src="docs/assets/en/synapse-feature-sandbox.svg" alt="The actor sandbox lifecycle" width="720" />
+</p>
+
+### Every grant in one ledger
+
+Actors, plugins, skills, runtime capabilities, memory spaces, and event sources are all managed through a single `workspace_resource_grants` ledger — explicit, revocable, and enforced uniformly across the platform.
+
+- **Approve in chat.** A blocked sensitive call becomes a one-tap card in the conversation. Among the IM integrations, QQ supports these cards today, with more to come.
+- **Consume-once approvals.** Approving replays the exact original call server-side; the model never retypes it, and the one-time grant is consumed after use.
+
+<p align="center">
+  <img src="docs/assets/en/synapse-feature-authorization.svg" alt="Interactive authorization cards in a conversation" width="720" />
+</p>
+
+### Work starts without you
+
+Schedules, custom webhooks, and GitHub/GitLab events wake conversations through the same durable session wakeups as human messages — there is no separate job system.
+
+- **Actors schedule themselves.** An actor can schedule its own follow-up wakeup, go idle, and be brought back by the clock.
+- **Events land in the thread.** Wakeups arrive as conversation-visible notices, so the team sees why an actor sprang into action.
+- Register a GitHub webhook and an incident can open its own conversation with the right actors already in it.
+
+<p align="center">
+  <img src="docs/assets/en/synapse-feature-automation.svg" alt="An actor scheduling its own wakeup" width="720" />
+</p>
+
+### Context that outlives the thread
+
+Memory lives in permissioned memory spaces, shared through the same grants ledger as everything else; long conversations are archived verbatim rather than summarized away.
+
+- **Remember once, recall across conversations.** Retrieval runs at every turn and combines lexical search with embeddings, so a fact saved in one conversation surfaces in later ones that share the same granted memory space.
+- **Lossless context.** Older turns fold into archive chains while a live tail keeps growing — nothing is silently dropped from the record.
+- Semantic recall needs an embedding provider (`EMBEDDING_PROVIDER`); without one, lexical retrieval still works.
+
+<p align="center">
+  <img src="docs/assets/en/synapse-feature-memory.svg" alt="Shared memory recalled across conversations" width="720" />
+</p>
 
 ## Core Model
 
-| Concept          | What it means in Synapse                                                                       |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| `Workspace`      | Ownership and governance boundary for teammates, plugins, devices, and event sources.          |
-| `Conversation`   | Shared runtime where participants collaborate and work is persisted.                           |
-| `Actor`          | A native Synapse teammate managed by the platform.                                             |
-| `Remote agent`   | An external runtime bridged into a conversation without becoming a native actor.               |
-| `Resource layer` | Plugins, skills, device exposures, and event sources that can be granted, audited, and reused. |
+| Concept          | What it means in Synapse                                                                                          |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `Workspace`      | Ownership and governance boundary for teammates, plugins, runtimes, and event sources.                            |
+| `Conversation`   | Shared runtime where participants collaborate and work is persisted.                                              |
+| `Actor`          | A native Synapse teammate managed by the platform.                                                                |
+| `Remote agent`   | An external runtime bridged into a conversation without becoming a native actor.                                  |
+| `Runtime`        | A governed execution surface — a paired device or a sandbox — whose capabilities can be granted per conversation. |
+| `Resource layer` | Plugins, skills, runtime capabilities, event sources, and memory spaces, granted through one workspace ledger.    |
 
 ## Architecture Overview
 
-Synapse uses a conversation-centric architecture. Around that core, the system separates resource runtimes, access control, memory, transport integration, and context management into distinct subsystems.
+Synapse uses a conversation-centric architecture. Around that core, the system separates resource runtimes, access control, memory, transport integration, and pluggable providers into distinct subsystems.
 
-- **Conversation and session runtime.** `conversation`, participants, conversation items, conversation-scoped actor sessions, and `session_wakeups` define the primary collaboration and execution model. Every actor session is bound to a conversation; there is no standalone API-invoked session. Web chat, remote-agent bridges, and IM transports reuse this model rather than implementing separate conversation systems.
-- **Resource runtimes.** Plugins, installed skills, device exposures, actors, and remote agents are represented as distinct runtime resources with independent state, lifecycle, and APIs. Marketplace catalog metadata is stored separately from installed runtime state.
-- **Access control.** Authorization is evaluated against explicit resource types, including `workspace`, `conversation`, `actor`, `remote_agent`, `plugin_installation`, `installed_skill`, `device_capability`, and `memory_item`. Sharing, invocation, and governance therefore rely on the same access model.
-- **Memory subsystem.** Memory is partitioned by scope: `workspace_shared`, `conversation_shared`, `actor_private`, `participant_private`, and `user_private`. Retrieval combines lexical indexing and embeddings to support both durable memory and thread-local working state.
-- **Transport and automation integration.** IM transports bind external endpoints back to conversations. Event sources, schedules, webhooks, and integration triggers enter the same runtime so they can wake the conversation's actor runtimes and emit conversation-visible events.
-- **Context window management.** Model context is compiled from canonical context items into shared and private archive chains plus a live tail window. Archive points, compaction runs, and per-event context policies bound prompt size while preserving scope and event semantics.
-
-## Example Flows
-
-- Share a research actor into another workspace, grant it the right plugins, and let it work in the same thread as people.
-- Pair a desktop device so teammates can use browser, filesystem, or command-line capabilities without giving every conversation global access.
-- Register GitHub, GitLab, or custom webhook event sources to wake an incident room and bring the right actors into the conversation.
-- Bridge a coding agent from another machine as a remote agent and let it collaborate in Synapse while keeping its own external runtime and tools.
-
-## Exploratory Features
-
-This section highlights runtime directions that are already being validated in code, but should not yet be treated as stable platform contracts.
-
-### Everything is a file model
-
-Synapse is exploring a virtual-filesystem projection for selected local runtimes. The goal is to expose state, structure, and actions through paths, files, and writable control nodes. This fits the platform's authorization model and also aligns with models' strong prior over command-line workflows, where composition, pipes, and chained operations can express richer procedures with fewer execution round trips.
-
-Current support includes:
-
-- **Session-scoped VFS exposures.** The device runtime projects builtin browser and CUA runtimes under session paths, with file-based controls for session creation, inspection, and teardown.
-- **Browser projection.** The browser surface exposes page state, page lists, current-page snapshots and screenshots, a tree projection with per-node files, and writable action files for navigation and interaction.
-- **CUA projection.** The CUA surface exposes displays, windows, apps, captures, keyboard state, focused-element summaries, and a semantic accessibility tree when the desktop backend is available.
-- **Action files.** Writable nodes are already mapped to concrete runtime actions. In the browser surface this includes operations such as `navigate`, `new_page`, `select_page`, `click`, `fill`, `press_key`, and `evaluate`; in the CUA surface this includes `click`, `type_text`, `press_keys`, and `scroll`, with per-node semantic actions where actionable bounds are available.
-
-## Roadmap
-
-Roadmap items describe planned platform capabilities. They are directional and may change as the runtime model evolves.
-
-### Planned: Sandbox runtime
-
-Introduce a managed Sandbox runtime as a governed execution surface for agents.
-
-Planned goals:
-
-- Provide isolated execution environments as workspace-governed resources rather than direct host access.
-- Support suspend/resume and persistent state so agent work can continue across runs.
-- Offer standardized environment profiles, including optional GUI variants and preconfigured integrations.
-- Support both cloud-hosted and local-managed deployments.
-- Evaluate E2B-style control interfaces where they fit Synapse's conversation, resource, and authorization model.
-
-This is a planned capability, not a shipped feature.
+- **Conversation and session runtime.** Conversations, participants, conversation items, conversation-scoped actor sessions, and durable session wakeups define the collaboration and execution model. Model context is compiled from canonical items into shared and private archive chains plus a live tail, bounded by compaction that never rewrites history. Web chat, remote-agent bridges, and IM transports all reuse this one model.
+- **Runtimes and resources.** Paired devices and sandboxes are both runtimes under one supertype, exposing grantable capabilities. Plugins, installed skills, actors, and remote agents are distinct runtime resources with independent state and lifecycle; marketplace catalog metadata is stored separately from installed state.
+- **Access control.** Every resource type is authorized against a single `workspace_resource_grants` ledger, with interactive consume-once approvals for sensitive calls. Grants are explicit and revocable.
+- **Memory subsystem.** Memory is organized into permissioned memory spaces shared via grants. Retrieval combines lexical indexing and embeddings to support both durable memory and thread-local working state.
+- **Pluggable providers.** Embedding, OCR, document extraction, transcription, and real-time ASR resolve through env-selected providers — cloud APIs or self-hosted sidecars — and default to `none` or the built-in implementation, so the core stack runs without them.
+- **Transport and automation integration.** IM transports bind external endpoints back to conversations. Event sources, schedules, webhooks, and integration triggers enter the same runtime, wake actor sessions, and emit conversation-visible events.
 
 ## Quick Start
 
@@ -121,13 +171,13 @@ This is a planned capability, not a shipped feature.
 
 Prerequisites:
 
-- Node.js
+- Node.js 22 (the version used in CI)
 - Docker and Docker Compose
 
 Clone the repo and start the core local stack:
 
 ```bash
-git clone https://github.com/zai-org/Synapse
+git clone --recurse-submodules https://github.com/zai-org/Synapse
 cd Synapse
 
 npm ci
@@ -141,6 +191,8 @@ npm run db:bootstrap
 npm run dev:api
 npm run dev:web
 ```
+
+Submodules are only needed for the device CLI catalog and connector extras — after a plain clone, `git submodule update --init` fetches them.
 
 Open:
 
@@ -176,17 +228,20 @@ npm run web
 
 You can also use `npm run ios` or `npm run android` inside `packages/mobile-app`.
 
-## Surfaces in This Repo
+## What's in This Repo
 
-- `packages/api` — Fastify API, orchestration runtime, chat, memory, files, automation, plugins, devices, IM, and audit surfaces
+- `packages/api` — Fastify API, orchestration runtime, chat, memory, files, automation, plugins, devices, and IM
 - `packages/web-next` — Next.js desktop web app and workspace dashboard
+- `packages/web-next-design` — backend-free design sandbox for the web UI (CI-excluded)
 - `packages/mobile-app` — Expo Router mobile app and exported mobile web surface
-- `packages/device-runtime` — TS device runtime: Control Plane WSS client, MCP host, frp tunnel adapter, builtin filesystem/commandline/browser/CUA exposures
-- `packages/device-sdk` — REST/event SDK consumed by the dashboard and CLI
+- `packages/device-runtime` — TS device runtime: control-plane WSS client, MCP host, frp tunnel adapter, and built-in filesystem, command-line, browser, and computer-use (CUA) capabilities
+- `packages/device-sdk` — REST and event SDK consumed by the dashboard and CLI
 - `packages/device-protocol` — Zod schemas + enums shared by API and device runtime
 - `packages/remote-agent-daemon` — machine-side daemon for bridging external runtimes such as Codex CLI or Claude Code
 - `packages/shared` — shared types, protocol contracts, automation definitions, and constants
-- `subprojects/cli-anything` — vendored HKUDS/CLI-Anything catalog; the device-runtime `cli-catalog` builtin probes each CLI's prerequisites and exposes the runnable ones through the commandline builtin (see `docs/cli-anything-integration-redesign-plan.md`)
+- `subprojects/cli-anything` — the HKUDS/CLI-Anything catalog, included as a git submodule. The device runtime probes each CLI's prerequisites and exposes only the tools that can actually run
+
+The repo also contains per-platform `packages/device-runtime-bundles-*` packages, plus additional connector and tool submodules under `subprojects/`.
 
 ## Deployment
 
@@ -197,5 +252,18 @@ This repository currently ships with a self-hosting path centered on a single Ub
 - Dockerized nginx as the public TLS entrypoint
 - Dockerized mobile web exported from `packages/mobile-app` and served under `/mobile/`
 - Dockerized Certbot for Let's Encrypt certificates and renewal
+- Optional self-hosted provider sidecars (embedding, OCR, document extraction, transcription, real-time ASR) as Compose profiles
 
 See [`deploy.md`](deploy.md) for the production deployment path used in this repo.
+
+## Roadmap
+
+Roadmap items are directional and may change as the runtime model evolves.
+
+- [ ] **Cross-workspace collaboration.** Sharing covers discovery and rosters today; planned: shared actors executing with destination-workspace grants, and conversations that span workspaces.
+- [ ] **Sandbox environment profiles.** Standardized environment profiles for the sandbox runtime, including optional GUI variants and preconfigured integrations.
+- [ ] **"Everything is a file" projection.** A virtual-filesystem projection for browser and computer-use runtimes — explored in an earlier prototype, not currently implemented.
+
+## License
+
+Synapse is released under the [Apache License 2.0](./LICENSE).

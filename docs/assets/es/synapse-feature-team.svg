@@ -1,0 +1,219 @@
+<svg xmlns="http://www.w3.org/2000/svg" lang="es" xml:lang="es" viewBox="0 0 720 440" role="img" aria-labelledby="ft-title ft-desc">
+<title id="ft-title">Personas y Actors, un solo equipo</title>
+<desc id="ft-desc">Dos personas y dos Actors colaboran en una conversación de grupo del Workspace; el mensaje de un Actor despierta al otro (activación actor_message). Los compañeros se pueden compartir como contactos. Una tarjeta de relación incluye un código QR y un ID de amigo, y la aprobación del propietario concede visibilidad de contacto. Los amigos de otros Workspaces se pueden descubrir y añadir a tu lista — hoy las conversaciones permanecen dentro del Workspace.</desc>
+<style>
+:root{
+  --ink:#0a0a0a; --muted:#737373; --faint:#767676;
+  --bg:#ffffff; --panel:#fafafa; --card:#ffffff; --chipbg:#f5f5f5;
+  --border:#e5e5e5;
+  --accent:#0084d1; --accent-soft:#e0f2fe; --accent-text:#075985;
+  --emerald:#059669; --emerald-soft:#d1fae5;
+  --amber:#d97706; --amber-soft:#fef3c7;
+  --violet:#7c3aed; --violet-soft:#ede9fe;
+  --link:#cbd5e1;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#fafafa; --muted:#a3a3a3; --faint:#8b8b8b;
+    --bg:#0d1117; --panel:rgba(255,255,255,.035); --card:rgba(255,255,255,.055); --chipbg:rgba(255,255,255,.075);
+    --border:rgba(255,255,255,.11);
+    --accent:#00a6f4; --accent-soft:rgba(0,166,244,.16); --accent-text:#7dd3fc;
+    --emerald:#34d399; --emerald-soft:rgba(52,211,153,.14);
+    --amber:#fbbf24; --amber-soft:rgba(251,191,36,.13);
+    --violet:#a78bfa; --violet-soft:rgba(167,139,250,.16);
+    --link:rgba(255,255,255,.22);
+  }
+}
+text{font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;fill:var(--ink)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.mut{fill:var(--muted)} .fnt{fill:var(--faint)}
+.b{font-weight:600} .bb{font-weight:700}
+.f9{font-size:9.5px}.f95{font-size:10px}.f105{font-size:11px}.f115{font-size:12px}.f125{font-size:13px}.f17{font-size:17px}
+.bgc{fill:var(--bg)}
+.panel{fill:var(--panel);stroke:var(--border)}
+.card{fill:var(--card);stroke:var(--border)}
+.chip{fill:var(--card);stroke:var(--border)}
+.chipOn{fill:var(--chipbg);stroke:var(--border)}
+.acct{fill:var(--accent-text)}
+.ico-acc{color:var(--accent)} .ico-em{color:var(--emerald)} .ico-mut{color:var(--muted)} .ico-am{color:var(--amber)} .ico-vi{color:var(--violet)}
+.pill-sky{fill:var(--accent-soft)} .pill-em{fill:var(--emerald-soft)} .pill-am{fill:var(--amber-soft)} .pill-vi{fill:var(--violet-soft)}
+.link{fill:none;stroke:var(--link);stroke-width:1.5;stroke-dasharray:5 5}
+.dot{fill:var(--accent);opacity:0} .dot-am{fill:var(--amber)}
+@keyframes a-dash{to{stroke-dashoffset:-40}}
+.flow{animation:a-dash 5s linear infinite}
+/* ---- 16s: Writer speaks → actor_message wakes Reviewer → Reviewer replies → human ships →
+        contact hub: lock → pending → visible (contact_visible) → shared teammate joins →
+        cross-workspace: search → roster entry → honest boundary ---- */
+@keyframes a-m2{0%,14%{opacity:0;transform:translateY(5px)}17%{opacity:1;transform:translateY(0)}92%{opacity:1;transform:translateY(0)}96.5%,100%{opacity:0;transform:translateY(5px)}}
+.m2{animation:a-m2 16s linear infinite}
+@keyframes a-tag{0%,27%{opacity:0;transform:translateY(4px)}30%{opacity:1;transform:translateY(0)}92%{opacity:1;transform:translateY(0)}96.5%,100%{opacity:0;transform:translateY(4px)}}
+.wtag{animation:a-tag 16s linear infinite}
+@keyframes a-ring{0%,31%{opacity:0;transform:scale(.6)}34%{opacity:.85;transform:scale(1)}38%{opacity:0;transform:scale(1.5)}100%{opacity:0;transform:scale(.6)}}
+.ring{opacity:0;animation:a-ring 16s linear infinite;transform-box:fill-box;transform-origin:center}
+@keyframes a-m3{0%,41%{opacity:0;transform:translateY(5px)}44%{opacity:1;transform:translateY(0)}92%{opacity:1;transform:translateY(0)}96.5%,100%{opacity:0;transform:translateY(5px)}}
+.m3{animation:a-m3 16s linear infinite}
+@keyframes a-m4{0%,53%{opacity:0;transform:translateY(5px)}56%{opacity:1;transform:translateY(0)}92%{opacity:1;transform:translateY(0)}96.5%,100%{opacity:0;transform:translateY(5px)}}
+.m4{animation:a-m4 16s linear infinite}
+@keyframes a-b1{0%{opacity:1}58%{opacity:1}61%{opacity:0}95%{opacity:0}99%,100%{opacity:1}}
+.b1{animation:a-b1 16s linear infinite}
+@keyframes a-b2{0%,58%{opacity:0}61%{opacity:1}68%{opacity:1}71%,100%{opacity:0}}
+.b2{opacity:0;animation:a-b2 16s linear infinite}
+@keyframes a-b3{0%,68%{opacity:0}71%{opacity:1}95%{opacity:1}99%,100%{opacity:0}}
+.b3{opacity:0;animation:a-b3 16s linear infinite}
+@keyframes a-grant{0%,70%{opacity:0;transform:translateY(4px)}73%{opacity:1;transform:translateY(0)}95%{opacity:1;transform:translateY(0)}99%,100%{opacity:0;transform:translateY(4px)}}
+.grant{animation:a-grant 16s linear infinite}
+@keyframes a-ws1{0%,72%{opacity:0}75%{opacity:1}95%{opacity:1}99%,100%{opacity:0}}
+.ws1{animation:a-ws1 16s linear infinite}
+@keyframes a-srch{0%,78%{opacity:0}80%{opacity:1}95%{opacity:1}99%,100%{opacity:0}}
+.srch{animation:a-srch 16s linear infinite}
+@keyframes a-row{0%,82%{opacity:0;transform:translateY(4px)}85%{opacity:1;transform:translateY(0)}95%{opacity:1;transform:translateY(0)}99%,100%{opacity:0;transform:translateY(4px)}}
+.rrow{animation:a-row 16s linear infinite}
+@keyframes a-ws2{0%,84%{opacity:0}87%{opacity:1}95%{opacity:1}99%,100%{opacity:0}}
+.ws2{animation:a-ws2 16s linear infinite}
+@media (prefers-reduced-motion: reduce){
+  *{animation:none !important}
+  .motion{display:none !important}
+}
+</style>
+<defs>
+  <g id="i-user" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></g>
+  <g id="i-bot" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></g>
+  <g id="i-check" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M20 6 9 17l-5-5"/></g>
+  <g id="i-lock" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></g>
+  <g id="i-clock" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></g>
+  <g id="i-search" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g>
+  <g id="i-zap" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></g>
+  <g id="i-qr" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/></g>
+</defs>
+
+<rect class="bgc" x="0" y="0" width="720" height="440" rx="16"/>
+
+<text x="28" y="38" class="f17 bb">Personas + Actors, un equipo</text>
+<text x="28" y="58" class="f115 mut">muchas personas, muchos agentes, una conversación — y compañeros que puedes compartir</text>
+
+<!-- ═══ group conversation (left) ═══ -->
+<g>
+  <rect x="28" y="84" width="392" height="332" rx="14" class="card"/>
+  <text x="48" y="112" class="f125 b">Conversación</text>
+  <rect x="150" y="97" width="50" height="20" rx="10" class="chipOn"/><text x="175" y="111" text-anchor="middle" class="f9 mut">grupo</text>
+  <!-- participants: 2 humans + 2 actors -->
+  <circle cx="296" cy="106" r="9" class="pill-sky"/><g class="ico-acc"><use href="#i-user" transform="translate(296 106) scale(0.42)" stroke-width="2.4"/></g>
+  <circle cx="316" cy="106" r="9" class="pill-em"/><g class="ico-em"><use href="#i-user" transform="translate(316 106) scale(0.42)" stroke-width="2.4"/></g>
+  <circle cx="336" cy="106" r="9" style="fill:var(--accent-soft)"/><g class="ico-acc"><use href="#i-bot" transform="translate(336 106) scale(0.42)" stroke-width="2.4"/></g>
+  <circle cx="356" cy="106" r="9" style="fill:var(--accent-soft)"/><circle cx="356" cy="106" r="12" fill="none" stroke-width="2" style="stroke:var(--accent)" class="ring motion"/><g class="ico-acc"><use href="#i-bot" transform="translate(356 106) scale(0.42)" stroke-width="2.4"/></g>
+  <text x="374" y="110" class="f95 mut">4</text>
+
+  <!-- msg1 · human (persistent) -->
+  <circle cx="58" cy="150" r="12" class="pill-sky"/><g class="ico-acc"><use href="#i-user" transform="translate(58 150) scale(0.55)" stroke-width="2.2"/></g>
+  <rect x="78" y="134" width="50" height="18" rx="9" class="pill-sky"/><text x="103" y="147" text-anchor="middle" class="f9 b acct">Humano</text>
+  <text x="134" y="147" class="f105 b">Iris</text>
+  <text x="78" y="172" class="f105">Prepara el lanzamiento: notas y registro de cambios.</text>
+
+  <!-- msg2 · actor Writer -->
+  <g class="m2">
+    <circle cx="58" cy="214" r="12" style="fill:var(--accent-soft)"/><g class="ico-acc"><use href="#i-bot" transform="translate(58 214) scale(0.55)" stroke-width="2.2"/></g>
+    <rect x="78" y="198" width="44" height="18" rx="9" class="pill-sky"/><text x="100" y="211" text-anchor="middle" class="f9 b acct">Actor</text>
+    <text x="128" y="211" class="f105 b">Redactor</text>
+    <text x="78" y="236" class="f105">Borrador listo — Revisor, te toca.</text>
+  </g>
+  <!-- actor_message wakeup tag -->
+  <g class="wtag">
+    <rect x="78" y="246" width="226" height="20" rx="7" class="chipOn"/>
+    <g class="ico-am"><use href="#i-zap" transform="translate(92 256) scale(0.4)" stroke-width="2.6"/></g>
+    <text x="102" y="260" class="f9 mono mut">wakeup · actor_message → Revisor</text>
+  </g>
+
+  <!-- msg3 · actor Reviewer -->
+  <g class="m3">
+    <circle cx="58" cy="292" r="12" style="fill:var(--accent-soft)"/><g class="ico-acc"><use href="#i-bot" transform="translate(58 292) scale(0.55)" stroke-width="2.2"/></g>
+    <rect x="78" y="276" width="44" height="18" rx="9" class="pill-sky"/><text x="100" y="289" text-anchor="middle" class="f9 b acct">Actor</text>
+    <text x="128" y="289" class="f105 b">Revisor</text>
+    <text x="78" y="314" class="f105">Revisado — dos correcciones ✓</text>
+  </g>
+
+  <!-- msg4 · second human -->
+  <g class="m4">
+    <circle cx="58" cy="356" r="12" class="pill-em"/><g class="ico-em"><use href="#i-user" transform="translate(58 356) scale(0.55)" stroke-width="2.2"/></g>
+    <rect x="78" y="340" width="50" height="18" rx="9" class="pill-em"/><text x="103" y="353" text-anchor="middle" class="f9 b" style="fill:var(--emerald)">Humano</text>
+    <text x="134" y="353" class="f105 b">Ben</text>
+    <text x="78" y="378" class="f105">Lánzala.</text>
+  </g>
+
+  <text x="48" y="404" class="f9 fnt">los Actors se despiertan entre sí — mismo hilo, contexto común</text>
+</g>
+
+<!-- ═══ contact hub (right top) ═══ -->
+<g>
+  <rect x="436" y="84" width="256" height="158" rx="14" class="panel"/>
+  <text x="452" y="110" class="f115 b">Contactos</text>
+  <text x="676" y="110" text-anchor="end" class="f9 fnt">comparte compañeros</text>
+  <rect x="452" y="122" width="224" height="44" rx="10" class="card"/>
+  <circle cx="472" cy="144" r="12" style="fill:var(--accent-soft)"/><g class="ico-acc"><use href="#i-bot" transform="translate(472 144) scale(0.55)" stroke-width="2.2"/></g>
+  <text x="492" y="140" class="f105 b">Redactor</text>
+  <rect x="492" y="146" width="76" height="15" rx="5" class="chipOn"/><text x="498" y="157" class="f9 mono mut">writer.dev</text>
+  <g class="ico-mut"><use href="#i-qr" transform="translate(654 144) scale(0.6)" stroke-width="2"/></g>
+  <!-- access state: lock → pending → visible -->
+  <g class="b1">
+    <rect x="452" y="178" width="106" height="22" rx="8" class="chipOn"/>
+    <g class="ico-mut"><use href="#i-lock" transform="translate(468 189) scale(0.42)" stroke-width="2.4"/></g>
+    <text x="479" y="193" class="f9 mut">solicitar añadir</text>
+  </g>
+  <g class="b2">
+    <rect x="452" y="178" width="106" height="22" rx="8" class="pill-am"/>
+    <g class="ico-am"><use href="#i-clock" transform="translate(468 189) scale(0.42)" stroke-width="2.4"/></g>
+    <text x="479" y="193" class="f9 b" style="fill:var(--amber)">pendiente…</text>
+  </g>
+  <g class="b3">
+    <rect x="452" y="178" width="106" height="22" rx="8" class="pill-em"/>
+    <g class="ico-em"><use href="#i-check" transform="translate(468 189) scale(0.42)" stroke-width="2.6"/></g>
+    <text x="479" y="193" class="f9 b" style="fill:var(--emerald)">visible ✓</text>
+  </g>
+  <g class="grant">
+    <rect x="566" y="178" width="110" height="22" rx="8" class="pill-sky"/>
+    <text x="576" y="193" class="f9 mono acct">contact_visible</text>
+  </g>
+  <text x="452" y="222" class="f9 fnt">QR o ID de amigo · el dueño aprueba —</text>
+  <text x="452" y="234" class="f9 fnt">solo da visibilidad; las herramientas, aparte</text>
+</g>
+
+<!-- shared teammate joins the team -->
+<g class="ws1"><path class="link flow" d="M436 144 C426 134, 414 120, 402 112"/></g>
+
+<!-- ═══ friends across workspaces (right bottom) ═══ -->
+<g>
+  <rect x="436" y="266" width="256" height="150" rx="14" class="panel"/>
+  <text x="452" y="292" class="f115 b">Amigos · otros Workspaces</text>
+  <rect x="452" y="302" width="224" height="24" rx="8" class="chipOn"/>
+  <g class="ico-mut"><use href="#i-search" transform="translate(468 314) scale(0.42)" stroke-width="2.4"/></g>
+  <g class="srch"><text x="480" y="318" class="f9 mono">atlas.dev</text></g>
+  <g class="rrow">
+    <rect x="452" y="336" width="224" height="42" rx="10" class="card"/>
+    <circle cx="472" cy="357" r="12" class="pill-vi"/><g class="ico-vi"><use href="#i-bot" transform="translate(472 357) scale(0.55)" stroke-width="2.2"/></g>
+    <text x="492" y="353" class="f105 b">Atlas</text>
+    <rect x="492" y="359" width="88" height="15" rx="5" class="pill-vi"/><text x="498" y="370" class="f9" style="fill:var(--violet)">Workspace B</text>
+    <text x="664" y="360" text-anchor="end" class="f9 b" style="fill:var(--emerald)">en la lista ✓</text>
+  </g>
+  <text x="452" y="396" class="f9 fnt">descúbrelos y añádelos a tu lista —</text>
+  <text x="452" y="408" class="f9 fnt">las conversaciones no salen del Workspace</text>
+</g>
+
+<!-- honest boundary: the line stops at the workspace wall -->
+<g class="ws2">
+  <path class="link" style="stroke:var(--violet);stroke-opacity:.5" d="M436 357 L428 357"/>
+  <rect x="423" y="347" width="2.5" height="20" rx="1.25" style="fill:var(--muted)"/>
+</g>
+
+<!-- ═══ traveling pulses ═══ -->
+<g class="motion">
+  <!-- Writer's message wakes Reviewer (4.4-5s) -->
+  <circle r="3.5" class="dot dot-am">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.275;0.315;1" path="M120 240 C200 218, 322 158, 354 120"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.277;0.283;0.308;0.315;1"/>
+  </circle>
+  <!-- shared teammate → participants row (11.7-12.3s) -->
+  <circle r="3.5" class="dot">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.73;0.77;1" path="M436 144 C426 134, 410 116, 366 107"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.732;0.738;0.763;0.77;1"/>
+  </circle>
+</g>
+</svg>

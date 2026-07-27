@@ -1,0 +1,216 @@
+<svg xmlns="http://www.w3.org/2000/svg" lang="zh-CN" xml:lang="zh-CN" viewBox="0 0 720 392" role="img" aria-labelledby="fd-title fd-desc">
+<title id="fd-title">直达你的真实设备</title>
+<desc id="fd-desc">配对桌面电脑、Linux 服务器或云端 Docker 主机。每台设备只上报你启用的能力——浏览器、文件、命令行、桌面操作——Actor 把任务分派到合适的机器上本地执行，结果回到会话里。</desc>
+<style>
+:root{
+  --ink:#0a0a0a; --muted:#737373; --faint:#767676;
+  --bg:#ffffff; --panel:#fafafa; --card:#ffffff; --chipbg:#f5f5f5;
+  --border:#e5e5e5;
+  --accent:#0084d1; --accent-soft:#e0f2fe; --accent-text:#075985;
+  --emerald:#059669; --emerald-soft:#d1fae5;
+  --amber:#d97706; --amber-soft:#fef3c7;
+  --violet:#7c3aed; --violet-soft:#ede9fe;
+  --link:#cbd5e1;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#fafafa; --muted:#a3a3a3; --faint:#8b8b8b;
+    --bg:#0d1117; --panel:rgba(255,255,255,.035); --card:rgba(255,255,255,.055); --chipbg:rgba(255,255,255,.075);
+    --border:rgba(255,255,255,.11);
+    --accent:#00a6f4; --accent-soft:rgba(0,166,244,.16); --accent-text:#7dd3fc;
+    --emerald:#34d399; --emerald-soft:rgba(52,211,153,.14);
+    --amber:#fbbf24; --amber-soft:rgba(251,191,36,.13);
+    --violet:#a78bfa; --violet-soft:rgba(167,139,250,.16);
+    --link:rgba(255,255,255,.22);
+  }
+}
+text{font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;fill:var(--ink)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.mut{fill:var(--muted)} .fnt{fill:var(--faint)}
+.b{font-weight:600} .bb{font-weight:700}
+.f9{font-size:9.5px}.f95{font-size:10px}.f105{font-size:11px}.f115{font-size:12px}.f125{font-size:13px}.f17{font-size:17px}
+.bgc{fill:var(--bg)}
+.panel{fill:var(--panel);stroke:var(--border)}
+.card{fill:var(--card);stroke:var(--border)}
+.chip{fill:var(--card);stroke:var(--border)}
+.chipOn{fill:var(--chipbg);stroke:var(--border)}
+.acct{fill:var(--accent-text)}
+.ico-acc{color:var(--accent)} .ico-em{color:var(--emerald)} .ico-mut{color:var(--muted)}
+.pill-sky{fill:var(--accent-soft)}
+.link{fill:none;stroke:var(--link);stroke-width:1.5;stroke-dasharray:5 5}
+.dot{fill:var(--accent);opacity:0} .dot-em{fill:var(--emerald)}
+@keyframes a-dash{to{stroke-dashoffset:-40}}
+.flow{animation:a-dash 5s linear infinite}
+/* ---- 16s: pair×3 → task→desktop browser → result → task→server shell → result → grants cameo ---- */
+@keyframes a-on1{0%,4%{opacity:0}7%{opacity:1}96%{opacity:1}100%{opacity:0}}
+.on1{opacity:0;animation:a-on1 16s linear infinite}
+@keyframes a-on2{0%,9%{opacity:0}12%{opacity:1}96%{opacity:1}100%{opacity:0}}
+.on2{opacity:0;animation:a-on2 16s linear infinite}
+@keyframes a-on3{0%,14%{opacity:0}17%{opacity:1}96%{opacity:1}100%{opacity:0}}
+.on3{opacity:0;animation:a-on3 16s linear infinite}
+@keyframes a-pair1{0%,4%{opacity:1}7%{opacity:0}96%{opacity:0}100%{opacity:1}}
+.pair1{animation:a-pair1 16s linear infinite}
+@keyframes a-pair2{0%,9%{opacity:1}12%{opacity:0}96%{opacity:0}100%{opacity:1}}
+.pair2{animation:a-pair2 16s linear infinite}
+@keyframes a-pair3{0%,14%{opacity:1}17%{opacity:0}96%{opacity:0}100%{opacity:1}}
+.pair3{animation:a-pair3 16s linear infinite}
+@keyframes a-task1{0%,20%{opacity:0;transform:translateY(4px)}23%{opacity:1;transform:translateY(0)}94%{opacity:1;transform:translateY(0)}98%,100%{opacity:0;transform:translateY(4px)}}
+.task1{animation:a-task1 16s linear infinite}
+@keyframes a-br{0%,30%{opacity:0}34%{opacity:1}56%{opacity:1}60%,100%{opacity:0}}
+.brwin{opacity:0;animation:a-br 16s linear infinite}
+@keyframes a-brbar{0%,34%{transform:scaleX(0)}42%{transform:scaleX(1)}56%{transform:scaleX(1)}60%,100%{transform:scaleX(0)}}
+.brbar{animation:a-brbar 16s linear infinite;transform-box:fill-box;transform-origin:left center}
+@keyframes a-task2{0%,52%{opacity:0;transform:translateY(4px)}55%{opacity:1;transform:translateY(0)}94%{opacity:1;transform:translateY(0)}98%,100%{opacity:0;transform:translateY(4px)}}
+.task2{animation:a-task2 16s linear infinite}
+@keyframes a-sh{0%,62%{opacity:0}66%{opacity:1}88%{opacity:1}92%,100%{opacity:0}}
+.shwin{opacity:0;animation:a-sh 16s linear infinite}
+@keyframes a-cap1{0%,38%{opacity:0}41%{opacity:1}46%,100%{opacity:0}}
+.done1{opacity:0;animation:a-cap1 16s linear infinite}
+@keyframes a-cap2{0%,70%{opacity:0}73%{opacity:1}78%,100%{opacity:0}}
+.done2{opacity:0;animation:a-cap2 16s linear infinite}
+@keyframes a-gl{0%,80%{opacity:0}84%{opacity:.9}92%,100%{opacity:0}}
+.grglow{opacity:0;animation:a-gl 16s linear infinite}
+@keyframes a-ws1{0%,6%{opacity:0}9%{opacity:1}96%{opacity:1}100%{opacity:0}}
+.ws1{animation:a-ws1 16s linear infinite}
+@keyframes a-ws2{0%,11%{opacity:0}14%{opacity:1}96%{opacity:1}100%{opacity:0}}
+.ws2{animation:a-ws2 16s linear infinite}
+@keyframes a-ws3{0%,16%{opacity:0}19%{opacity:1}96%{opacity:1}100%{opacity:0}}
+.ws3{animation:a-ws3 16s linear infinite}
+@media (prefers-reduced-motion: reduce){
+  *{animation:none !important}
+  .motion{display:none !important}
+}
+</style>
+<defs>
+  <g id="i-bot" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></g>
+  <g id="i-monitor" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></g>
+  <g id="i-server" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></g>
+  <g id="i-container" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M22 7.7c0-.6-.4-1.2-.8-1.5l-6.3-3.9a1.72 1.72 0 0 0-1.7 0l-10.3 6c-.5.2-.9.8-.9 1.4v6.6c0 .5.4 1.2.8 1.5l6.3 3.9a1.72 1.72 0 0 0 1.7 0l10.3-6c.5-.3.9-1 .9-1.5Z"/><path d="M10 21.9V14L2.1 9.1"/><path d="m10 14 11.9-6.9"/><path d="M14 19.8v-8.1"/><path d="M18 17.5V9.4"/></g>
+  <g id="i-globe" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></g>
+  <g id="i-shield" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" transform="translate(-12,-12)"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></g>
+</defs>
+
+<rect class="bgc" x="0" y="0" width="720" height="392" rx="16"/>
+
+<text x="28" y="38" class="f17 bb">直达你的真实设备</text>
+<text x="28" y="58" class="f115 mut">桌面电脑、Linux 服务器、云主机——Actor 在代码、文件和服务所在的机器上执行任务</text>
+
+<!-- ═══ actor hub (top center) ═══ -->
+<g>
+  <rect x="270" y="76" width="180" height="56" rx="12" class="card"/>
+  <circle cx="298" cy="104" r="14" class="pill-sky"/><g class="ico-acc"><use href="#i-bot" transform="translate(298 104) scale(0.62)" stroke-width="2"/></g>
+  <text x="320" y="100" class="f125 b">分析师</text>
+  <text x="320" y="117" class="f95 mut">把任务分派到本地</text>
+</g>
+
+<!-- task pills next to actor -->
+<g class="task1">
+  <rect x="466" y="84" width="176" height="20" rx="7" class="chipOn"/>
+  <text x="476" y="98" class="f9 mono mut">打开仪表盘 · 截图</text>
+</g>
+<g class="task2">
+  <rect x="466" y="110" width="140" height="20" rx="7" class="chipOn"/>
+  <text x="476" y="124" class="f9 mono mut">跟踪部署日志</text>
+</g>
+
+<!-- wires from actor to devices -->
+<g class="ws1"><path class="link flow" d="M310 132 C280 160, 190 160, 132 176"/></g>
+<g class="ws2"><path class="link flow" d="M360 132 L360 176"/></g>
+<g class="ws3"><path class="link flow" d="M410 132 C440 160, 530 160, 588 176"/></g>
+
+<!-- ═══ device cards ═══ -->
+<!-- desktop -->
+<g>
+  <rect x="28" y="176" width="208" height="168" rx="14" class="panel"/>
+  <g class="ico-mut"><use href="#i-monitor" transform="translate(52 200) scale(0.62)" stroke-width="2"/></g>
+  <text x="68" y="205" class="f115 b">MacBook</text>
+  <text x="136" y="205" class="f9 fnt">桌面</text>
+  <g class="pair1"><rect x="176" y="192" width="52" height="18" rx="9" class="chipOn"/><text x="202" y="205" text-anchor="middle" class="f9 mono mut">F7-K2</text></g>
+  <g class="on1"><circle cx="220" cy="200" r="4" style="fill:var(--emerald)"/></g>
+  <g class="f9">
+    <rect x="46" y="218" width="58" height="20" rx="7" class="chip"/><text x="75" y="232" text-anchor="middle" class="mut">浏览器</text>
+    <rect x="110" y="218" width="42" height="20" rx="7" class="chip"/><text x="131" y="232" text-anchor="middle" class="mut">文件</text>
+    <rect x="158" y="218" width="42" height="20" rx="7" class="chip"/><text x="179" y="232" text-anchor="middle" class="mut">命令行</text>
+    <rect x="46" y="243" width="88" height="20" rx="7" class="chip"/><text x="90" y="257" text-anchor="middle" class="mut">桌面操作</text>
+  </g>
+  <!-- mini browser window -->
+  <g class="brwin">
+    <rect x="46" y="272" width="172" height="58" rx="8" class="card"/>
+    <circle cx="58" cy="284" r="2.5" style="fill:var(--faint)"/><circle cx="67" cy="284" r="2.5" style="fill:var(--faint)"/>
+    <rect x="76" y="279" width="130" height="10" rx="5" class="chipOn"/>
+    <g class="ico-acc"><use href="#i-globe" transform="translate(58 306) scale(0.5)" stroke-width="2.2"/></g>
+    <rect x="72" y="298" width="134" height="7" rx="3.5" class="chipOn"/><rect x="72" y="298" width="134" height="7" rx="3.5" style="fill:var(--accent-soft)"/><rect x="72" y="298" width="134" height="7" rx="3.5" style="fill:var(--accent)" opacity=".55" class="brbar"/>
+    <rect x="72" y="310" width="96" height="7" rx="3.5" class="chipOn"/>
+    <g class="done1"><text x="200" y="322" text-anchor="end" class="f9 b" style="fill:var(--emerald)">已截图 ✓</text></g>
+  </g>
+</g>
+
+<!-- linux server -->
+<g>
+  <rect x="256" y="176" width="208" height="168" rx="14" class="panel"/>
+  <g class="ico-mut"><use href="#i-server" transform="translate(280 200) scale(0.62)" stroke-width="2"/></g>
+  <text x="296" y="205" class="f115 b">dev-server</text>
+  <text x="378" y="205" class="f9 fnt">Linux</text>
+  <g class="pair2"><rect x="404" y="192" width="52" height="18" rx="9" class="chipOn"/><text x="430" y="205" text-anchor="middle" class="f9 mono mut">M3-QX</text></g>
+  <g class="on2"><circle cx="448" cy="200" r="4" style="fill:var(--emerald)"/></g>
+  <g class="f9">
+    <rect x="274" y="218" width="42" height="20" rx="7" class="chip"/><text x="295" y="232" text-anchor="middle" class="mut">命令行</text>
+    <rect x="322" y="218" width="42" height="20" rx="7" class="chip"/><text x="343" y="232" text-anchor="middle" class="mut">文件</text>
+    <rect x="370" y="218" width="66" height="20" rx="7" class="chip"/><text x="403" y="232" text-anchor="middle" class="mut">CLI 清单</text>
+  </g>
+  <g class="shwin">
+    <rect x="274" y="272" width="172" height="58" rx="8" fill="#111827"/>
+    <text x="284" y="290" class="f9 mono" style="fill:#94a3b8">$ tail -n 50 deploy.log</text>
+    <text x="284" y="306" class="f9 mono" style="fill:#e5e7eb">release v0.27 运行正常</text>
+    <g class="done2"><text x="284" y="322" class="f9 mono" style="fill:#34d399">✓ 已发回会话</text></g>
+  </g>
+</g>
+
+<!-- cloud docker host -->
+<g>
+  <rect x="484" y="176" width="208" height="168" rx="14" class="panel"/>
+  <g class="ico-mut"><use href="#i-container" transform="translate(508 200) scale(0.62)" stroke-width="2"/></g>
+  <text x="524" y="205" class="f115 b">build-box</text>
+  <text x="596" y="205" class="f9 fnt">Docker</text>
+  <g class="pair3"><rect x="632" y="192" width="52" height="18" rx="9" class="chipOn"/><text x="658" y="205" text-anchor="middle" class="f9 mono mut">Zt-8P</text></g>
+  <g class="on3"><circle cx="676" cy="200" r="4" style="fill:var(--emerald)"/></g>
+  <g class="f9">
+    <rect x="502" y="218" width="42" height="20" rx="7" class="chip"/><text x="523" y="232" text-anchor="middle" class="mut">命令行</text>
+    <rect x="550" y="218" width="42" height="20" rx="7" class="chip"/><text x="571" y="232" text-anchor="middle" class="mut">文件</text>
+  </g>
+  <text x="502" y="262" class="f9 fnt">一条命令完成配对，</text>
+  <text x="502" y="276" class="f9 fnt">仅出站连接，无需开放入站端口</text>
+  <rect x="502" y="292" width="172" height="38" rx="8" class="chipOn"/>
+  <rect x="502" y="292" width="172" height="38" rx="8" fill="none" stroke-width="1.6" style="stroke:var(--emerald)" class="grglow"/>
+  <g class="ico-em"><use href="#i-shield" transform="translate(518 311) scale(0.5)" stroke-width="2.2"/></g>
+  <text x="530" y="308" class="f9 mut">能力逐项授予</text>
+  <text x="530" y="320" class="f9 mut">按会话 · 授权门</text>
+</g>
+
+<!-- footer -->
+<text x="360" y="372" text-anchor="middle" class="f9 fnt">每一次调用都以签名封套的形式，经由设备自身的出站连接下发</text>
+
+<!-- ═══ traveling pulses ═══ -->
+<g class="motion">
+  <!-- task 1 → desktop (4.2s) -->
+  <circle r="3.5" class="dot">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.26;0.31;1" path="M310 132 C280 160, 190 160, 132 176"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.262;0.268;0.303;0.31;1"/>
+  </circle>
+  <!-- result back (7s) -->
+  <circle r="3.5" class="dot dot-em">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.44;0.49;1" path="M132 176 C190 160, 280 160, 310 132"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.442;0.448;0.483;0.49;1"/>
+  </circle>
+  <!-- task 2 → server (9.3s) -->
+  <circle r="3.5" class="dot">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.58;0.62;1" path="M360 132 L360 176"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.582;0.588;0.614;0.62;1"/>
+  </circle>
+  <!-- result back (11.8s) -->
+  <circle r="3.5" class="dot dot-em">
+    <animateMotion dur="16s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0;1;1" keyTimes="0;0.735;0.775;1" path="M360 176 L360 132"/>
+    <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.737;0.743;0.769;0.775;1"/>
+  </circle>
+</g>
+</svg>
