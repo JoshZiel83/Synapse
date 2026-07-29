@@ -61,7 +61,7 @@ Trace round-3 closes out: the `turn_epoch` correlation field introduced as optio
 
 ## [0.28.0] - 2026-07-24
 
-Distributed-tracing round-3 correctness fix (commits `feaef0da`, `acaccade`, `ec41fdc3`): turn-scoped trace correlation for reverse-MCP tool calls across interleaved conversation wakes (F-r3-2). It changes the remote-agent daemon wire contract and requires a **coordinated redeploy** — the strict image build order and post-recreate checks are covered by the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7, with the R3 daemon-first cutover order in §7.4. No database schema changed, so this release needs no `db:rebuild`.
+Distributed-tracing round-3 correctness fix: turn-scoped trace correlation for reverse-MCP tool calls across interleaved conversation wakes (F-r3-2). It changes the remote-agent daemon wire contract and requires a **coordinated redeploy** — the strict image build order and post-recreate checks are covered by the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7, with the R3 daemon-first cutover order in §7.4. No database schema changed, so this release needs no `db:rebuild`.
 
 This is also the first release in which the package manifests leave `0.1.0`: the coordinated set — `@synapse/device-protocol`, `@synapse/shared`, `@synapse/device-runtime`, `@synapse/device-sdk`, `@synapse/api`, and `@synapse/remote-agent-daemon` — is bumped in lockstep to `0.28.0`, and the four runtime packages are published to the private package registry. The platform runtime bundles stay decoupled at their own version.
 
@@ -76,7 +76,7 @@ This is also the first release in which the package manifests leave `0.1.0`: the
 
 ## [0.27.0] - 2026-07-23
 
-Distributed-tracing round-2 correctness fixes (commits `d1a8d96e`, `f3f5110a`, `8e4428e2`, `1e2018cd`) plus public-edge hardening. For operators, the headline is a **coordinated redeploy**: this release changes wire, queue, and telemetry contracts, and the exact procedure — a strict image build order, `--force-recreate`, and a post-recreate verification checklist — is the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No database schema changed, so this release needs no `db:rebuild`.
+Distributed-tracing round-2 correctness fixes plus public-edge hardening. For operators, the headline is a **coordinated redeploy**: this release changes wire, queue, and telemetry contracts, and the exact procedure — a strict image build order, `--force-recreate`, and a post-recreate verification checklist — is the rollout runbook in [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No database schema changed, so this release needs no `db:rebuild`.
 
 ### Changed
 

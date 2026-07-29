@@ -58,7 +58,7 @@
 
 ## [0.28.0] - 2026-07-24
 
-分布式追踪 round-3 正确性修复（提交 `feaef0da`、`acaccade`、`ec41fdc3`）：为跨交错会话唤醒的 reverse-MCP 工具调用提供以 turn 为作用域的 trace 关联（F-r3-2）。它改变了 remote-agent daemon 的 wire 契约，需要一次**协同重新部署**——镜像的硬构建顺序与重建容器后的核对清单见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的上线运行手册，R3 的 daemon 先行上线顺序见 §7.4。本次无数据库 schema 变更，故无需 `db:rebuild`。
+分布式追踪 round-3 正确性修复：为跨交错会话唤醒的 reverse-MCP 工具调用提供以 turn 为作用域的 trace 关联（F-r3-2）。它改变了 remote-agent daemon 的 wire 契约，需要一次**协同重新部署**——镜像的硬构建顺序与重建容器后的核对清单见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的上线运行手册，R3 的 daemon 先行上线顺序见 §7.4。本次无数据库 schema 变更，故无需 `db:rebuild`。
 
 这也是各包 manifest 首次离开 `0.1.0` 的版本：`@synapse/device-protocol`、`@synapse/shared`、`@synapse/device-runtime`、`@synapse/device-sdk`、`@synapse/api` 与 `@synapse/remote-agent-daemon` 这组协同变更的包同步升到 `0.28.0`，其中四个运行时包发布到私有包注册表。平台运行时 bundle 与它们解耦，各自保持原有版本。
 
@@ -73,7 +73,7 @@
 
 ## [0.27.0] - 2026-07-23
 
-分布式追踪 round-2 正确性修复（提交 `d1a8d96e`、`f3f5110a`、`8e4428e2`、`1e2018cd`），外加公网边缘加固。对运维者而言，重点是一次**协同重新部署**：本次发布改变了 wire、队列与遥测契约，精确步骤——镜像的硬构建顺序、`--force-recreate`、以及重建容器后的核对清单——见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的上线运行手册。本次无数据库 schema 变更，故无需 `db:rebuild`。
+分布式追踪 round-2 正确性修复，外加公网边缘加固。对运维者而言，重点是一次**协同重新部署**：本次发布改变了 wire、队列与遥测契约，精确步骤——镜像的硬构建顺序、`--force-recreate`、以及重建容器后的核对清单——见 [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7 的上线运行手册。本次无数据库 schema 变更，故无需 `db:rebuild`。
 
 ### 变更
 

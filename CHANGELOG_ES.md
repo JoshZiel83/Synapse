@@ -62,7 +62,7 @@ Cierre de la ronda 3 del trazado distribuido: el campo de correlación `turn_epo
 
 ## [0.28.0] - 2026-07-24
 
-Corrección de exactitud de la ronda 3 del trazado distribuido (commits `feaef0da`, `acaccade`, `ec41fdc3`): correlación de trazas acotada al turno para las llamadas a herramientas de reverse-MCP a través de despertares de conversación intercalados (F-r3-2). Cambia el contrato del protocolo del daemon de agentes remotos y requiere un **redespliegue coordinado**: el orden estricto de compilación de imágenes y las comprobaciones posteriores a la recreación se recogen en el manual de operaciones de despliegue en [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7, con el orden de conmutación de R3 — con el daemon primero — en §7.4. No cambió ningún esquema de base de datos, así que esta versión no necesita `db:rebuild`.
+Corrección de exactitud de la ronda 3 del trazado distribuido: correlación de trazas acotada al turno para las llamadas a herramientas de reverse-MCP a través de despertares de conversación intercalados (F-r3-2). Cambia el contrato del protocolo del daemon de agentes remotos y requiere un **redespliegue coordinado**: el orden estricto de compilación de imágenes y las comprobaciones posteriores a la recreación se recogen en el manual de operaciones de despliegue en [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7, con el orden de conmutación de R3 — con el daemon primero — en §7.4. No cambió ningún esquema de base de datos, así que esta versión no necesita `db:rebuild`.
 
 Es también la primera versión en la que los manifiestos de los paquetes dejan atrás `0.1.0`: el conjunto coordinado — `@synapse/device-protocol`, `@synapse/shared`, `@synapse/device-runtime`, `@synapse/device-sdk`, `@synapse/api` y `@synapse/remote-agent-daemon` — sube en bloque a `0.28.0`, y los cuatro paquetes de runtime se publican en el registro de paquetes privado. Los bundles de runtime de plataforma se mantienen desacoplados, con su propia versión.
 
@@ -77,7 +77,7 @@ Es también la primera versión en la que los manifiestos de los paquetes dejan 
 
 ## [0.27.0] - 2026-07-23
 
-Correcciones de exactitud de la ronda 2 del trazado distribuido (commits `d1a8d96e`, `f3f5110a`, `8e4428e2`, `1e2018cd`), además de un endurecimiento del borde público. Para los operadores, lo esencial es un **redespliegue coordinado**: esta versión cambia contratos del protocolo, de cola y de telemetría, y el procedimiento exacto — un orden estricto de compilación de imágenes, `--force-recreate` y una lista de verificación posterior a la recreación — es el manual de operaciones de despliegue en [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No cambió ningún esquema de base de datos, así que esta versión no necesita `db:rebuild`.
+Correcciones de exactitud de la ronda 2 del trazado distribuido, además de un endurecimiento del borde público. Para los operadores, lo esencial es un **redespliegue coordinado**: esta versión cambia contratos del protocolo, de cola y de telemetría, y el procedimiento exacto — un orden estricto de compilación de imágenes, `--force-recreate` y una lista de verificación posterior a la recreación — es el manual de operaciones de despliegue en [`docs/logging-refactor/04-operations.md`](./docs/logging-refactor/04-operations.md) §7. No cambió ningún esquema de base de datos, así que esta versión no necesita `db:rebuild`.
 
 ### Cambiado
 
